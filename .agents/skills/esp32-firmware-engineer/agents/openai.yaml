@@ -1,0 +1,44 @@
+interface:
+  display_name: "ESP32 Firmware Engineer"
+  short_description: "ESP-IDF firmware write, review, debug, power, OTA, security, and bring-up"
+  activation_keywords:
+    - esp32
+    - esp-idf
+    - esp32s3
+    - esp32c3
+    - esp32c6
+    - esp32s2
+    - freertos
+    - idf.py
+    - guru meditation
+    - sdkconfig
+    - partitions.csv
+    - esp-adf
+    - esp-sr
+    - lvgl
+    - deep sleep
+    - light sleep
+    - secure boot
+    - flash encryption
+  capabilities:
+    - Write, review, and debug ESP-IDF C/C++ firmware
+    - Analyze FreeRTOS task/queue/semaphore/ISR patterns and race conditions
+    - Diagnose Guru Meditation panics, reset reasons, and boot failures
+    - Optimize RAM, flash, and code size
+    - Design OTA-compatible partition tables and implement OTA update flows
+    - Configure deep sleep and light sleep power modes with correct wakeup sources
+    - Implement I2C, SPI, UART, TWAI/CAN, ADC, PWM, GPIO, and RMT drivers
+    - Integrate and validate LVGL with ESP-IDF and display controllers
+    - Add on-device USB/serial service terminals with runtime diagnostics
+    - Validate ESP-ADF/ESP-SR plugin compatibility (online and local)
+    - Harden firmware with Secure Boot v2, flash encryption, NVS encryption
+    - Fix build, flash, and monitor workflow issues
+  required_context:
+    - Exact ESP32 variant (esp32, esp32s3, esp32c3, esp32c6, etc.)
+    - ESP-IDF version
+    - Board pinmap and hardware constraints
+    - Relevant sdkconfig settings and flash size
+  default_prompt: |
+    Use the esp32-firmware-engineer skill to implement, review, or debug this ESP-IDF task.
+    Block on missing context: require exact ESP32 variant, ESP-IDF version, and hardware
+    details (pin map, peripheral list, flash size) before proceeding with hardware-integrated work.

@@ -43,6 +43,18 @@
 build/
 Build/
 build-*/
+managed_components/
+dependencies.lock
+
+# ESP-IDF generated files
+sdkconfig.old
+*.map
+flasher_args.json
+flash_project_args
+project_description.json
+size.json
+bootloader-flash_args
+partition-table-flash_args
 
 # CMake generated files
 CMakeFiles/

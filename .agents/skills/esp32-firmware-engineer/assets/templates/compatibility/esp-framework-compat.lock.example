@@ -1,0 +1,33 @@
+# ESP framework compatibility lock (example)
+#
+# Use this file to record exact, proven framework combinations before build/debug/flash.
+# Replace the versions and evidence references with your project's exact stack.
+
+esp_idf:
+  version: "v5.3"
+  source: "git tag"
+
+frameworks:
+  - name: "esp-adf"
+    version: "v2.7"
+    source: "git tag"
+    idf_compat_evidence:
+      type: "adf-readme-matrix"
+      location: "esp-adf/README.md"
+      proof: "Release/v2.7 row marks Release/v5.3 column as supported"
+
+  - name: "esp-sr"
+    version: "v1.9.5"
+    source: "git tag"
+    idf_compat_evidence:
+      type: "idf_component_manifest"
+      location: "esp-sr/idf_component.yml"
+      proof: "dependencies.idf includes selected ESP-IDF version"
+
+cross_stack_evidence:
+  applies_to:
+    - "esp-adf"
+    - "esp-sr"
+  type: "project-validated"
+  proof: "Audio pipeline + speech recognition smoke build/test passed with the versions above"
+  notes: "Add upstream release/bundle reference if available (e.g. ESP-SKAINET release)"
