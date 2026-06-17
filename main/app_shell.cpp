@@ -1,5 +1,6 @@
 #include "app_shell.h"
 
+#include "buzzer_service.h"
 #include "button_service.h"
 #include "esp_err.h"
 #include "esp_log.h"
@@ -20,6 +21,14 @@ constexpr TickType_t kPowerButtonReleaseSettleDelay = pdMS_TO_TICKS(500);
 
 TaskHandle_t s_shutdown_task = nullptr;
 bool s_power_button_shutdown_pending = false;
+
+void PlayBuzzerPattern(buzzer_service::Pattern pattern, const char* name)
+{
+    const esp_err_t err = buzzer_service::PlayPattern(pattern);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Buzzer %s pattern failed: %s", name, esp_err_to_name(err));
+    }
+}
 
 void ConfirmPendingOtaImage()
 {
@@ -73,6 +82,20 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
              ButtonIdName(event.button), ButtonEventName(event.event),
              static_cast<unsigned long>(event.pressed_ms));
 
+    switch (event.event) {
+        case button_service::ButtonEvent::kSingleClick:
+            PlayBuzzerPattern(buzzer_service::Pattern::kClick, "click");
+            break;
+        case button_service::ButtonEvent::kDoubleClick:
+            PlayBuzzerPattern(buzzer_service::Pattern::kDoubleClick, "double-click");
+            break;
+        case button_service::ButtonEvent::kLongPressStart:
+            PlayBuzzerPattern(buzzer_service::Pattern::kLongClick, "long-click");
+            break;
+        default:
+            break;
+    }
+
     if (event.button != button_service::ButtonId::kPowerOk) {
         return;
     }
@@ -109,6 +132,7 @@ void ShutdownTask(void*)
     while (true) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         ESP_LOGW(kTag, "Shutdown request accepted; waiting for power button release settle");
+        PlayBuzzerPattern(buzzer_service::Pattern::kShutdown, "shutdown");
         vTaskDelay(kPowerButtonReleaseSettleDelay);
         ESP_LOGW(kTag, "Power button release settled; releasing power hold");
         const esp_err_t err = power_service::RequestShutdown();
@@ -145,6 +169,22 @@ void InitButtonService()
     }
 }
 
+void InitBuzzerService()
+{
+    const esp_err_t err = buzzer_service::Init();
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "Buzzer service init failed: %s", esp_err_to_name(err));
+        return;
+    }
+
+    const esp_err_t play_err =
+        buzzer_service::PlayPattern(buzzer_service::Pattern::kStartup);
+    if (play_err != ESP_OK) {
+        ESP_LOGW(kTag, "Buzzer startup pattern failed: %s",
+                 esp_err_to_name(play_err));
+    }
+}
+
 }  // namespace
 
 void Run()
@@ -153,6 +193,7 @@ void Run()
     ConfirmPendingOtaImage();
     ESP_ERROR_CHECK(power_service::Init());
     power_service::LogDebugStatus();
+    InitBuzzerService();
     StartShutdownTask();
     InitButtonService();
 }

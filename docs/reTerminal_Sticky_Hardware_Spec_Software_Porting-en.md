@@ -211,4 +211,5 @@ Software recommendations:
 | `SHT40-AD1B-R2` address | Schematic I2C Tree page marks `0x44`, Peripherals page marks `0x45`; recommend `0x44` as primary, try `0x45` if communication fails |
 | `MISC_I2C_SCL/SDA` GPIO | GPIO0 (SCL) / GPIO1 (SDA); shares I2C1 bus with BFG I2C |
 | Touch panel IC | GT911, I2C address `0x5D` / `0x14` auto-detect (determined by INT/RST reset sequence) |
+| Buzzer | GPIO48 driven by ESP-IDF LEDC PWM; current firmware uses 50 percent duty for maximum useful tone volume |
 | MicroSD bus mode | SD_D1 / SD_D2 are not connected (NC); SD card uses SPI mode only (CLK/CMD/D0/D3) |

@@ -21,6 +21,8 @@ The repository is currently a minimal ESP-IDF application scaffold with:
   diagnostic power/battery/RTC snapshot.
 - A `button_service` component that logs app-facing button events through
   Espressif's managed button component.
+- A `buzzer_service` component that owns PWM buzzer setup and app-facing sound
+  patterns.
 
 The rest of the board peripherals have not been ported yet.
 
@@ -47,6 +49,10 @@ components/
     include/
       button_service.h
     button_service.cpp
+  buzzer_service/
+    include/
+      buzzer_service.h
+    buzzer_service.cpp
   bq27220/
     include/
       bq27220.h
@@ -89,6 +95,7 @@ The current early startup sequence is:
 - Asserts the Sticky power latch before OTA validation.
 - Initializes `power_service`.
 - Logs one power/battery diagnostic snapshot.
+- Initializes `buzzer_service` and requests the startup pattern.
 - Initializes `button_service`.
 - Subscribes to button events and logs app-level power-button shutdown intent.
 - Runs a small shutdown task so button callbacks can request shutdown without
@@ -163,6 +170,7 @@ scope.
 - power / OK button: `GPIO_NUM_4`
 - up button: `GPIO_NUM_5`
 - down button: `GPIO_NUM_6`
+- buzzer PWM output: `GPIO_NUM_48`
 - charger enable: `GPIO_NUM_39`, active low
 - charger state: `GPIO_NUM_40`
 - power-input ADC sense: `GPIO_NUM_9`
@@ -303,6 +311,33 @@ enabling button wake from light sleep, verify whether the managed component
 version includes the GPIO power-save ISR safety behavior noted in the reference
 demo's patched vendored component.
 
+### `components/buzzer_service`
+
+This C++ component owns app-facing buzzer feedback. It uses ESP-IDF LEDC PWM on
+the Sticky buzzer pin and hides timer/channel/duty details from `main`.
+
+Current scope:
+
+- `BUZZER_PWM` on `GPIO48`
+- LEDC low-speed mode
+- LEDC timer 0 and channel 0
+- 10-bit duty resolution
+- asynchronous command queue and worker task
+- `PlayTone(...)`, `PlayPattern(...)`, and `Stop()`
+- named startup, click, long-click, double-click, error, and shutdown patterns
+
+AppShell maps all button single-click, double-click, and long-press-start events
+to click, double-click, and long-click buzzer patterns. The shutdown task also
+requests the shutdown pattern before waiting for button-release settle and
+calling `power_service::RequestShutdown()`.
+
+The service drives tones at a 50 percent PWM duty cycle, which is the loudest
+useful square-wave drive for this passive PWM buzzer. A 100 percent duty cycle
+would be DC and would not produce the intended tone.
+
+AppShell may request patterns such as startup or shutdown, but it should not
+know about LEDC timer numbers, PWM duty values, or GPIO setup.
+
 ## Hardware Notes
 
 - Main controller: `ESP32-S3R8`.
@@ -310,6 +345,7 @@ demo's patched vendored component.
 - PSRAM: 8 MB octal PSRAM.
 - BQ27220 address: `0x55`.
 - PCF8563 address: `0x51`.
+- Buzzer PWM output: `GPIO48`.
 - Power latch uses `PWR_HOLD` on `GPIO45` as U3 D and `PWR_LOCK` on `GPIO46`
   as U3 CP. Firmware sets the desired D value and pulses CP to latch it.
 - `VDD_3V3_ENn` is not currently mapped to a firmware GPIO, so there is no
@@ -362,6 +398,7 @@ app / integration code
        -> bq27220 -> ESP-IDF I2C driver
        -> pcf8563 -> ESP-IDF I2C driver
   -> button_service -> espressif/button
+  -> buzzer_service -> board -> ESP-IDF LEDC driver
 ```
 
 Avoid making `bq27220` or `pcf8563` depend on `board`; that would make generic
