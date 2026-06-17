@@ -34,6 +34,8 @@ esp_err_t ReadBq27220InterruptLevel(int* level);
 esp_err_t CreateSensorI2cBus(i2c_master_bus_handle_t* out_bus);
 esp_err_t AddBq27220Device(i2c_master_bus_handle_t bus,
                            i2c_master_dev_handle_t* out_device);
+esp_err_t AddPcf8563Device(i2c_master_bus_handle_t bus,
+                           i2c_master_dev_handle_t* out_device);
 
 }  // namespace sticky_board
 

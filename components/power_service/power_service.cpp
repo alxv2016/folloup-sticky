@@ -7,6 +7,7 @@
 #include "esp_sleep.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "pcf8563.h"
 #include "sticky_board.h"
 #include "sticky_board_config.h"
 
@@ -23,12 +24,14 @@ constexpr uint32_t kPowerButtonReleaseStableSamples = 10;
 constexpr uint32_t kPowerButtonReleaseMaxSamples = 250;
 
 i2c_master_bus_handle_t s_sensor_bus = nullptr;
+i2c_master_dev_handle_t s_rtc_device = nullptr;
 i2c_master_dev_handle_t s_battery_device = nullptr;
 bool s_initialized = false;
 bool s_power_hold_enabled = false;
 bool s_charger_enabled = false;
 bool s_charge_pins_ready = false;
 bool s_power_input_ready = false;
+bool s_rtc_ready = false;
 bool s_battery_ready = false;
 
 const char* ChargeStateName(ChargeState state)
@@ -86,6 +89,65 @@ esp_err_t EnsureBatteryGauge()
 
     s_battery_ready = true;
     return ESP_OK;
+}
+
+esp_err_t EnsureRtc()
+{
+    if (s_rtc_device != nullptr && s_rtc_ready) {
+        return ESP_OK;
+    }
+    if (s_sensor_bus == nullptr) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (s_rtc_device == nullptr) {
+        esp_err_t err = sticky_board::AddPcf8563Device(s_sensor_bus, &s_rtc_device);
+        if (err != ESP_OK) {
+            s_rtc_device = nullptr;
+            return err;
+        }
+    }
+
+    if (!pcf8563::Probe(s_rtc_device)) {
+        i2c_master_bus_rm_device(s_rtc_device);
+        s_rtc_device = nullptr;
+        s_rtc_ready = false;
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    if (!pcf8563::DisableClkout(s_rtc_device)) {
+        ESP_LOGW(kTag, "PCF8563 CLKOUT disable failed");
+    }
+
+    s_rtc_ready = true;
+    return ESP_OK;
+}
+
+void FillRtcStatus(RtcStatus* rtc)
+{
+    if (rtc == nullptr) {
+        return;
+    }
+
+    rtc->available = false;
+    if (EnsureRtc() != ESP_OK) {
+        return;
+    }
+
+    pcf8563::InterruptStatus interrupt_status = {};
+    esp_err_t err = pcf8563::ReadInterruptStatus(s_rtc_device, &interrupt_status);
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "PCF8563 interrupt status read failed: %s",
+                 esp_err_to_name(err));
+        return;
+    }
+
+    rtc->available = true;
+    rtc->control_status_2 = interrupt_status.raw;
+    rtc->alarm_flag = interrupt_status.alarm_flag;
+    rtc->timer_flag = interrupt_status.timer_flag;
+    rtc->alarm_interrupt_enabled = interrupt_status.alarm_interrupt_enabled;
+    rtc->timer_interrupt_enabled = interrupt_status.timer_interrupt_enabled;
 }
 
 void FillBatteryStatus(BatteryStatus* battery)
@@ -147,6 +209,53 @@ void FillBatteryStatus(BatteryStatus* battery)
         battery->interrupt_level_available = true;
         battery->interrupt_level = interrupt_level;
     }
+}
+
+esp_err_t ClearRtcInterruptsForShutdown()
+{
+    esp_err_t err = EnsureRtc();
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "PCF8563 unavailable before shutdown: %s",
+                 esp_err_to_name(err));
+        return err;
+    }
+
+    pcf8563::InterruptStatus before = {};
+    err = pcf8563::ReadInterruptStatus(s_rtc_device, &before);
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "PCF8563 pre-shutdown interrupt read failed: %s",
+                 esp_err_to_name(err));
+        return err;
+    }
+
+    ESP_LOGI(kTag,
+             "rtc before shutdown clear: cs2=0x%02X alarm_flag=%d timer_flag=%d "
+             "alarm_ie=%d timer_ie=%d",
+             before.raw, before.alarm_flag ? 1 : 0, before.timer_flag ? 1 : 0,
+             before.alarm_interrupt_enabled ? 1 : 0,
+             before.timer_interrupt_enabled ? 1 : 0);
+
+    err = pcf8563::ClearAndDisableInterrupts(s_rtc_device);
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "PCF8563 interrupt clear failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    pcf8563::InterruptStatus after = {};
+    err = pcf8563::ReadInterruptStatus(s_rtc_device, &after);
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "PCF8563 post-shutdown interrupt read failed: %s",
+                 esp_err_to_name(err));
+        return err;
+    }
+
+    ESP_LOGI(kTag,
+             "rtc after shutdown clear: cs2=0x%02X alarm_flag=%d timer_flag=%d "
+             "alarm_ie=%d timer_ie=%d",
+             after.raw, after.alarm_flag ? 1 : 0, after.timer_flag ? 1 : 0,
+             after.alarm_interrupt_enabled ? 1 : 0,
+             after.timer_interrupt_enabled ? 1 : 0);
+    return ESP_OK;
 }
 
 esp_err_t EnterSoftOffSleep()
@@ -240,6 +349,11 @@ esp_err_t Init()
 
     err = sticky_board::CreateSensorI2cBus(&s_sensor_bus);
     if (err == ESP_OK) {
+        err = EnsureRtc();
+        if (err != ESP_OK) {
+            ESP_LOGW(kTag, "PCF8563 init failed: %s", esp_err_to_name(err));
+        }
+
         err = EnsureBatteryGauge();
         if (err != ESP_OK) {
             ESP_LOGW(kTag, "BQ27220 init failed: %s", esp_err_to_name(err));
@@ -305,6 +419,7 @@ esp_err_t ReadStatus(Status* out_status)
     }
 
     FillBatteryStatus(&status.battery);
+    FillRtcStatus(&status.rtc);
 
     *out_status = status;
     return ESP_OK;
@@ -330,6 +445,18 @@ void LogDebugStatus()
              status.power_input_sample_count, status.power_input_raw_average,
              status.power_input_raw_min, status.power_input_raw_max,
              status.usb_detected ? 1 : 0);
+
+    if (status.rtc.available) {
+        ESP_LOGI(kTag,
+                 "rtc: cs2=0x%02X alarm_flag=%d timer_flag=%d alarm_ie=%d "
+                 "timer_ie=%d",
+                 status.rtc.control_status_2, status.rtc.alarm_flag ? 1 : 0,
+                 status.rtc.timer_flag ? 1 : 0,
+                 status.rtc.alarm_interrupt_enabled ? 1 : 0,
+                 status.rtc.timer_interrupt_enabled ? 1 : 0);
+    } else {
+        ESP_LOGW(kTag, "rtc: unavailable");
+    }
 
     if (!status.battery.available) {
         ESP_LOGW(kTag, "battery: unavailable");
@@ -397,6 +524,11 @@ esp_err_t SetChargerEnabled(bool enabled)
 esp_err_t RequestShutdown()
 {
     ESP_LOGI(kTag, "Shutdown requested");
+    esp_err_t rtc_err = ClearRtcInterruptsForShutdown();
+    if (rtc_err != ESP_OK) {
+        ESP_LOGW(kTag, "Continuing shutdown after RTC clear failure");
+    }
+
     esp_err_t err = sticky_board::ReleasePowerHold();
     if (err != ESP_OK) {
         ESP_LOGW(kTag, "Power hold release failed: %s", esp_err_to_name(err));

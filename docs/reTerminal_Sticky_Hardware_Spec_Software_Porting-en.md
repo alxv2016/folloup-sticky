@@ -176,6 +176,9 @@ Power-off notes:
   high with `PWR_LOCK` low. In all tested cases the ESP32 remained powered.
 - The implemented fallback is soft-off: firmware attempts latch release, then
   enters ESP32 deep sleep with `PWR_BUTTON` / GPIO4 as the active-low wake source.
+- Current firmware ports the PCF8563 driver and clears/disables RTC alarm/timer
+  interrupt sources before attempting latch release, because `RTC_INTn` is part
+  of the `VDD_3V3_ENn` path.
 - Before revisiting true hard power-off, confirm the actual U3/Q7/PWR_EN/RTC_INTn
   netlist or obtain a known-good vendor shutdown sequence for this board
   revision.

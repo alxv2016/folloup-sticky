@@ -39,6 +39,15 @@ struct BatteryStatus {
     int interrupt_level = 0;
 };
 
+struct RtcStatus {
+    bool available = false;
+    uint8_t control_status_2 = 0;
+    bool alarm_flag = false;
+    bool timer_flag = false;
+    bool alarm_interrupt_enabled = false;
+    bool timer_interrupt_enabled = false;
+};
+
 struct Status {
     bool initialized = false;
     bool charger_enabled = false;
@@ -50,6 +59,7 @@ struct Status {
     int power_input_raw_max = 0;
     int power_input_sample_count = 0;
     bool usb_detected = false;
+    RtcStatus rtc = {};
     BatteryStatus battery = {};
 };
 

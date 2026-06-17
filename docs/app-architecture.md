@@ -14,10 +14,11 @@ The repository is currently a minimal ESP-IDF application scaffold with:
 - OTA-ready partition layout with rollback enabled.
 - A minimal C++ `app_main()`.
 - A ported BQ27220 fuel-gauge driver.
+- A ported PCF8563 RTC driver.
 - A `board` component for Sticky-specific power, charger, ADC, and BQ27220
-  wiring.
+  and RTC wiring.
 - A `power_service` component that initializes power hardware and logs a
-  diagnostic power/battery snapshot.
+  diagnostic power/battery/RTC snapshot.
 - A `button_service` component that logs app-facing button events through
   Espressif's managed button component.
 
@@ -52,6 +53,10 @@ components/
     priv_include/
       bq27220_reg.h
     bq27220.cpp
+  pcf8563/
+    include/
+      pcf8563.h
+    pcf8563.cpp
 partitions.csv
 sdkconfig
 sdkconfig.defaults
@@ -122,6 +127,30 @@ The driver exposes two usage styles:
 For early bring-up, prefer the lightweight direct-helper flow used by the
 source demo: create I2C bus, add BQ27220 device, probe, then read telemetry.
 
+### `components/pcf8563`
+
+This is the generic PCF8563 RTC driver ported from:
+
+```text
+/Users/tieuvong/Desktop/folloup/sticky_port/Device_Peripheral_Demo/components/pcf8563
+```
+
+The driver should stay board-agnostic. It works from an initialized
+`i2c_master_dev_handle_t` and should not own Sticky-specific GPIO numbers or
+I2C ports.
+
+Current scope:
+
+- probe the RTC at address `0x51`
+- disable CLKOUT
+- read and set date/time
+- read, clear, and disable alarm/timer interrupt state
+
+The interrupt helpers are an app-specific extension beyond the source demo's
+basic time read/write helpers. They exist because schematic page 5 ties
+`VDD_3V3_ENn` to `RTC_INTn`, so the shutdown path needs a way to clear an
+asserted RTC interrupt before releasing the latch.
+
 ### `components/board`
 
 This component centralizes Sticky-specific hardware access for the current power
@@ -142,6 +171,7 @@ scope.
 - sensor I2C SDA: `GPIO_NUM_1`
 - BQ27220 I2C address: `0x55`
 - BQ27220 interrupt pin: `GPIO_NUM_7`
+- PCF8563 I2C address: `0x51`
 - I2C glitch filter and bus speed constants
 
 `sticky_board.h/.cpp` owns small board helper functions:
@@ -157,6 +187,7 @@ scope.
 - `sticky_board::ReadBq27220InterruptLevel(...)`
 - `sticky_board::CreateSensorI2cBus(...)`
 - `sticky_board::AddBq27220Device(...)`
+- `sticky_board::AddPcf8563Device(...)`
 
 Keep this layer focused on raw board mechanics: pins, buses, GPIO polarity, ADC
 setup, and latch timing.
@@ -214,7 +245,7 @@ Known real power-off issue:
 ### `components/power_service`
 
 This component is the app-facing power layer. It composes the `board` helpers
-with the BQ27220 driver.
+with the BQ27220 and PCF8563 drivers.
 
 Current responsibilities:
 
@@ -222,7 +253,7 @@ Current responsibilities:
   the first application action
 - configure charger pins and enable charging
 - initialize power-input ADC sensing
-- initialize the sensor I2C bus and BQ27220 device
+- initialize the sensor I2C bus, PCF8563 device, and BQ27220 device
 - expose `power_service::ReadStatus(...)`
 - log one diagnostic snapshot through `power_service::LogDebugStatus()`
 
@@ -238,14 +269,17 @@ The current diagnostic snapshot includes:
 - BQ27220 full-charge status bit
 - low-battery-at-10-percent status derived from BQ27220 state of charge
 - BQ27220 operation status, BTP thresholds, and initial `BFG_INT` level
+- PCF8563 control/status-2 bits for alarm/timer flags and interrupt enables
 
 `power_service::RequestShutdown()` is the app-facing shutdown entry point. It is
-currently called by AppShell after a `POWER_OK` long press. It first attempts
-the Sticky hardware latch release. If firmware is still running after that
-release returns, the service enters ESP32 deep sleep as a soft-off fallback with
-`POWER_OK` / `GPIO4` configured as an active-low wake source. Before arming that
-wake source, the service waits for `POWER_OK` to be high/stable so the device
-does not immediately wake from an already-active button line.
+currently called by AppShell after a `POWER_OK` long press. It first clears and
+disables PCF8563 alarm/timer interrupt sources so `RTC_INTn` is not intentionally
+holding `VDD_3V3_ENn` low, then attempts the Sticky hardware latch release. If
+firmware is still running after that release returns, the service enters ESP32
+deep sleep as a soft-off fallback with `POWER_OK` / `GPIO4` configured as an
+active-low wake source. Before arming that wake source, the service waits for
+`POWER_OK` to be high/stable so the device does not immediately wake from an
+already-active button line.
 
 ### `components/button_service`
 
@@ -275,6 +309,7 @@ demo's patched vendored component.
 - External flash: 256 Mbit / 32 MB QSPI flash.
 - PSRAM: 8 MB octal PSRAM.
 - BQ27220 address: `0x55`.
+- PCF8563 address: `0x51`.
 - Power latch uses `PWR_HOLD` on `GPIO45` as U3 D and `PWR_LOCK` on `GPIO46`
   as U3 CP. Firmware sets the desired D value and pulses CP to latch it.
 - `VDD_3V3_ENn` is not currently mapped to a firmware GPIO, so there is no
@@ -325,8 +360,9 @@ app / integration code
   -> power_service
        -> board -> ESP-IDF drivers
        -> bq27220 -> ESP-IDF I2C driver
+       -> pcf8563 -> ESP-IDF I2C driver
   -> button_service -> espressif/button
 ```
 
-Avoid making `bq27220` depend on `board`; that would make a generic IC driver
-board-specific.
+Avoid making `bq27220` or `pcf8563` depend on `board`; that would make generic
+IC drivers board-specific.
