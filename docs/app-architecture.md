@@ -117,7 +117,9 @@ scope.
 - `sticky_board::SetChargerEnabled(...)`
 - `sticky_board::ReadChargeState(...)`
 - `sticky_board::InitPowerInputSense()`
-- `sticky_board::ReadPowerInputSenseMv(...)`
+- `sticky_board::ReadPowerInputSample(...)`
+- `sticky_board::ConfigureBq27220InterruptPin()`
+- `sticky_board::ReadBq27220InterruptLevel(...)`
 - `sticky_board::CreateSensorI2cBus(...)`
 - `sticky_board::AddBq27220Device(...)`
 
@@ -148,9 +150,13 @@ The current diagnostic snapshot includes:
 - service initialization state
 - charger enabled state
 - charger GPIO state
-- power-input sense voltage when calibrated ADC is available
+- averaged power-input ADC raw min/max/average plus calibrated sense voltage
+  when ADC calibration is available
 - USB/external-power detection using a conservative sense-pin threshold
 - BQ27220 battery telemetry when the gauge is available
+- BQ27220 full-charge status bit
+- low-battery-at-10-percent status derived from BQ27220 state of charge
+- BQ27220 operation status, BTP thresholds, and initial `BFG_INT` level
 
 `power_service::RequestShutdown()` exists as the app-facing shutdown entry
 point, but `main` does not call it. Shutdown should only be wired to UX/policy
@@ -176,7 +182,8 @@ after the intended button behavior is defined.
   part of the boot-mode decision.
 - `GPIO7` is the BQ27220 interrupt line in the current scope. The hardware spec
   also notes this line is shared with the IMU interrupt path, so future IMU work
-  must coordinate ownership.
+  must coordinate ownership. Do not add an IMU interrupt handler that claims
+  GPIO7 independently of the power/fuel-gauge path.
 
 ## Configuration
 

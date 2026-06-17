@@ -25,6 +25,18 @@ struct BatteryStatus {
     uint16_t cycle_count = 0;
     float temperature_c = 0.0f;
     uint16_t status_bits = 0;
+    bool full_charge_detected = false;
+    bool low_battery_10_percent = false;
+    bool operation_status_available = false;
+    uint16_t operation_status_bits = 0;
+    uint8_t operation_security_state = 0;
+    bool operation_config_update = false;
+    bool operation_btp_interrupt = false;
+    bool btp_thresholds_available = false;
+    uint16_t btp_discharge_set = 0;
+    uint16_t btp_charge_set = 0;
+    bool interrupt_level_available = false;
+    int interrupt_level = 0;
 };
 
 struct Status {
@@ -33,6 +45,10 @@ struct Status {
     ChargeState charge_state = ChargeState::kUnknown;
     bool power_input_valid = false;
     int power_input_sense_mv = 0;
+    int power_input_raw_average = 0;
+    int power_input_raw_min = 0;
+    int power_input_raw_max = 0;
+    int power_input_sample_count = 0;
     bool usb_detected = false;
     BatteryStatus battery = {};
 };

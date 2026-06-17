@@ -10,6 +10,8 @@ namespace {
 
 constexpr const char* kTag = "PowerService";
 constexpr int kUsbSenseConnectedThresholdMv = 200;
+constexpr uint16_t kLowBatteryPercentThreshold = 10;
+constexpr uint16_t kBatteryStatusFullChargeMask = 1U << 9;
 
 i2c_master_bus_handle_t s_sensor_bus = nullptr;
 i2c_master_dev_handle_t s_battery_device = nullptr;
@@ -89,6 +91,37 @@ void FillBatteryStatus(BatteryStatus* battery)
     battery->cycle_count = data.cycle_count;
     battery->temperature_c = data.temperature_c;
     battery->status_bits = data.battery_status;
+    battery->full_charge_detected =
+        (data.battery_status & kBatteryStatusFullChargeMask) != 0;
+    battery->low_battery_10_percent =
+        data.state_of_charge_percent <= kLowBatteryPercentThreshold;
+
+    operation_status_t operation_status = {};
+    if (bq27220_read_operation_status(s_battery_device, operation_status)) {
+        const uint16_t raw = *reinterpret_cast<uint16_t*>(&operation_status);
+        battery->operation_status_available = true;
+        battery->operation_status_bits = raw;
+        battery->operation_security_state = operation_status.SEC;
+        battery->operation_config_update = operation_status.CFGUPDATE;
+        battery->operation_btp_interrupt = operation_status.BTPINT;
+    }
+
+    uint16_t btp_discharge_set = 0;
+    uint16_t btp_charge_set = 0;
+    if (bq27220_read_word(s_battery_device, Bq27220Reg::BtpDischargeSet,
+                          btp_discharge_set) &&
+        bq27220_read_word(s_battery_device, Bq27220Reg::BtpChargeSet,
+                          btp_charge_set)) {
+        battery->btp_thresholds_available = true;
+        battery->btp_discharge_set = btp_discharge_set;
+        battery->btp_charge_set = btp_charge_set;
+    }
+
+    int interrupt_level = 0;
+    if (sticky_board::ReadBq27220InterruptLevel(&interrupt_level) == ESP_OK) {
+        battery->interrupt_level_available = true;
+        battery->interrupt_level = interrupt_level;
+    }
 }
 
 }  // namespace
@@ -130,6 +163,12 @@ esp_err_t Init()
         err = EnsureBatteryGauge();
         if (err != ESP_OK) {
             ESP_LOGW(kTag, "BQ27220 init failed: %s", esp_err_to_name(err));
+        } else {
+            err = sticky_board::ConfigureBq27220InterruptPin();
+            if (err != ESP_OK) {
+                ESP_LOGW(kTag, "BQ27220 interrupt pin init failed: %s",
+                         esp_err_to_name(err));
+            }
         }
     } else {
         s_sensor_bus = nullptr;
@@ -173,11 +212,15 @@ esp_err_t ReadStatus(Status* out_status)
     }
 
     if (s_power_input_ready) {
-        int millivolts = 0;
-        if (sticky_board::ReadPowerInputSenseMv(&millivolts) == ESP_OK) {
+        sticky_board::PowerInputSample sample = {};
+        if (sticky_board::ReadPowerInputSample(&sample) == ESP_OK) {
             status.power_input_valid = true;
-            status.power_input_sense_mv = millivolts;
-            status.usb_detected = millivolts >= kUsbSenseConnectedThresholdMv;
+            status.power_input_sense_mv = sample.calibrated_mv;
+            status.power_input_raw_average = sample.raw_average;
+            status.power_input_raw_min = sample.raw_min;
+            status.power_input_raw_max = sample.raw_max;
+            status.power_input_sample_count = sample.sample_count;
+            status.usb_detected = sample.calibrated_mv >= kUsbSenseConnectedThresholdMv;
         }
     }
 
@@ -198,10 +241,14 @@ void LogDebugStatus()
 
     ESP_LOGI(kTag,
              "status: initialized=%d charger_enabled=%d charge_state=%s "
-             "power_input_valid=%d power_input_sense_mv=%d usb_detected=%d",
+             "power_input_valid=%d power_input_sense_mv=%d "
+             "power_input_samples=%d raw_avg=%d raw_min=%d raw_max=%d "
+             "usb_detected=%d",
              status.initialized ? 1 : 0, status.charger_enabled ? 1 : 0,
              ChargeStateName(status.charge_state),
              status.power_input_valid ? 1 : 0, status.power_input_sense_mv,
+             status.power_input_sample_count, status.power_input_raw_average,
+             status.power_input_raw_min, status.power_input_raw_max,
              status.usb_detected ? 1 : 0);
 
     if (!status.battery.available) {
@@ -212,14 +259,46 @@ void LogDebugStatus()
     ESP_LOGI(kTag,
              "battery: soc=%u%% soh=%u%% voltage=%umV current=%dmA "
              "avg_current=%dmA remaining=%umAh full=%umAh temp=%.2fC "
-             "cycles=%u status=0x%04X",
+             "cycles=%u full_charge=%d low_battery_10=%d status=0x%04X",
              status.battery.state_of_charge_percent,
              status.battery.state_of_health_percent, status.battery.voltage_mv,
              status.battery.current_ma, status.battery.average_current_ma,
              status.battery.remaining_capacity_mah,
              status.battery.full_charge_capacity_mah,
              static_cast<double>(status.battery.temperature_c),
-             status.battery.cycle_count, status.battery.status_bits);
+             status.battery.cycle_count,
+             status.battery.full_charge_detected ? 1 : 0,
+             status.battery.low_battery_10_percent ? 1 : 0,
+             status.battery.status_bits);
+
+    if (status.battery.operation_status_available) {
+        ESP_LOGI(kTag,
+                 "battery operation: raw=0x%04X sec=%u cfgupdate=%d btpint=%d",
+                 status.battery.operation_status_bits,
+                 static_cast<unsigned>(status.battery.operation_security_state),
+                 status.battery.operation_config_update ? 1 : 0,
+                 status.battery.operation_btp_interrupt ? 1 : 0);
+    } else {
+        ESP_LOGW(kTag, "battery operation: unavailable");
+    }
+
+    if (status.battery.btp_thresholds_available) {
+        ESP_LOGI(kTag,
+                 "battery BTP thresholds: discharge_set=%u charge_set=%u",
+                 status.battery.btp_discharge_set,
+                 status.battery.btp_charge_set);
+    } else {
+        ESP_LOGW(kTag, "battery BTP thresholds: unavailable");
+    }
+
+    if (status.battery.interrupt_level_available) {
+        ESP_LOGI(kTag,
+                 "battery interrupt: BFG_INT level=%d on shared GPIO7 "
+                 "(also used by future IMU interrupt path)",
+                 status.battery.interrupt_level);
+    } else {
+        ESP_LOGW(kTag, "battery interrupt: level unavailable");
+    }
 }
 
 esp_err_t SetChargerEnabled(bool enabled)

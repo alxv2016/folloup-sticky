@@ -16,6 +16,7 @@ constexpr const char* kTag = "StickyBoard";
 constexpr TickType_t kPowerLatchReleaseSettleDelay = pdMS_TO_TICKS(20);
 constexpr adc_atten_t kPowerSenseAttenuation = ADC_ATTEN_DB_12;
 constexpr adc_bitwidth_t kPowerSenseBitWidth = ADC_BITWIDTH_DEFAULT;
+constexpr int kPowerSenseSampleCount = 8;
 
 adc_oneshot_unit_handle_t s_power_adc_handle = nullptr;
 adc_cali_handle_t s_power_adc_cali_handle = nullptr;
@@ -251,9 +252,9 @@ esp_err_t InitPowerInputSense()
     return ESP_OK;
 }
 
-esp_err_t ReadPowerInputSenseMv(int* millivolts)
+esp_err_t ReadPowerInputSample(PowerInputSample* out_sample)
 {
-    if (millivolts == nullptr) {
+    if (out_sample == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
     if (s_power_adc_handle == nullptr || !s_power_adc_calibrated ||
@@ -261,13 +262,67 @@ esp_err_t ReadPowerInputSenseMv(int* millivolts)
         return ESP_ERR_INVALID_STATE;
     }
 
-    int raw = 0;
-    esp_err_t err = adc_oneshot_read(s_power_adc_handle, s_power_adc_channel, &raw);
+    int raw_sum = 0;
+    int raw_min = 0;
+    int raw_max = 0;
+    int valid_samples = 0;
+    for (int i = 0; i < kPowerSenseSampleCount; ++i) {
+        int raw = 0;
+        esp_err_t err = adc_oneshot_read(s_power_adc_handle, s_power_adc_channel, &raw);
+        if (err != ESP_OK) {
+            return err;
+        }
+
+        if (valid_samples == 0) {
+            raw_min = raw;
+            raw_max = raw;
+        } else {
+            if (raw < raw_min) {
+                raw_min = raw;
+            }
+            if (raw > raw_max) {
+                raw_max = raw;
+            }
+        }
+        raw_sum += raw;
+        ++valid_samples;
+    }
+
+    const int raw_average = raw_sum / valid_samples;
+    int calibrated_mv = 0;
+    esp_err_t err = adc_cali_raw_to_voltage(s_power_adc_cali_handle,
+                                            raw_average, &calibrated_mv);
     if (err != ESP_OK) {
         return err;
     }
 
-    return adc_cali_raw_to_voltage(s_power_adc_cali_handle, raw, millivolts);
+    out_sample->raw_average = raw_average;
+    out_sample->raw_min = raw_min;
+    out_sample->raw_max = raw_max;
+    out_sample->calibrated_mv = calibrated_mv;
+    out_sample->sample_count = valid_samples;
+    return ESP_OK;
+}
+
+esp_err_t ConfigureBq27220InterruptPin()
+{
+    gpio_config_t config = {};
+    config.pin_bit_mask = 1ULL << STICKY_BQ27220_INT_PIN;
+    config.mode = GPIO_MODE_INPUT;
+    config.pull_up_en = GPIO_PULLUP_ENABLE;
+    config.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    config.intr_type = GPIO_INTR_DISABLE;
+    return gpio_config(&config);
+}
+
+esp_err_t ReadBq27220InterruptLevel(int* level)
+{
+    if (level == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    *level = gpio_get_level(STICKY_BQ27220_INT_PIN);
+    return ESP_OK;
 }
 
 esp_err_t CreateSensorI2cBus(i2c_master_bus_handle_t* out_bus)
