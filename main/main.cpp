@@ -1,6 +1,7 @@
 #include "esp_err.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
+#include "power_service.h"
 
 namespace {
 void confirm_pending_ota_image()
@@ -18,5 +19,8 @@ void confirm_pending_ota_image()
 
 extern "C" void app_main(void)
 {
+    ESP_ERROR_CHECK(power_service::EnablePowerHold());
     confirm_pending_ota_image();
+    ESP_ERROR_CHECK(power_service::Init());
+    power_service::LogDebugStatus();
 }

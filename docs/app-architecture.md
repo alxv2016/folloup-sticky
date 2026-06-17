@@ -14,7 +14,10 @@ The repository is currently a minimal ESP-IDF application scaffold with:
 - OTA-ready partition layout with rollback enabled.
 - A minimal C++ `app_main()`.
 - A ported BQ27220 fuel-gauge driver.
-- A small `board` component scoped only to BQ27220 wiring and I2C setup.
+- A `board` component for Sticky-specific power, charger, ADC, and BQ27220
+  wiring.
+- A `power_service` component that initializes power hardware and logs a
+  diagnostic power/battery snapshot.
 
 The rest of the board peripherals have not been ported yet.
 
@@ -31,6 +34,10 @@ components/
       sticky_board_config.h
       sticky_board.h
     sticky_board.cpp
+  power_service/
+    include/
+      power_service.h
+    power_service.cpp
   bq27220/
     include/
       bq27220.h
@@ -50,13 +57,16 @@ docs/
 ### `main`
 
 `main/main.cpp` is intentionally minimal. It currently only performs the
-required OTA rollback validation hook:
+required early startup hooks:
 
 - Detects whether the running image is `ESP_OTA_IMG_PENDING_VERIFY`.
 - Marks the image valid with `esp_ota_mark_app_valid_cancel_rollback()`.
+- Asserts the Sticky power latch before OTA validation.
+- Initializes `power_service`.
+- Logs one power/battery diagnostic snapshot.
 
-Driver-specific wiring should stay out of `main` until an integration step is
-intentional.
+Driver-specific wiring should stay out of `main`; app startup should call
+service-level APIs instead.
 
 ### `components/bq27220`
 
@@ -81,10 +91,17 @@ source demo: create I2C bus, add BQ27220 device, probe, then read telemetry.
 
 ### `components/board`
 
-This component centralizes only the BQ27220-related board wiring for now.
+This component centralizes Sticky-specific hardware access for the current power
+scope.
 
 `sticky_board_config.h` owns:
 
+- power button: `GPIO_NUM_4`
+- power latch hold: `GPIO_NUM_45`
+- power latch lock/control: `GPIO_NUM_46`
+- charger enable: `GPIO_NUM_39`, active low
+- charger state: `GPIO_NUM_40`
+- power-input ADC sense: `GPIO_NUM_9`
 - sensor I2C bus port: `I2C_NUM_1`
 - sensor I2C SCL: `GPIO_NUM_0`
 - sensor I2C SDA: `GPIO_NUM_1`
@@ -94,10 +111,50 @@ This component centralizes only the BQ27220-related board wiring for now.
 
 `sticky_board.h/.cpp` owns small board helper functions:
 
+- `sticky_board::EnablePowerHold()`
+- `sticky_board::ReleasePowerHold()`
+- `sticky_board::ConfigureChargerPins()`
+- `sticky_board::SetChargerEnabled(...)`
+- `sticky_board::ReadChargeState(...)`
+- `sticky_board::InitPowerInputSense()`
+- `sticky_board::ReadPowerInputSenseMv(...)`
 - `sticky_board::CreateSensorI2cBus(...)`
 - `sticky_board::AddBq27220Device(...)`
 
-Keep this layer narrow until more board hardware is intentionally ported.
+Keep this layer focused on raw board mechanics: pins, buses, GPIO polarity, ADC
+setup, and latch timing.
+
+Power-latch GPIOs are configured as input/output during bring-up so firmware can
+both drive `PWR_HOLD` / `PWR_LOCK` and log the observed pad levels for hardware
+debugging.
+
+### `components/power_service`
+
+This component is the app-facing power layer. It composes the `board` helpers
+with the BQ27220 driver.
+
+Current responsibilities:
+
+- expose `power_service::EnablePowerHold()` so `main` can assert power hold as
+  the first application action
+- configure charger pins and enable charging
+- initialize power-input ADC sensing
+- initialize the sensor I2C bus and BQ27220 device
+- expose `power_service::ReadStatus(...)`
+- log one diagnostic snapshot through `power_service::LogDebugStatus()`
+
+The current diagnostic snapshot includes:
+
+- service initialization state
+- charger enabled state
+- charger GPIO state
+- power-input sense voltage when calibrated ADC is available
+- USB/external-power detection using a conservative sense-pin threshold
+- BQ27220 battery telemetry when the gauge is available
+
+`power_service::RequestShutdown()` exists as the app-facing shutdown entry
+point, but `main` does not call it. Shutdown should only be wired to UX/policy
+after the intended button behavior is defined.
 
 ## Hardware Notes
 
@@ -105,6 +162,13 @@ Keep this layer narrow until more board hardware is intentionally ported.
 - External flash: 256 Mbit / 32 MB QSPI flash.
 - PSRAM: 8 MB octal PSRAM.
 - BQ27220 address: `0x55`.
+- Power latch uses `PWR_HOLD` on `GPIO45` and `PWR_LOCK` on `GPIO46`.
+- Charger enable is active low on `GPIO39`.
+- Charger state is read from `GPIO40`; the reference demo treats low as
+  charging.
+- Power-input voltage is sensed on `GPIO9`. The service currently logs ADC pin
+  millivolts, not reconstructed VIN, because the divider ratio has not been
+  confirmed in this project.
 - BQ27220 shares the sensor I2C bus with other future peripherals.
 - Sensor I2C uses `GPIO0` for SCL and `GPIO1` for SDA.
 - `GPIO0` is also an ESP32-S3 boot strapping/download pin. Create the sensor
@@ -140,22 +204,10 @@ Use this dependency direction:
 
 ```text
 app / integration code
-  -> board
-  -> bq27220
-  -> ESP-IDF drivers
+  -> power_service
+       -> board -> ESP-IDF drivers
+       -> bq27220 -> ESP-IDF I2C driver
 ```
 
 Avoid making `bq27220` depend on `board`; that would make a generic IC driver
 board-specific.
-
-## Next Likely Integration Step
-
-When BQ27220 is wired into the app, the expected flow is:
-
-1. Call `sticky_board::CreateSensorI2cBus(...)`.
-2. Call `sticky_board::AddBq27220Device(...)`.
-3. Call `bq27220_probe(...)`.
-4. Read telemetry using direct helper APIs.
-5. Decide later whether to configure/profile the gauge with `bq27220_create()`.
-
-Keep that integration small and observable, with clear `esp_err_t` handling.

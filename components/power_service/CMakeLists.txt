@@ -1,7 +1,7 @@
 idf_component_register(
-    SRCS "sticky_board.cpp"
+    SRCS "power_service.cpp"
     INCLUDE_DIRS "include"
-    REQUIRES esp_adc esp_driver_gpio esp_driver_i2c
+    REQUIRES board bq27220 esp_driver_i2c
 )
 
 target_compile_features(${COMPONENT_LIB} PUBLIC cxx_std_17)
