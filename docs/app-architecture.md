@@ -18,6 +18,8 @@ The repository is currently a minimal ESP-IDF application scaffold with:
   wiring.
 - A `power_service` component that initializes power hardware and logs a
   diagnostic power/battery snapshot.
+- A `button_service` component that logs app-facing button events through
+  Espressif's managed button component.
 
 The rest of the board peripherals have not been ported yet.
 
@@ -28,6 +30,8 @@ CMakeLists.txt
 main/
   CMakeLists.txt
   main.cpp
+  app_shell.h
+  app_shell.cpp
 components/
   board/
     include/
@@ -38,6 +42,10 @@ components/
     include/
       power_service.h
     power_service.cpp
+  button_service/
+    include/
+      button_service.h
+    button_service.cpp
   bq27220/
     include/
       bq27220.h
@@ -56,17 +64,31 @@ docs/
 
 ### `main`
 
-`main/main.cpp` is intentionally minimal. It currently only performs the
-required early startup hooks:
+`main/` owns product composition for this firmware. It is not a reusable
+component. Keep it focused on startup ordering and app-level orchestration.
+
+`main/main.cpp` is intentionally tiny: it is only the ESP-IDF `app_main()` entry
+point and delegates to `app_shell::Run()`.
+
+`main/app_shell.cpp` is an orchestration layer only. It may decide startup order,
+connect app-level policies, and choose whether an optional service failure is
+fatal, but it should not contain hardware driver logic, protocol logic, button
+debouncing, battery math, display drawing, networking workflows, or long-running
+feature loops. Put those behaviors in services/components and call them from the
+app shell.
+
+The current early startup sequence is:
 
 - Detects whether the running image is `ESP_OTA_IMG_PENDING_VERIFY`.
 - Marks the image valid with `esp_ota_mark_app_valid_cancel_rollback()`.
 - Asserts the Sticky power latch before OTA validation.
 - Initializes `power_service`.
 - Logs one power/battery diagnostic snapshot.
+- Initializes `button_service`.
 
-Driver-specific wiring should stay out of `main`; app startup should call
-service-level APIs instead.
+Driver-specific wiring should stay out of `main/`; app startup should call
+service-level APIs instead. Add product-specific sequencing in `app_shell`, not
+inside reusable components.
 
 ### `components/bq27220`
 
@@ -96,9 +118,11 @@ scope.
 
 `sticky_board_config.h` owns:
 
-- power button: `GPIO_NUM_4`
 - power latch hold: `GPIO_NUM_45`
 - power latch lock/control: `GPIO_NUM_46`
+- power / OK button: `GPIO_NUM_4`
+- up button: `GPIO_NUM_5`
+- down button: `GPIO_NUM_6`
 - charger enable: `GPIO_NUM_39`, active low
 - charger state: `GPIO_NUM_40`
 - power-input ADC sense: `GPIO_NUM_9`
@@ -162,6 +186,26 @@ The current diagnostic snapshot includes:
 point, but `main` does not call it. Shutdown should only be wired to UX/policy
 after the intended button behavior is defined.
 
+### `components/button_service`
+
+This C++ component owns app-facing button initialization and logging. It uses
+Espressif's managed `espressif/button` component for the underlying debounce and
+button-event state machine.
+
+Current scope:
+
+- `POWER_OK` on `GPIO4`
+- `UP` on `GPIO5`
+- `DOWN` on `GPIO6`
+- active-low GPIO buttons with internal pulls enabled by the managed component
+- logs press down, press up, single click, double click, long press start, and
+  long press up
+
+Power-save button wake is intentionally disabled for this first pass. Before
+enabling button wake from light sleep, verify whether the managed component
+version includes the GPIO power-save ISR safety behavior noted in the reference
+demo's patched vendored component.
+
 ## Hardware Notes
 
 - Main controller: `ESP32-S3R8`.
@@ -214,6 +258,7 @@ app / integration code
   -> power_service
        -> board -> ESP-IDF drivers
        -> bq27220 -> ESP-IDF I2C driver
+  -> button_service -> espressif/button
 ```
 
 Avoid making `bq27220` depend on `board`; that would make a generic IC driver
