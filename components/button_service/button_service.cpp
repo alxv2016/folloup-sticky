@@ -16,17 +16,20 @@ constexpr uint16_t kLongPressMs = 2000;
 
 struct ButtonContext {
     const char* label = nullptr;
+    ButtonId id = ButtonId::kPowerOk;
     gpio_num_t gpio = GPIO_NUM_NC;
     button_handle_t handle = nullptr;
 };
 
 ButtonContext s_buttons[] = {
-    {"POWER_OK", STICKY_POWER_BUTTON_PIN, nullptr},
-    {"UP", STICKY_BUTTON_UP_PIN, nullptr},
-    {"DOWN", STICKY_BUTTON_DOWN_PIN, nullptr},
+    {"POWER_OK", ButtonId::kPowerOk, STICKY_POWER_BUTTON_PIN, nullptr},
+    {"UP", ButtonId::kUp, STICKY_BUTTON_UP_PIN, nullptr},
+    {"DOWN", ButtonId::kDown, STICKY_BUTTON_DOWN_PIN, nullptr},
 };
 
 bool s_initialized = false;
+EventHandler s_event_handler = nullptr;
+void* s_event_handler_context = nullptr;
 
 const char* EventName(button_event_t event)
 {
@@ -48,6 +51,36 @@ const char* EventName(button_event_t event)
     }
 }
 
+bool ToButtonEvent(button_event_t event, ButtonEvent* out_event)
+{
+    if (out_event == nullptr) {
+        return false;
+    }
+
+    switch (event) {
+        case BUTTON_PRESS_DOWN:
+            *out_event = ButtonEvent::kPressDown;
+            return true;
+        case BUTTON_PRESS_UP:
+            *out_event = ButtonEvent::kPressUp;
+            return true;
+        case BUTTON_SINGLE_CLICK:
+            *out_event = ButtonEvent::kSingleClick;
+            return true;
+        case BUTTON_DOUBLE_CLICK:
+            *out_event = ButtonEvent::kDoubleClick;
+            return true;
+        case BUTTON_LONG_PRESS_START:
+            *out_event = ButtonEvent::kLongPressStart;
+            return true;
+        case BUTTON_LONG_PRESS_UP:
+            *out_event = ButtonEvent::kLongPressUp;
+            return true;
+        default:
+            return false;
+    }
+}
+
 void ButtonEventCallback(void* button_handle, void* user_data)
 {
     const auto* context = static_cast<const ButtonContext*>(user_data);
@@ -61,6 +94,16 @@ void ButtonEventCallback(void* button_handle, void* user_data)
              EventName(event),
              context != nullptr ? context->gpio : GPIO_NUM_NC,
              static_cast<unsigned long>(pressed_ms));
+
+    ButtonEvent app_event = ButtonEvent::kPressDown;
+    if (context != nullptr && s_event_handler != nullptr &&
+        ToButtonEvent(event, &app_event)) {
+        ButtonEventInfo event_info = {};
+        event_info.button = context->id;
+        event_info.event = app_event;
+        event_info.pressed_ms = pressed_ms;
+        s_event_handler(event_info, s_event_handler_context);
+    }
 }
 
 esp_err_t RegisterEvent(ButtonContext* context, button_event_t event)
@@ -147,6 +190,12 @@ esp_err_t Init()
     s_initialized = true;
     ESP_LOGI(kTag, "Button service initialized");
     return ESP_OK;
+}
+
+void SetEventHandler(EventHandler handler, void* context)
+{
+    s_event_handler = handler;
+    s_event_handler_context = context;
 }
 
 }  // namespace button_service

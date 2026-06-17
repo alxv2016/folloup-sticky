@@ -85,6 +85,17 @@ The current early startup sequence is:
 - Initializes `power_service`.
 - Logs one power/battery diagnostic snapshot.
 - Initializes `button_service`.
+- Subscribes to button events and logs app-level power-button shutdown intent.
+- Runs a small shutdown task so button callbacks can request shutdown without
+  directly executing the power-latch release sequence.
+
+Power-button long press start arms shutdown, and long-press release requests it.
+This avoids releasing the latch while the physical power button is still being
+held. The shutdown task also waits briefly after release before calling
+`power_service::RequestShutdown()` so the analog button/Q2 bootstrap path has
+time to stop feeding `PWR_EN`. The button callback only notifies the AppShell
+shutdown task; the task calls the power service so latch-release timing does not
+run inside the button callback.
 
 Driver-specific wiring should stay out of `main/`; app startup should call
 service-level APIs instead. Add product-specific sequencing in `app_shell`, not
@@ -118,8 +129,8 @@ scope.
 
 `sticky_board_config.h` owns:
 
-- power latch hold: `GPIO_NUM_45`
-- power latch lock/control: `GPIO_NUM_46`
+- power latch data / `PWR_HOLD`: `GPIO_NUM_45`
+- power latch clock / `PWR_LOCK`: `GPIO_NUM_46`
 - power / OK button: `GPIO_NUM_4`
 - up button: `GPIO_NUM_5`
 - down button: `GPIO_NUM_6`
@@ -152,7 +163,20 @@ setup, and latch timing.
 
 Power-latch GPIOs are configured as input/output during bring-up so firmware can
 both drive `PWR_HOLD` / `PWR_LOCK` and log the observed pad levels for hardware
-debugging.
+debugging. Startup follows the Seeed peripheral demo behavior and drives both
+`PWR_HOLD` and `PWR_LOCK` high to keep the board alive after the physical power
+button is released. For shutdown testing, firmware drives both `PWR_HOLD` and
+`PWR_LOCK` low and keeps them low, which is the direct inverse of the vendor
+power-on hold behavior.
+Before each latch sequence, the board layer disables ESP-IDF GPIO hold/deep-sleep
+hold behavior for GPIO45/GPIO46 and resets both pads before reconfiguring them.
+This is intentional because both pins are strapping-sensitive and power-latch
+debugging needs to rule out stale pad or sleep-hold state.
+
+The current schematic trace does not show `VDD_3V3_ENn` routed to an ESP32-S3
+GPIO. Treat hard power-off as latch-controlled through `PWR_HOLD` / `PWR_LOCK`
+only unless a future board revision or netlist proves a direct buck-boost enable
+GPIO exists.
 
 ### `components/power_service`
 
@@ -182,9 +206,13 @@ The current diagnostic snapshot includes:
 - low-battery-at-10-percent status derived from BQ27220 state of charge
 - BQ27220 operation status, BTP thresholds, and initial `BFG_INT` level
 
-`power_service::RequestShutdown()` exists as the app-facing shutdown entry
-point, but `main` does not call it. Shutdown should only be wired to UX/policy
-after the intended button behavior is defined.
+`power_service::RequestShutdown()` is the app-facing shutdown entry point. It is
+currently called by AppShell after a `POWER_OK` long press. It first attempts
+the Sticky hardware latch release. If firmware is still running after that
+release returns, the service enters ESP32 deep sleep as a soft-off fallback with
+`POWER_OK` / `GPIO4` configured as an active-low wake source. Before arming that
+wake source, the service waits for `POWER_OK` to be high/stable so the device
+does not immediately wake from an already-active button line.
 
 ### `components/button_service`
 
@@ -200,6 +228,8 @@ Current scope:
 - active-low GPIO buttons with internal pulls enabled by the managed component
 - logs press down, press up, single click, double click, long press start, and
   long press up
+- exposes a typed event callback API for app-level policy routing in
+  `app_shell`
 
 Power-save button wake is intentionally disabled for this first pass. Before
 enabling button wake from light sleep, verify whether the managed component
@@ -212,7 +242,10 @@ demo's patched vendored component.
 - External flash: 256 Mbit / 32 MB QSPI flash.
 - PSRAM: 8 MB octal PSRAM.
 - BQ27220 address: `0x55`.
-- Power latch uses `PWR_HOLD` on `GPIO45` and `PWR_LOCK` on `GPIO46`.
+- Power latch uses `PWR_HOLD` on `GPIO45` as U3 D and `PWR_LOCK` on `GPIO46`
+  as U3 CP. Firmware sets the desired D value and pulses CP to latch it.
+- `VDD_3V3_ENn` is not currently mapped to a firmware GPIO, so there is no
+  confirmed independent software kill pin for the 3.3 V buck-boost rail.
 - Charger enable is active low on `GPIO39`.
 - Charger state is read from `GPIO40`; the reference demo treats low as
   charging.

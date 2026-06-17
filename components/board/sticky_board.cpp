@@ -13,7 +13,8 @@ namespace sticky_board {
 namespace {
 
 constexpr const char* kTag = "StickyBoard";
-constexpr TickType_t kPowerLatchReleaseSettleDelay = pdMS_TO_TICKS(20);
+constexpr TickType_t kPowerLatchSettleDelay = pdMS_TO_TICKS(20);
+constexpr TickType_t kPowerLatchShutdownHoldDelay = pdMS_TO_TICKS(500);
 constexpr adc_atten_t kPowerSenseAttenuation = ADC_ATTEN_DB_12;
 constexpr adc_bitwidth_t kPowerSenseBitWidth = ADC_BITWIDTH_DEFAULT;
 constexpr int kPowerSenseSampleCount = 8;
@@ -38,6 +39,40 @@ esp_err_t EnableOutputPin(gpio_num_t pin, int level)
         return err;
     }
     return gpio_set_level(pin, level);
+}
+
+esp_err_t PreparePowerLatchPins(const char* phase)
+{
+    gpio_deep_sleep_hold_dis();
+
+    esp_err_t err = gpio_hold_dis(STICKY_POWER_HOLD_PIN);
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "%s gpio_hold_dis(GPIO%d) failed: %s", phase,
+                 STICKY_POWER_HOLD_PIN, esp_err_to_name(err));
+        return err;
+    }
+    err = gpio_hold_dis(STICKY_POWER_LOCK_PIN);
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "%s gpio_hold_dis(GPIO%d) failed: %s", phase,
+                 STICKY_POWER_LOCK_PIN, esp_err_to_name(err));
+        return err;
+    }
+
+    err = gpio_reset_pin(STICKY_POWER_HOLD_PIN);
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "%s gpio_reset_pin(GPIO%d) failed: %s", phase,
+                 STICKY_POWER_HOLD_PIN, esp_err_to_name(err));
+        return err;
+    }
+    err = gpio_reset_pin(STICKY_POWER_LOCK_PIN);
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "%s gpio_reset_pin(GPIO%d) failed: %s", phase,
+                 STICKY_POWER_LOCK_PIN, esp_err_to_name(err));
+        return err;
+    }
+
+    ESP_LOGI(kTag, "%s latch GPIO holds disabled and pads reset", phase);
+    return ESP_OK;
 }
 
 void LogPowerLatchLevels(const char* phase)
@@ -105,11 +140,12 @@ esp_err_t CreateI2cBus(i2c_port_num_t port, gpio_num_t scl_pin, gpio_num_t sda_p
 
 esp_err_t EnablePowerHold()
 {
-    gpio_deep_sleep_hold_dis();
-    gpio_hold_dis(STICKY_POWER_HOLD_PIN);
-    gpio_hold_dis(STICKY_POWER_LOCK_PIN);
+    esp_err_t err = PreparePowerLatchPins("Power latch enable prepare:");
+    if (err != ESP_OK) {
+        return err;
+    }
 
-    esp_err_t err = EnableOutputPin(STICKY_POWER_HOLD_PIN, 1);
+    err = EnableOutputPin(STICKY_POWER_HOLD_PIN, 1);
     if (err != ESP_OK) {
         return err;
     }
@@ -126,39 +162,33 @@ esp_err_t EnablePowerHold()
 
 esp_err_t ReleasePowerHold()
 {
-    gpio_hold_dis(STICKY_POWER_HOLD_PIN);
-    gpio_hold_dis(STICKY_POWER_LOCK_PIN);
+    esp_err_t err = PreparePowerLatchPins("Power latch release prepare:");
+    if (err != ESP_OK) {
+        return err;
+    }
 
     LogPowerLatchLevels("Power latch release start:");
 
-    // Sticky uses a 74AHC1G79 latch. Drive hold/data low, then pulse lock so
-    // the latch samples the released state before both firmware lines end low.
-    esp_err_t err = EnableOutputPin(STICKY_POWER_LOCK_PIN, 0);
+    // Seeed's reference demo treats both latch lines as level-held power-on
+    // controls. For shutdown, drive both low and keep them low instead of
+    // pulsing PWR_LOCK back high.
+    err = EnableOutputPin(STICKY_POWER_LOCK_PIN, 0);
     if (err != ESP_OK) {
         return err;
     }
     LogPowerLatchLevels("Power latch release lock-low:");
-    vTaskDelay(kPowerLatchReleaseSettleDelay);
+    vTaskDelay(kPowerLatchSettleDelay);
 
     err = EnableOutputPin(STICKY_POWER_HOLD_PIN, 0);
     if (err != ESP_OK) {
         return err;
     }
     LogPowerLatchLevels("Power latch release hold-low:");
-    vTaskDelay(kPowerLatchReleaseSettleDelay);
+    vTaskDelay(kPowerLatchSettleDelay);
 
-    err = EnableOutputPin(STICKY_POWER_LOCK_PIN, 1);
-    if (err != ESP_OK) {
-        return err;
-    }
-    LogPowerLatchLevels("Power latch release lock-pulse-high:");
-    vTaskDelay(kPowerLatchReleaseSettleDelay);
-
-    err = EnableOutputPin(STICKY_POWER_LOCK_PIN, 0);
-    if (err != ESP_OK) {
-        return err;
-    }
+    vTaskDelay(kPowerLatchShutdownHoldDelay);
     LogPowerLatchLevels("Power latch release complete:");
+
     ESP_LOGI(kTag, "Power hold released on GPIO%d/GPIO%d", STICKY_POWER_HOLD_PIN,
              STICKY_POWER_LOCK_PIN);
     return ESP_OK;

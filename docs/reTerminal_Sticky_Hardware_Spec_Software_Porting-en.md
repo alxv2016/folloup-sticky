@@ -89,8 +89,8 @@
 | Signal | GPIO | Direction (from controller perspective) | Purpose |
 |---|---:|---|---|
 | `PWR_BUTTON` | GPIO4 | Input | Power button input |
-| `PWR_HOLD` | GPIO45 | Output | Power latch hold |
-| `PWR_LOCK` | GPIO46 | Output/Input | Power latch control; confirm together with firmware timing |
+| `PWR_HOLD` | GPIO45 | Output | Power latch data input, U3 D |
+| `PWR_LOCK` | GPIO46 | Output/Input | Power latch clock input, U3 CP |
 | `BFG_INT` | GPIO7 | Input | Fuel gauge interrupt |
 | `BFG_I2C_SCL` | GPIO0 | Output/Open-drain | Fuel gauge I2C SCL; shares I2C1 bus with MISC_I2C |
 | `BFG_I2C_SDA` | GPIO1 | I/O/Open-drain | Fuel gauge I2C SDA |
@@ -147,8 +147,17 @@ Power latch logic:
 |---|---|
 | `74AHC1G79GW` | Single D flip-flop used for Power latch |
 | `PWR_BUTTON` | User button triggers power-on |
-| `PWR_HOLD` / `PWR_LOCK` | ESP32-S3 holds power after startup and releases it during software shutdown |
-| `VDD_3V3_ENn` | Related to 3.3 V power enable; GPIO requires verification |
+| `PWR_HOLD` / `PWR_LOCK` | ESP32-S3 controls U3 D/CP for software shutdown |
+| `VDD_3V3_ENn` | Related to 3.3 V power enable; not routed to a confirmed ESP32-S3 GPIO in this revision |
+
+Power-off notes:
+
+- `PWR_HOLD` is U3 D and `PWR_LOCK` is U3 CP.
+- Firmware must set `PWR_HOLD` to the desired latch state before pulsing
+  `PWR_LOCK` low-to-high.
+- No separate firmware-controlled `VDD_3V3_ENn` GPIO has been identified in the
+  current hierarchical sheet view, so hard power-off depends on the discrete
+  latch path rather than a direct buck-boost enable override.
 
 ## 6. RTC / Deep-sleep Wake-up Recommendations
 

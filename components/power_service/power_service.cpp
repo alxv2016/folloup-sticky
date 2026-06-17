@@ -1,9 +1,14 @@
 #include "power_service.h"
 
 #include "bq27220.h"
+#include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "esp_log.h"
+#include "esp_sleep.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "sticky_board.h"
+#include "sticky_board_config.h"
 
 namespace power_service {
 namespace {
@@ -12,6 +17,10 @@ constexpr const char* kTag = "PowerService";
 constexpr int kUsbSenseConnectedThresholdMv = 200;
 constexpr uint16_t kLowBatteryPercentThreshold = 10;
 constexpr uint16_t kBatteryStatusFullChargeMask = 1U << 9;
+constexpr TickType_t kSoftOffSettleDelay = pdMS_TO_TICKS(200);
+constexpr TickType_t kPowerButtonReleasePollDelay = pdMS_TO_TICKS(20);
+constexpr uint32_t kPowerButtonReleaseStableSamples = 10;
+constexpr uint32_t kPowerButtonReleaseMaxSamples = 250;
 
 i2c_master_bus_handle_t s_sensor_bus = nullptr;
 i2c_master_dev_handle_t s_battery_device = nullptr;
@@ -32,6 +41,22 @@ const char* ChargeStateName(ChargeState state)
         case ChargeState::kUnknown:
         default:
             return "unknown";
+    }
+}
+
+const char* WakeupCauseName(esp_sleep_wakeup_cause_t cause)
+{
+    switch (cause) {
+        case ESP_SLEEP_WAKEUP_EXT1:
+            return "ext1";
+        case ESP_SLEEP_WAKEUP_GPIO:
+            return "gpio";
+        case ESP_SLEEP_WAKEUP_TIMER:
+            return "timer";
+        case ESP_SLEEP_WAKEUP_UNDEFINED:
+            return "undefined";
+        default:
+            return "other";
     }
 }
 
@@ -124,6 +149,56 @@ void FillBatteryStatus(BatteryStatus* battery)
     }
 }
 
+esp_err_t EnterSoftOffSleep()
+{
+    ESP_LOGW(kTag, "Hardware latch release returned; entering soft-off deep sleep");
+
+    gpio_config_t power_button_config = {};
+    power_button_config.pin_bit_mask = 1ULL << STICKY_POWER_BUTTON_PIN;
+    power_button_config.mode = GPIO_MODE_INPUT;
+    power_button_config.pull_up_en = GPIO_PULLUP_ENABLE;
+    power_button_config.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    power_button_config.intr_type = GPIO_INTR_DISABLE;
+    esp_err_t err = gpio_config(&power_button_config);
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "Failed to configure POWER_OK wake GPIO: %s",
+                 esp_err_to_name(err));
+        return err;
+    }
+
+    uint32_t stable_high_samples = 0;
+    for (uint32_t sample = 0; sample < kPowerButtonReleaseMaxSamples; ++sample) {
+        const int level = gpio_get_level(STICKY_POWER_BUTTON_PIN);
+        if (level == 1) {
+            ++stable_high_samples;
+            if (stable_high_samples >= kPowerButtonReleaseStableSamples) {
+                break;
+            }
+        } else {
+            stable_high_samples = 0;
+        }
+        vTaskDelay(kPowerButtonReleasePollDelay);
+    }
+
+    if (stable_high_samples < kPowerButtonReleaseStableSamples) {
+        ESP_LOGW(kTag, "POWER_OK stayed active; soft-off sleep not armed");
+        return ESP_ERR_TIMEOUT;
+    }
+
+    err = esp_sleep_enable_ext1_wakeup_io(1ULL << STICKY_POWER_BUTTON_PIN,
+                                          ESP_EXT1_WAKEUP_ANY_LOW);
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "Failed to enable POWER_OK deep-sleep wake: %s",
+                 esp_err_to_name(err));
+        return err;
+    }
+
+    ESP_LOGW(kTag, "Soft-off armed: press POWER_OK to wake");
+    vTaskDelay(kSoftOffSettleDelay);
+    esp_deep_sleep_start();
+    return ESP_ERR_INVALID_STATE;
+}
+
 }  // namespace
 
 esp_err_t Init()
@@ -131,6 +206,11 @@ esp_err_t Init()
     if (s_initialized) {
         return ESP_OK;
     }
+
+    const esp_sleep_wakeup_cause_t wakeup_cause = esp_sleep_get_wakeup_cause();
+    ESP_LOGI(kTag, "Wakeup cause: %s (%d), ext1_status=0x%llX",
+             WakeupCauseName(wakeup_cause), static_cast<int>(wakeup_cause),
+             esp_sleep_get_ext1_wakeup_status());
 
     esp_err_t err = EnablePowerHold();
     if (err != ESP_OK) {
@@ -323,6 +403,7 @@ esp_err_t RequestShutdown()
         sticky_board::RestorePowerHold();
     } else {
         s_power_hold_enabled = false;
+        err = EnterSoftOffSleep();
     }
     return err;
 }
