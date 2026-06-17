@@ -21,6 +21,13 @@
 
 #define STICKY_BUZZER_PIN             GPIO_NUM_48
 
+#define STICKY_SD_POWER_EN_PIN        GPIO_NUM_10
+#define STICKY_SD_DETECT_PIN          GPIO_NUM_11
+#define STICKY_SD_CS_PIN              GPIO_NUM_8
+#define STICKY_SD_CLK_PIN             GPIO_NUM_13
+#define STICKY_SD_MOSI_PIN            GPIO_NUM_14
+#define STICKY_SD_MISO_PIN            GPIO_NUM_12
+
 #define STICKY_SENSOR_I2C_PORT       I2C_NUM_1
 #define STICKY_SENSOR_I2C_SCL_PIN    GPIO_NUM_0
 #define STICKY_SENSOR_I2C_SDA_PIN    GPIO_NUM_1

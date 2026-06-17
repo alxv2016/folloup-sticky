@@ -9,6 +9,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "power_service.h"
+#include "storage_service.h"
 
 namespace app_shell {
 namespace {
@@ -185,6 +186,15 @@ void InitBuzzerService()
     }
 }
 
+void InitStorageService()
+{
+    const esp_err_t err = storage_service::Init();
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "Storage service init failed: %s", esp_err_to_name(err));
+    }
+    storage_service::LogDebugStatus();
+}
+
 }  // namespace
 
 void Run()
@@ -194,6 +204,7 @@ void Run()
     ESP_ERROR_CHECK(power_service::Init());
     power_service::LogDebugStatus();
     InitBuzzerService();
+    InitStorageService();
     StartShutdownTask();
     InitButtonService();
 }

@@ -121,7 +121,7 @@
 | `PWR_IN_VOLT` | GPIO9 | Input/ADC | Input voltage detection |
 | `SD_DETECT` | GPIO11 | Input | SD card detection |
 | `SD_PWR_EN` | GPIO10 | Output | SD card power enable |
-| `SD_CMD/MOSI` | GPIO12 | Output | MicroSD SPI MOSI/CMD |
+| `SD_CMD/MOSI` | GPIO14 | Output | MicroSD SPI MOSI/CMD; shares pin with EP_SDI |
 | `SD_D3/CS` | GPIO8 | Output | MicroSD SPI CS/DAT3 |
 | `SD_CLK/SCK` | GPIO13 | Output | MicroSD SPI CLK; shares pin with EP_SCK |
 | `SD_D0/MISO` | GPIO12 | Input | MicroSD SPI MISO/DAT0 |
@@ -212,4 +212,4 @@ Software recommendations:
 | `MISC_I2C_SCL/SDA` GPIO | GPIO0 (SCL) / GPIO1 (SDA); shares I2C1 bus with BFG I2C |
 | Touch panel IC | GT911, I2C address `0x5D` / `0x14` auto-detect (determined by INT/RST reset sequence) |
 | Buzzer | GPIO48 driven by ESP-IDF LEDC PWM; current firmware uses 50 percent duty for maximum useful tone volume |
-| MicroSD bus mode | SD_D1 / SD_D2 are not connected (NC); SD card uses SPI mode only (CLK/CMD/D0/D3) |
+| MicroSD bus mode | SD_D1 / SD_D2 are not connected (NC); SD card uses SPI mode only (CLK/CMD/D0/D3). Page 5 confirms `SD_CMD/MOSI` on GPIO14 and `SD_D0/MISO` on GPIO12 |

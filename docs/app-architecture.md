@@ -23,6 +23,9 @@ The repository is currently a minimal ESP-IDF application scaffold with:
   Espressif's managed button component.
 - A `buzzer_service` component that owns PWM buzzer setup and app-facing sound
   patterns.
+- A ported `sd_card` component for SDSPI/FATFS MicroSD access.
+- A `storage_service` component that owns app-facing MicroSD mount and debug
+  status policy.
 
 The rest of the board peripherals have not been ported yet.
 
@@ -53,6 +56,14 @@ components/
     include/
       buzzer_service.h
     buzzer_service.cpp
+  storage_service/
+    include/
+      storage_service.h
+    storage_service.cpp
+  sd_card/
+    include/
+      sd_card.h
+    sd_card.cpp
   bq27220/
     include/
       bq27220.h
@@ -96,6 +107,7 @@ The current early startup sequence is:
 - Initializes `power_service`.
 - Logs one power/battery diagnostic snapshot.
 - Initializes `buzzer_service` and requests the startup pattern.
+- Initializes `storage_service` and logs one MicroSD diagnostic snapshot.
 - Initializes `button_service`.
 - Subscribes to button events and logs app-level power-button shutdown intent.
 - Runs a small shutdown task so button callbacks can request shutdown without
@@ -171,6 +183,12 @@ scope.
 - up button: `GPIO_NUM_5`
 - down button: `GPIO_NUM_6`
 - buzzer PWM output: `GPIO_NUM_48`
+- MicroSD power enable: `GPIO_NUM_10`
+- MicroSD card detect: `GPIO_NUM_11`
+- MicroSD chip select: `GPIO_NUM_8`
+- MicroSD SPI clock: `GPIO_NUM_13`
+- MicroSD SPI MOSI/CMD: `GPIO_NUM_14`
+- MicroSD SPI MISO/D0: `GPIO_NUM_12`
 - charger enable: `GPIO_NUM_39`, active low
 - charger state: `GPIO_NUM_40`
 - power-input ADC sense: `GPIO_NUM_9`
@@ -338,6 +356,58 @@ would be DC and would not produce the intended tone.
 AppShell may request patterns such as startup or shutdown, but it should not
 know about LEDC timer numbers, PWM duty values, or GPIO setup.
 
+### `components/sd_card`
+
+This is the SDSPI/FATFS MicroSD wrapper ported from:
+
+```text
+/Users/tieuvong/Desktop/folloup/sticky_port/Device_Peripheral_Demo/components/sd_card
+```
+
+The component is mostly board-agnostic. It receives an `SdCardPins` struct and
+mount point from its caller, then owns:
+
+- SD power-enable GPIO configuration
+- card-detect GPIO configuration
+- SDSPI bus/device setup
+- FATFS mount/unmount at the requested mount point
+- storage statistics
+- directory listing
+- small file read/write/append/truncate helpers
+
+Do not make this component depend on `board`; pass pins in from the service or
+board layer.
+
+### `components/storage_service`
+
+This is the app-facing storage layer. It composes `board` pin definitions with
+the `sd_card` wrapper.
+
+Current scope:
+
+- use the schematic page 5 MicroSD pin map
+- check `SD_DETECT`
+- mount `/sdcard` when a card is present
+- log mount status, total/free bytes, and a small root directory preview
+- write/read `/sdcard/sticky_sd_probe.txt` once as a bring-up probe
+- leave formatting disabled by default
+
+An absent SD card is not a fatal app startup error. Mount failures are logged
+and returned to AppShell as non-fatal service initialization failures.
+
+MicroSD shares SPI lines with the future e-paper path:
+
+- `SD_CLK/SCK` / `EP_SCK`: `GPIO13`
+- `SD_CMD/MOSI` / `EP_SDI`: `GPIO14`
+- `SD_D0/MISO`: `GPIO12`
+- SD card chip select: `GPIO8`
+- e-paper chip select: `GPIO15`
+
+For now, `storage_service` may let the SD wrapper initialize `SPI2_HOST` because
+no e-paper component is active in this repo. Once e-paper is ported, shared SPI
+bus ownership should move into the board layer so SD and e-paper add devices to
+one bus instead of independently deciding bus configuration.
+
 ## Hardware Notes
 
 - Main controller: `ESP32-S3R8`.
@@ -346,6 +416,9 @@ know about LEDC timer numbers, PWM duty values, or GPIO setup.
 - BQ27220 address: `0x55`.
 - PCF8563 address: `0x51`.
 - Buzzer PWM output: `GPIO48`.
+- MicroSD uses SDSPI mode only: `SD_CLK/SCK` on `GPIO13`, `SD_CMD/MOSI` on
+  `GPIO14`, `SD_D0/MISO` on `GPIO12`, `SD_D3/CS` on `GPIO8`, `SD_PWR_EN` on
+  `GPIO10`, and `SD_DETECT` on `GPIO11`. `SD_D1` and `SD_D2` are not connected.
 - Power latch uses `PWR_HOLD` on `GPIO45` as U3 D and `PWR_LOCK` on `GPIO46`
   as U3 CP. Firmware sets the desired D value and pulses CP to latch it.
 - `VDD_3V3_ENn` is not currently mapped to a firmware GPIO, so there is no
@@ -399,7 +472,10 @@ app / integration code
        -> pcf8563 -> ESP-IDF I2C driver
   -> button_service -> espressif/button
   -> buzzer_service -> board -> ESP-IDF LEDC driver
+  -> storage_service
+       -> board
+       -> sd_card -> ESP-IDF SDSPI/FATFS/SDMMC drivers
 ```
 
-Avoid making `bq27220` or `pcf8563` depend on `board`; that would make generic
-IC drivers board-specific.
+Avoid making `bq27220`, `pcf8563`, or `sd_card` depend on `board`; that would
+make generic drivers board-specific.
