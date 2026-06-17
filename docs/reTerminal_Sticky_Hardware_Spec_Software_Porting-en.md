@@ -148,16 +148,37 @@ Power latch logic:
 | `74AHC1G79GW` | Single D flip-flop used for Power latch |
 | `PWR_BUTTON` | User button triggers power-on |
 | `PWR_HOLD` / `PWR_LOCK` | ESP32-S3 controls U3 D/CP for software shutdown |
-| `VDD_3V3_ENn` | Related to 3.3 V power enable; not routed to a confirmed ESP32-S3 GPIO in this revision |
+| `VDD_3V3_ENn` | Related to 3.3 V power enable; not routed to a confirmed ESP32-S3 GPIO in this revision; page 5 ties it to `RTC_INTn` |
 
 Power-off notes:
 
-- `PWR_HOLD` is U3 D and `PWR_LOCK` is U3 CP.
-- Firmware must set `PWR_HOLD` to the desired latch state before pulsing
-  `PWR_LOCK` low-to-high.
+- `PWR_HOLD` is U3 D and `PWR_LOCK` is U3 CP. The latest Page 6 trace also
+  identifies `PWR_HOLD` as Q2's gate, with Q2 feeding `PWR_EN` through D5, and
+  U3 Q as the signal that drives Q7.
+- Earlier firmware experiments treated shutdown as either a U3 D/CP latch
+  release or a direct Q2 gate drive. The current hard-off attempt combines both:
+  pulse `PWR_LOCK` while `PWR_HOLD=0` to latch U3 Q low and release Q7, then
+  drive `PWR_HOLD=1` to try to turn Q2 off before falling back to soft-off.
+  Confirm Q2 channel type and pin assignment from the LP0404N3T5G datasheet and
+  KiCad netlist before treating this polarity as final.
 - No separate firmware-controlled `VDD_3V3_ENn` GPIO has been identified in the
   current hierarchical sheet view, so hard power-off depends on the discrete
-  latch path rather than a direct buck-boost enable override.
+  latch and RTC interrupt path rather than a direct buck-boost enable override.
+- Page 5 ties `VDD_3V3_ENn` to `RTC_INTn`, which is on the always-on RTC rail.
+  If `RTC_INTn` is asserted low, it may keep or re-enable the main 3.3 V rail.
+  Clear or disable RTC interrupt/alarm flags before revisiting true hard-off.
+- D2 is an ungated diode path from `VIN_5V` to `PWR_EN`, so USB-C input can keep
+  `PWR_EN` asserted independently of Q2/U3/Q7 state while USB is plugged in.
+- Current firmware has not achieved real power-off through GPIO45/GPIO46 on the
+  tested board. Tried sequences include a D-low/CP-pulse release, delayed release
+  after the physical power button goes high, GPIO45/GPIO46 high-Z after release,
+  holding both latch lines low, and the revised Q2-gate attempt of `PWR_HOLD`
+  high with `PWR_LOCK` low. In all tested cases the ESP32 remained powered.
+- The implemented fallback is soft-off: firmware attempts latch release, then
+  enters ESP32 deep sleep with `PWR_BUTTON` / GPIO4 as the active-low wake source.
+- Before revisiting true hard power-off, confirm the actual U3/Q7/PWR_EN/RTC_INTn
+  netlist or obtain a known-good vendor shutdown sequence for this board
+  revision.
 
 ## 6. RTC / Deep-sleep Wake-up Recommendations
 

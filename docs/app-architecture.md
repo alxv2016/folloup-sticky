@@ -165,18 +165,51 @@ Power-latch GPIOs are configured as input/output during bring-up so firmware can
 both drive `PWR_HOLD` / `PWR_LOCK` and log the observed pad levels for hardware
 debugging. Startup follows the Seeed peripheral demo behavior and drives both
 `PWR_HOLD` and `PWR_LOCK` high to keep the board alive after the physical power
-button is released. For shutdown testing, firmware drives both `PWR_HOLD` and
-`PWR_LOCK` low and keeps them low, which is the direct inverse of the vendor
-power-on hold behavior.
+button is released. For shutdown testing, the latest Page 6 trace treats
+`PWR_HOLD` as Q2's gate, Q2 as the path that feeds `PWR_EN`, and U3 Q as the
+signal that drives Q7. The current hard-off attempt first pulses `PWR_LOCK` with
+`PWR_HOLD` low to latch U3 Q low and release Q7, then drives `PWR_HOLD` high to
+try to turn Q2 off before falling back to soft-off if the rail remains powered.
 Before each latch sequence, the board layer disables ESP-IDF GPIO hold/deep-sleep
 hold behavior for GPIO45/GPIO46 and resets both pads before reconfiguring them.
 This is intentional because both pins are strapping-sensitive and power-latch
 debugging needs to rule out stale pad or sleep-hold state.
 
 The current schematic trace does not show `VDD_3V3_ENn` routed to an ESP32-S3
-GPIO. Treat hard power-off as latch-controlled through `PWR_HOLD` / `PWR_LOCK`
-only unless a future board revision or netlist proves a direct buck-boost enable
-GPIO exists.
+GPIO. Page 5 shows it tied at the top level to `RTC_INTn`, which is powered from
+the always-on RTC rail. Treat hard power-off as latch/RTC-controlled through
+`PWR_HOLD`, `PWR_LOCK`, and the RTC interrupt path unless a future board revision
+or netlist proves a direct buck-boost enable GPIO exists.
+
+Known real power-off issue:
+
+- True rail-cut power-off is not currently working through firmware.
+- Shutdown sequences tested so far include:
+  - `PWR_HOLD=0`, `PWR_LOCK` low-to-high pulse, then `PWR_LOCK=0`
+  - the same pulse sequence after waiting for physical `POWER_OK` release
+  - the same sequence followed by placing GPIO45/GPIO46 in input/no-pull mode
+  - the vendor-demo inverse behavior: drive both `PWR_HOLD=0` and `PWR_LOCK=0`
+    and keep both low
+  - the alternate Page 6 Q2-gate interpretation: keep `PWR_LOCK=0` and hold
+    `PWR_HOLD=1`
+- All tested sequences left firmware running afterward on this board.
+- The current hard-off experiment combines the two Page 6 mechanisms: pulse
+  `PWR_LOCK` while `PWR_HOLD=0`, then hold `PWR_HOLD=1`.
+- The board layer also disables GPIO hold/deep-sleep hold and resets the latch
+  pads before release attempts, so stale ESP-IDF GPIO hold state has been ruled
+  out as the likely cause.
+- The Page 6 trace shows an ungated D2 path from `VIN_5V` to `PWR_EN`, so USB
+  can independently keep `PWR_EN` asserted while plugged in. Battery-only testing
+  still stayed powered, so USB/VBUS backfeed is not the only hard-off blocker.
+- Page 5 ties `VDD_3V3_ENn` to `RTC_INTn`; if the always-on RTC interrupt is
+  asserted low, it may keep or re-enable the main 3.3 V rail. True hard-off work
+  should include clearing/disabling RTC interrupt flags before releasing the
+  latch.
+- Current product behavior is therefore soft-off: attempt the latch release,
+  then enter ESP32 deep sleep if the rail remains alive.
+- To resume true hard power-off work, we need a confirmed schematic netlist,
+  vendor firmware sequence, RTC shutdown sequence, or board-revision note
+  explaining how U3/Q7/PWR_EN/RTC_INTn are intended to collapse `VDD_3V3`.
 
 ### `components/power_service`
 
@@ -245,7 +278,8 @@ demo's patched vendored component.
 - Power latch uses `PWR_HOLD` on `GPIO45` as U3 D and `PWR_LOCK` on `GPIO46`
   as U3 CP. Firmware sets the desired D value and pulses CP to latch it.
 - `VDD_3V3_ENn` is not currently mapped to a firmware GPIO, so there is no
-  confirmed independent software kill pin for the 3.3 V buck-boost rail.
+  confirmed independent software kill pin for the 3.3 V buck-boost rail. Page 5
+  ties it to `RTC_INTn`, so the RTC interrupt state is part of the hard-off path.
 - Charger enable is active low on `GPIO39`.
 - Charger state is read from `GPIO40`; the reference demo treats low as
   charging.

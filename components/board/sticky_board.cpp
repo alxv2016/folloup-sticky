@@ -169,9 +169,9 @@ esp_err_t ReleasePowerHold()
 
     LogPowerLatchLevels("Power latch release start:");
 
-    // Seeed's reference demo treats both latch lines as level-held power-on
-    // controls. For shutdown, drive both low and keep them low instead of
-    // pulsing PWR_LOCK back high.
+    // Page 6 tracing shows U3 Q driving Q7, and Q7 can pull on the PWR_HOLD
+    // node that also gates Q2. First latch U3 Q low while PWR_HOLD is low so
+    // Q7 releases, then drive PWR_HOLD high to try to turn Q2 off.
     err = EnableOutputPin(STICKY_POWER_LOCK_PIN, 0);
     if (err != ESP_OK) {
         return err;
@@ -184,6 +184,27 @@ esp_err_t ReleasePowerHold()
         return err;
     }
     LogPowerLatchLevels("Power latch release hold-low:");
+    vTaskDelay(kPowerLatchSettleDelay);
+
+    err = EnableOutputPin(STICKY_POWER_LOCK_PIN, 1);
+    if (err != ESP_OK) {
+        return err;
+    }
+    LogPowerLatchLevels("Power latch release lock-pulse-high:");
+    vTaskDelay(kPowerLatchSettleDelay);
+
+    err = EnableOutputPin(STICKY_POWER_LOCK_PIN, 0);
+    if (err != ESP_OK) {
+        return err;
+    }
+    LogPowerLatchLevels("Power latch release lock-low-after-pulse:");
+    vTaskDelay(kPowerLatchSettleDelay);
+
+    err = EnableOutputPin(STICKY_POWER_HOLD_PIN, 1);
+    if (err != ESP_OK) {
+        return err;
+    }
+    LogPowerLatchLevels("Power latch release hold-high:");
     vTaskDelay(kPowerLatchSettleDelay);
 
     vTaskDelay(kPowerLatchShutdownHoldDelay);
