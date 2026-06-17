@@ -13,5 +13,6 @@
     "--query-driver=**",
     "--compile-commands-dir=/Users/tieuvong/Development/folloup-sticky/build"
   ],
+  "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
   "idf.flashType": "UART"
 }
