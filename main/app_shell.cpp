@@ -87,6 +87,18 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
     switch (event.event) {
         case button_service::ButtonEvent::kSingleClick:
             PlayBuzzerPattern(buzzer_service::Pattern::kClick, "click");
+            if (event.button == button_service::ButtonId::kUp ||
+                event.button == button_service::ButtonId::kDown) {
+                const display_service::DemoSelection selection =
+                    event.button == button_service::ButtonId::kUp
+                        ? display_service::DemoSelection::kTop
+                        : display_service::DemoSelection::kBottom;
+                const esp_err_t err = display_service::SelectDemoSelection(selection);
+                if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+                    ESP_LOGW(kTag, "Display demo selection failed: %s",
+                             esp_err_to_name(err));
+                }
+            }
             break;
         case button_service::ButtonEvent::kDoubleClick:
             PlayBuzzerPattern(buzzer_service::Pattern::kDoubleClick, "double-click");

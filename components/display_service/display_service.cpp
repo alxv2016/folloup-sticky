@@ -7,6 +7,9 @@
 #include "epaper_panel.h"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/task.h"
 #include "sticky_board.h"
 #include "sticky_board_config.h"
 
@@ -16,13 +19,28 @@ namespace {
 constexpr const char* kTag = "DisplayService";
 constexpr int kPortraitWidth = STICKY_EPD_HEIGHT;
 constexpr int kPortraitHeight = STICKY_EPD_WIDTH;
-constexpr int kTextScale = 8;
+constexpr int kTextScale = 5;
 constexpr int kGlyphWidth = 5;
 constexpr int kGlyphHeight = 7;
 constexpr int kGlyphAdvance = 6;
-constexpr int kLineGap = 16;
+constexpr int kLineGap = 12;
+constexpr int kDemoCardWidth = 360;
+constexpr int kDemoCardHeight = 220;
+constexpr int kDemoCardGap = 64;
+constexpr int kDemoCardX = (kPortraitWidth - kDemoCardWidth) / 2;
+constexpr int kDemoCardsHeight = kDemoCardHeight * 2 + kDemoCardGap;
+constexpr int kDemoCardTopY = (kPortraitHeight - kDemoCardsHeight) / 2;
+constexpr int kDemoCardBottomY = kDemoCardTopY + kDemoCardHeight + kDemoCardGap;
+constexpr uint32_t kDisplayTaskStackWords = 4096;
+constexpr UBaseType_t kDisplayTaskPriority = 4;
+
+struct DisplayCommand {
+    DemoSelection selection;
+};
 
 bool s_initialized = false;
+QueueHandle_t s_command_queue = nullptr;
+TaskHandle_t s_display_task = nullptr;
 
 EpaperPanelConfig BuildPanelConfig()
 {
@@ -197,7 +215,7 @@ void FillPortraitRect(uint8_t* framebuffer, int x, int y, int width, int height,
     }
 }
 
-void DrawText(uint8_t* framebuffer, int x, int y, std::string_view text)
+void DrawText(uint8_t* framebuffer, int x, int y, std::string_view text, bool black)
 {
     int cursor_x = x;
     for (const char c : text) {
@@ -211,7 +229,7 @@ void DrawText(uint8_t* framebuffer, int x, int y, std::string_view text)
                                      y + row * kTextScale,
                                      kTextScale,
                                      kTextScale,
-                                     true);
+                                     black);
                 }
             }
         }
@@ -219,19 +237,42 @@ void DrawText(uint8_t* framebuffer, int x, int y, std::string_view text)
     }
 }
 
-void DrawHelloWorld(uint8_t* framebuffer)
+void DrawHelloWorldInRect(uint8_t* framebuffer,
+                          int x,
+                          int y,
+                          int width,
+                          int height,
+                          bool selected)
 {
     constexpr std::string_view kHello = "Hello";
     constexpr std::string_view kWorld = "world";
     const int text_height = kGlyphHeight * kTextScale;
     const int block_height = text_height * 2 + kLineGap;
-    const int hello_x = (kPortraitWidth - TextWidth(kHello)) / 2;
-    const int world_x = (kPortraitWidth - TextWidth(kWorld)) / 2;
-    const int hello_y = (kPortraitHeight - block_height) / 2;
+    const int hello_x = x + (width - TextWidth(kHello)) / 2;
+    const int world_x = x + (width - TextWidth(kWorld)) / 2;
+    const int hello_y = y + (height - block_height) / 2;
     const int world_y = hello_y + text_height + kLineGap;
+    const bool text_black = !selected;
 
-    DrawText(framebuffer, hello_x, hello_y, kHello);
-    DrawText(framebuffer, world_x, world_y, kWorld);
+    FillPortraitRect(framebuffer, x, y, width, height, selected);
+    DrawText(framebuffer, hello_x, hello_y, kHello, text_black);
+    DrawText(framebuffer, world_x, world_y, kWorld, text_black);
+}
+
+void DrawDemoFrame(uint8_t* framebuffer, DemoSelection selection)
+{
+    DrawHelloWorldInRect(framebuffer,
+                         kDemoCardX,
+                         kDemoCardTopY,
+                         kDemoCardWidth,
+                         kDemoCardHeight,
+                         selection == DemoSelection::kTop);
+    DrawHelloWorldInRect(framebuffer,
+                         kDemoCardX,
+                         kDemoCardBottomY,
+                         kDemoCardWidth,
+                         kDemoCardHeight,
+                         selection == DemoSelection::kBottom);
 }
 
 void LogMetrics(const EpaperPanelMetrics& metrics)
@@ -243,6 +284,66 @@ void LogMetrics(const EpaperPanelMetrics& metrics)
              static_cast<long long>(metrics.reset_sequence_us),
              static_cast<long long>(metrics.trigger_us),
              static_cast<long long>(metrics.init_ready_us));
+}
+
+esp_err_t ApplyDemoSelection(DemoSelection selection, bool full_refresh)
+{
+    EpaperPanel& panel = Panel();
+    panel.Clear(true);
+    DrawDemoFrame(panel.framebuffer(), selection);
+
+    const esp_err_t err = full_refresh ? panel.RefreshFullBase()
+                                       : panel.RefreshPartialFullScreen();
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    LogMetrics(panel.metrics());
+    return ESP_OK;
+}
+
+void DisplayTask(void*)
+{
+    DisplayCommand command{DemoSelection::kTop};
+    while (true) {
+        if (xQueueReceive(s_command_queue, &command, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+
+        ESP_LOGI(kTag, "Demo selection requested: %s",
+                 command.selection == DemoSelection::kTop ? "top" : "bottom");
+        const esp_err_t err = ApplyDemoSelection(command.selection, false);
+        if (err != ESP_OK) {
+            ESP_LOGW(kTag, "Demo partial refresh failed: %s", esp_err_to_name(err));
+        }
+    }
+}
+
+esp_err_t StartDisplayTask()
+{
+    if (s_command_queue == nullptr) {
+        s_command_queue = xQueueCreate(1, sizeof(DisplayCommand));
+        if (s_command_queue == nullptr) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
+    if (s_display_task != nullptr) {
+        return ESP_OK;
+    }
+
+    const BaseType_t created = xTaskCreate(DisplayTask,
+                                          "display_service",
+                                          kDisplayTaskStackWords,
+                                          nullptr,
+                                          kDisplayTaskPriority,
+                                          &s_display_task);
+    if (created != pdPASS) {
+        s_display_task = nullptr;
+        return ESP_ERR_NO_MEM;
+    }
+
+    return ESP_OK;
 }
 
 }  // namespace
@@ -258,19 +359,29 @@ esp_err_t Init()
 
     EpaperPanel& panel = Panel();
     ESP_RETURN_ON_ERROR(panel.Initialize(), kTag, "panel initialize failed");
-    panel.Clear(true);
-    DrawHelloWorld(panel.framebuffer());
-    ESP_RETURN_ON_ERROR(panel.RefreshFullBase(), kTag, "panel base refresh failed");
-    LogMetrics(panel.metrics());
+    ESP_RETURN_ON_ERROR(ApplyDemoSelection(DemoSelection::kTop, true),
+                        kTag,
+                        "panel base refresh failed");
+    ESP_RETURN_ON_ERROR(StartDisplayTask(), kTag, "display task init failed");
 
     s_initialized = true;
-    ESP_LOGI(kTag, "Display initialized with portrait Hello world screen");
+    ESP_LOGI(kTag, "Display initialized with portrait partial refresh demo");
     return ESP_OK;
 }
 
 bool IsInitialized()
 {
     return s_initialized;
+}
+
+esp_err_t SelectDemoSelection(DemoSelection selection)
+{
+    if (!s_initialized || s_command_queue == nullptr) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    const DisplayCommand command{selection};
+    return xQueueOverwrite(s_command_queue, &command) == pdPASS ? ESP_OK : ESP_FAIL;
 }
 
 }  // namespace display_service

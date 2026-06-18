@@ -28,7 +28,7 @@ The repository is currently a minimal ESP-IDF application scaffold with:
   status policy.
 - A ported mono SSD1677 e-paper panel driver.
 - A `display_service` component that owns app-facing e-paper bring-up and the
-  first portrait "Hello world" screen.
+  portrait "Hello world" partial-refresh demo.
 
 The rest of the board peripherals have not been ported yet.
 
@@ -119,10 +119,11 @@ The current early startup sequence is:
 - Initializes `power_service`.
 - Logs one power/battery diagnostic snapshot.
 - Initializes `buzzer_service` and requests the startup pattern.
-- Initializes `display_service` and draws the initial e-paper screen.
+- Initializes `display_service` and draws the initial e-paper demo screen.
 - Initializes `storage_service` and logs one MicroSD diagnostic snapshot.
 - Initializes `button_service`.
-- Subscribes to button events and logs app-level power-button shutdown intent.
+- Subscribes to button events and routes app-level display demo and power-button
+  shutdown intents.
 - Runs a small shutdown task so button callbacks can request shutdown without
   directly executing the power-latch release sequence.
 
@@ -131,12 +132,19 @@ This avoids releasing the latch while the physical power button is still being
 held. The shutdown task also waits briefly after release before calling
 `power_service::RequestShutdown()` so the analog button/Q2 bootstrap path has
 time to stop feeding `PWR_EN`. The button callback only notifies the AppShell
-shutdown task; the task calls the power service so latch-release timing does not
-run inside the button callback.
+shutdown task for shutdown requests; the task calls the power service so
+latch-release timing does not run inside the button callback.
 
 Driver-specific wiring should stay out of `main/`; app startup should call
 service-level APIs instead. Add product-specific sequencing in `app_shell`, not
 inside reusable components.
+
+UP/DOWN single-click button events are routed by `app_shell` into
+`display_service` as demo selection intents. `display_service` owns the two-card
+portrait demo framebuffer, draws the initial top-selected state with a full base
+refresh, then uses whole-screen partial refreshes from its own worker task to
+move the black-background/white-text selection between the top and bottom
+"Hello world" cards.
 
 ### `components/bq27220`
 
@@ -488,8 +496,12 @@ Current scope:
 - initialize the shared SPI bus through `sticky_board::EnsureSharedSpiBus()`
 - enable e-paper panel power through `sticky_board::EnableEpaperPower()`
 - initialize the raw SSD1677 panel driver
-- draw a portrait "Hello world" screen for bring-up
+- draw the two-card portrait "Hello world" partial-refresh demo
 - perform the first `RefreshFullBase()` and log panel metrics
+- own the e-paper demo worker task so UP/DOWN button callbacks enqueue display
+  selection requests instead of blocking on panel refresh
+- redraw the demo framebuffer and call `RefreshPartialFullScreen()` for
+  selection changes
 
 `display_service` owns app-facing display policy. Driver-specific wiring and
 SSD1677 commands must stay out of `main`. Raw board pin ownership stays in
