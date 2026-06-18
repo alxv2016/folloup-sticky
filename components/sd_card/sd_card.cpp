@@ -165,21 +165,24 @@ esp_err_t SdCard::Mount(bool format_if_mount_failed, size_t allocation_unit_size
     host.slot = pins_.host_id;
     host.max_freq_khz = SDMMC_FREQ_DEFAULT;
 
-    spi_bus_config_t bus_config = {};
-    bus_config.mosi_io_num = pins_.mosi;
-    bus_config.miso_io_num = pins_.miso;
-    bus_config.sclk_io_num = pins_.clk;
-    bus_config.quadwp_io_num = -1;
-    bus_config.quadhd_io_num = -1;
-    bus_config.max_transfer_sz = kMaxTransferSize;
+    if (!pins_.external_spi_bus) {
+        spi_bus_config_t bus_config = {};
+        bus_config.mosi_io_num = pins_.mosi;
+        bus_config.miso_io_num = pins_.miso;
+        bus_config.sclk_io_num = pins_.clk;
+        bus_config.quadwp_io_num = -1;
+        bus_config.quadhd_io_num = -1;
+        bus_config.max_transfer_sz = kMaxTransferSize;
 
-    esp_err_t err = spi_bus_initialize(pins_.host_id, &bus_config, SDSPI_DEFAULT_DMA);
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        if (log_failures) {
-            ESP_LOGW(kTag, "failed to initialize SPI bus for SD card: %s", esp_err_to_name(err));
+        esp_err_t err = spi_bus_initialize(pins_.host_id, &bus_config, SDSPI_DEFAULT_DMA);
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+            if (log_failures) {
+                ESP_LOGW(kTag, "failed to initialize SPI bus for SD card: %s",
+                         esp_err_to_name(err));
+            }
+            SetPowerEnabled(false);
+            return err;
         }
-        SetPowerEnabled(false);
-        return err;
     }
 
     sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
@@ -188,7 +191,8 @@ esp_err_t SdCard::Mount(bool format_if_mount_failed, size_t allocation_unit_size
     slot_config.gpio_cd = pins_.card_detect;
 
     ScopedLogSilencer silence_sdmmc_logs(kSdmmcCommonTag, kVfsFatSdmmcTag);
-    err = esp_vfs_fat_sdspi_mount(mount_point_.c_str(), &host, &slot_config, &mount_config, &card_);
+    esp_err_t err = esp_vfs_fat_sdspi_mount(mount_point_.c_str(), &host, &slot_config,
+                                            &mount_config, &card_);
     if (err != ESP_OK) {
         if (log_failures) {
             ESP_LOGW(kTag, "failed to mount SD card at %s: %s", mount_point_.c_str(),

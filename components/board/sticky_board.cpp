@@ -6,6 +6,7 @@
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_log.h"
+#include "driver/spi_master.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -24,6 +25,7 @@ adc_cali_handle_t s_power_adc_cali_handle = nullptr;
 adc_unit_t s_power_adc_unit = ADC_UNIT_1;
 adc_channel_t s_power_adc_channel = ADC_CHANNEL_0;
 bool s_power_adc_calibrated = false;
+bool s_shared_spi_bus_initialized = false;
 
 esp_err_t EnableOutputPin(gpio_num_t pin, int level)
 {
@@ -373,6 +375,54 @@ esp_err_t ReadBq27220InterruptLevel(int* level)
     }
 
     *level = gpio_get_level(STICKY_BQ27220_INT_PIN);
+    return ESP_OK;
+}
+
+esp_err_t EnsureSharedSpiBus()
+{
+    if (s_shared_spi_bus_initialized) {
+        return ESP_OK;
+    }
+
+    spi_bus_config_t bus_config = {};
+    bus_config.mosi_io_num = STICKY_SHARED_SPI_MOSI_PIN;
+    bus_config.miso_io_num = STICKY_SHARED_SPI_MISO_PIN;
+    bus_config.sclk_io_num = STICKY_SHARED_SPI_CLK_PIN;
+    bus_config.quadwp_io_num = -1;
+    bus_config.quadhd_io_num = -1;
+    bus_config.max_transfer_sz = STICKY_SHARED_SPI_MAX_TRANSFER_SIZE;
+
+    esp_err_t err = spi_bus_initialize(STICKY_SHARED_SPI_HOST, &bus_config, SPI_DMA_CH_AUTO);
+    if (err == ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Shared SPI bus already initialized on host %d",
+                 static_cast<int>(STICKY_SHARED_SPI_HOST));
+        s_shared_spi_bus_initialized = true;
+        return ESP_OK;
+    }
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "Shared SPI bus init failed on host %d: %s",
+                 static_cast<int>(STICKY_SHARED_SPI_HOST), esp_err_to_name(err));
+        return err;
+    }
+
+    s_shared_spi_bus_initialized = true;
+    ESP_LOGI(kTag, "Shared SPI bus initialized: host=%d sck=GPIO%d mosi=GPIO%d miso=GPIO%d",
+             static_cast<int>(STICKY_SHARED_SPI_HOST),
+             static_cast<int>(STICKY_SHARED_SPI_CLK_PIN),
+             static_cast<int>(STICKY_SHARED_SPI_MOSI_PIN),
+             static_cast<int>(STICKY_SHARED_SPI_MISO_PIN));
+    return ESP_OK;
+}
+
+esp_err_t EnableEpaperPower()
+{
+    esp_err_t err = EnableOutputPin(STICKY_EPD_POWER_EN_PIN, 1);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(STICKY_EPD_POWER_DELAY_MS));
+    ESP_LOGI(kTag, "E-paper power enabled on GPIO%d", STICKY_EPD_POWER_EN_PIN);
     return ESP_OK;
 }
 

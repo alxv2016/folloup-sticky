@@ -23,6 +23,7 @@ struct SdCardPins {
     gpio_num_t mosi = GPIO_NUM_NC;
     gpio_num_t miso = GPIO_NUM_NC;
     gpio_num_t cs = GPIO_NUM_NC;
+    bool external_spi_bus = false;
     gpio_num_t power_enable = GPIO_NUM_NC;
     int power_active_level = 1;
     gpio_num_t card_detect = GPIO_NUM_NC;

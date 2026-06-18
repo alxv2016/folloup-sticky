@@ -2,6 +2,7 @@
 
 #include "buzzer_service.h"
 #include "button_service.h"
+#include "display_service.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
@@ -186,6 +187,14 @@ void InitBuzzerService()
     }
 }
 
+void InitDisplayService()
+{
+    const esp_err_t err = display_service::Init();
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "Display service init failed: %s", esp_err_to_name(err));
+    }
+}
+
 void InitStorageService()
 {
     const esp_err_t err = storage_service::Init();
@@ -204,6 +213,7 @@ void Run()
     ESP_ERROR_CHECK(power_service::Init());
     power_service::LogDebugStatus();
     InitBuzzerService();
+    InitDisplayService();
     InitStorageService();
     StartShutdownTask();
     InitButtonService();

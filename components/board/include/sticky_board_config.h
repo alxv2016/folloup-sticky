@@ -5,6 +5,7 @@
 
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
+#include "driver/spi_master.h"
 
 // reTerminal Sticky power and BQ27220 fuel-gauge wiring.
 
@@ -27,6 +28,27 @@
 #define STICKY_SD_CLK_PIN             GPIO_NUM_13
 #define STICKY_SD_MOSI_PIN            GPIO_NUM_14
 #define STICKY_SD_MISO_PIN            GPIO_NUM_12
+
+#define STICKY_EPD_SPI_HOST           SPI2_HOST
+#define STICKY_EPD_POWER_EN_PIN       GPIO_NUM_47
+#define STICKY_EPD_BUSY_PIN           GPIO_NUM_18
+#define STICKY_EPD_RST_PIN            GPIO_NUM_17
+#define STICKY_EPD_DC_PIN             GPIO_NUM_16
+#define STICKY_EPD_CS_PIN             GPIO_NUM_15
+#define STICKY_EPD_MOSI_PIN           GPIO_NUM_14
+#define STICKY_EPD_MISO_PIN           GPIO_NUM_12
+#define STICKY_EPD_SCK_PIN            GPIO_NUM_13
+
+#define STICKY_SHARED_SPI_HOST        STICKY_EPD_SPI_HOST
+#define STICKY_SHARED_SPI_CLK_PIN     STICKY_EPD_SCK_PIN
+#define STICKY_SHARED_SPI_MOSI_PIN    STICKY_EPD_MOSI_PIN
+#define STICKY_SHARED_SPI_MISO_PIN    STICKY_EPD_MISO_PIN
+#define STICKY_SHARED_SPI_MAX_TRANSFER_SIZE (48 * 1024)
+
+#define STICKY_EPD_WIDTH              800
+#define STICKY_EPD_HEIGHT             480
+#define STICKY_EPD_BUFFER_LEN         ((STICKY_EPD_WIDTH * STICKY_EPD_HEIGHT) / 8)
+#define STICKY_EPD_POWER_DELAY_MS     100
 
 #define STICKY_SENSOR_I2C_PORT       I2C_NUM_1
 #define STICKY_SENSOR_I2C_SCL_PIN    GPIO_NUM_0

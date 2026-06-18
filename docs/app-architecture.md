@@ -26,6 +26,9 @@ The repository is currently a minimal ESP-IDF application scaffold with:
 - A ported `sd_card` component for SDSPI/FATFS MicroSD access.
 - A `storage_service` component that owns app-facing MicroSD mount and debug
   status policy.
+- A ported mono SSD1677 e-paper panel driver.
+- A `display_service` component that owns app-facing e-paper bring-up and the
+  first portrait "Hello world" screen.
 
 The rest of the board peripherals have not been ported yet.
 
@@ -60,10 +63,19 @@ components/
     include/
       storage_service.h
     storage_service.cpp
+  display_service/
+    include/
+      display_service.h
+    display_service.cpp
   sd_card/
     include/
       sd_card.h
     sd_card.cpp
+  epaper_panel/
+    include/
+      epaper_panel.h
+    epaper_panel.cpp
+    ssd1677_driver.cpp
   bq27220/
     include/
       bq27220.h
@@ -107,6 +119,7 @@ The current early startup sequence is:
 - Initializes `power_service`.
 - Logs one power/battery diagnostic snapshot.
 - Initializes `buzzer_service` and requests the startup pattern.
+- Initializes `display_service` and draws the initial e-paper screen.
 - Initializes `storage_service` and logs one MicroSD diagnostic snapshot.
 - Initializes `button_service`.
 - Subscribes to button events and logs app-level power-button shutdown intent.
@@ -189,6 +202,15 @@ scope.
 - MicroSD SPI clock: `GPIO_NUM_13`
 - MicroSD SPI MOSI/CMD: `GPIO_NUM_14`
 - MicroSD SPI MISO/D0: `GPIO_NUM_12`
+- shared SPI host: `SPI2_HOST`
+- shared SPI clock: `GPIO_NUM_13`
+- shared SPI MOSI: `GPIO_NUM_14`
+- shared SPI MISO: `GPIO_NUM_12`
+- e-paper power enable: `GPIO_NUM_47`
+- e-paper busy: `GPIO_NUM_18`
+- e-paper reset: `GPIO_NUM_17`
+- e-paper data/command: `GPIO_NUM_16`
+- e-paper chip select: `GPIO_NUM_15`
 - charger enable: `GPIO_NUM_39`, active low
 - charger state: `GPIO_NUM_40`
 - power-input ADC sense: `GPIO_NUM_9`
@@ -211,6 +233,8 @@ scope.
 - `sticky_board::ReadPowerInputSample(...)`
 - `sticky_board::ConfigureBq27220InterruptPin()`
 - `sticky_board::ReadBq27220InterruptLevel(...)`
+- `sticky_board::EnsureSharedSpiBus()`
+- `sticky_board::EnableEpaperPower()`
 - `sticky_board::CreateSensorI2cBus(...)`
 - `sticky_board::AddBq27220Device(...)`
 - `sticky_board::AddPcf8563Device(...)`
@@ -369,14 +393,17 @@ mount point from its caller, then owns:
 
 - SD power-enable GPIO configuration
 - card-detect GPIO configuration
-- SDSPI bus/device setup
+- SDSPI bus/device setup, unless the caller marks the SPI bus as externally
+  owned
 - FATFS mount/unmount at the requested mount point
 - storage statistics
 - directory listing
 - small file read/write/append/truncate helpers
 
 Do not make this component depend on `board`; pass pins in from the service or
-board layer.
+board layer. On Sticky, `storage_service` asks the board layer to initialize the
+shared SPI bus first and passes `external_spi_bus=true`, so the SD wrapper only
+adds its SDSPI device to the existing bus.
 
 ### `components/storage_service`
 
@@ -395,7 +422,7 @@ Current scope:
 An absent SD card is not a fatal app startup error. Mount failures are logged
 and returned to AppShell as non-fatal service initialization failures.
 
-MicroSD shares SPI lines with the future e-paper path:
+MicroSD shares SPI lines with the e-paper path:
 
 - `SD_CLK/SCK` / `EP_SCK`: `GPIO13`
 - `SD_CMD/MOSI` / `EP_SDI`: `GPIO14`
@@ -403,10 +430,67 @@ MicroSD shares SPI lines with the future e-paper path:
 - SD card chip select: `GPIO8`
 - e-paper chip select: `GPIO15`
 
-For now, `storage_service` may let the SD wrapper initialize `SPI2_HOST` because
-no e-paper component is active in this repo. Once e-paper is ported, shared SPI
-bus ownership should move into the board layer so SD and e-paper add devices to
-one bus instead of independently deciding bus configuration.
+`storage_service` must call `sticky_board::EnsureSharedSpiBus()` before mounting
+the SD card. Shared SPI bus ownership belongs in `board`, not in `sd_card`,
+`epaper_panel`, `storage_service`, or `display_service`.
+
+### `components/epaper_panel`
+
+This is the raw mono SSD1677 e-paper panel driver ported from:
+
+```text
+/Users/tieuvong/Development/followup/components/board_drivers/epaper_panel
+```
+
+The driver should stay board-agnostic. It receives an `EpaperPanelConfig` from
+its caller and owns:
+
+- e-paper reset, busy, data/command, and chip-select GPIO control
+- the SSD1677 command/data write path
+- the mono framebuffer
+- the retained previous framebuffer used by partial refresh
+- full base refresh
+- whole-screen mono partial refresh
+- panel sleep
+- refresh timing metrics
+
+Current scope is intentionally mono-only. Do not port gray4 support unless a
+future product requirement explicitly asks for it.
+
+The first display update must use `RefreshFullBase()` so the SSD1677 current and
+previous RAM planes are seeded. Later full-screen mono updates may use
+`RefreshPartialFullScreen()`. If partial refresh is requested before a base
+image exists, after sleep/timeout, or after the partial-refresh limit, the raw
+driver falls back to `RefreshFullBase()`.
+
+The driver can initialize its own SPI bus for standalone reuse, but Sticky code
+must pass `external_spi_bus=true` after `sticky_board::EnsureSharedSpiBus()` has
+initialized the shared `SPI2_HOST` bus.
+
+Not yet ported from Folloup:
+
+- region partial refresh
+- wake API and display wake policy
+- fast refresh/base path
+- retained view dirty-region policy
+- logical-to-raw display view abstraction
+
+### `components/display_service`
+
+This is the app-facing display layer. It composes `board` pin definitions and
+power helpers with the `epaper_panel` raw driver.
+
+Current scope:
+
+- initialize the shared SPI bus through `sticky_board::EnsureSharedSpiBus()`
+- enable e-paper panel power through `sticky_board::EnableEpaperPower()`
+- initialize the raw SSD1677 panel driver
+- draw a portrait "Hello world" screen for bring-up
+- perform the first `RefreshFullBase()` and log panel metrics
+
+`display_service` owns app-facing display policy. Driver-specific wiring and
+SSD1677 commands must stay out of `main`. Raw board pin ownership stays in
+`board`, and low-level SSD1677 command sequencing stays in `epaper_panel`.
 
 ## Hardware Notes
 
@@ -419,6 +503,13 @@ one bus instead of independently deciding bus configuration.
 - MicroSD uses SDSPI mode only: `SD_CLK/SCK` on `GPIO13`, `SD_CMD/MOSI` on
   `GPIO14`, `SD_D0/MISO` on `GPIO12`, `SD_D3/CS` on `GPIO8`, `SD_PWR_EN` on
   `GPIO10`, and `SD_DETECT` on `GPIO11`. `SD_D1` and `SD_D2` are not connected.
+- The SSD1677 e-paper panel shares `SPI2_HOST` with MicroSD: `EP_SCK` on
+  `GPIO13`, `EP_SDI/MOSI` on `GPIO14`, `EP_SDO/MISO` on `GPIO12`, `EP_CS` on
+  `GPIO15`, `EP_DC` on `GPIO16`, `EP_RST` on `GPIO17`, `EP_BUSY` on `GPIO18`,
+  and `EP_PWR_EN` on `GPIO47`.
+- The e-paper panel is 800 x 480 raw landscape pixels. The bring-up
+  `display_service` draws portrait content by mapping logical 480 x 800
+  coordinates into the raw SSD1677 framebuffer.
 - Power latch uses `PWR_HOLD` on `GPIO45` as U3 D and `PWR_LOCK` on `GPIO46`
   as U3 CP. Firmware sets the desired D value and pulses CP to latch it.
 - `VDD_3V3_ENn` is not currently mapped to a firmware GPIO, so there is no
@@ -475,7 +566,10 @@ app / integration code
   -> storage_service
        -> board
        -> sd_card -> ESP-IDF SDSPI/FATFS/SDMMC drivers
+  -> display_service
+       -> board
+       -> epaper_panel -> ESP-IDF SPI/GPIO drivers
 ```
 
-Avoid making `bq27220`, `pcf8563`, or `sd_card` depend on `board`; that would
-make generic drivers board-specific.
+Avoid making `bq27220`, `pcf8563`, `sd_card`, or `epaper_panel` depend on
+`board`; that would make generic drivers board-specific.

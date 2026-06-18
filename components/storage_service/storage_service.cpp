@@ -3,9 +3,9 @@
 #include <cstring>
 #include <vector>
 
-#include "driver/spi_master.h"
 #include "esp_log.h"
 #include "sd_card.h"
+#include "sticky_board.h"
 #include "sticky_board_config.h"
 
 namespace storage_service {
@@ -25,11 +25,12 @@ esp_err_t s_mount_result = ESP_ERR_INVALID_STATE;
 SdCardPins BuildPins()
 {
     SdCardPins pins = {};
-    pins.host_id = SPI2_HOST;
-    pins.clk = STICKY_SD_CLK_PIN;
-    pins.mosi = STICKY_SD_MOSI_PIN;
-    pins.miso = STICKY_SD_MISO_PIN;
+    pins.host_id = STICKY_SHARED_SPI_HOST;
+    pins.clk = STICKY_SHARED_SPI_CLK_PIN;
+    pins.mosi = STICKY_SHARED_SPI_MOSI_PIN;
+    pins.miso = STICKY_SHARED_SPI_MISO_PIN;
     pins.cs = STICKY_SD_CS_PIN;
+    pins.external_spi_bus = true;
     pins.power_enable = STICKY_SD_POWER_EN_PIN;
     pins.power_active_level = 1;
     pins.card_detect = STICKY_SD_DETECT_PIN;
@@ -96,6 +97,13 @@ esp_err_t Init()
         s_initialized = true;
         s_mount_result = ESP_ERR_NOT_FOUND;
         return ESP_OK;
+    }
+
+    s_mount_result = sticky_board::EnsureSharedSpiBus();
+    if (s_mount_result != ESP_OK) {
+        ESP_LOGW(kTag, "Shared SPI bus init failed: %s", esp_err_to_name(s_mount_result));
+        s_initialized = true;
+        return s_mount_result;
     }
 
     s_mount_result = card.Mount(false, kAllocationUnitSize, kMaxFiles, true);
