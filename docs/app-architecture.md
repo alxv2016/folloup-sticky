@@ -450,6 +450,7 @@ its caller and owns:
 - the mono framebuffer
 - the retained previous framebuffer used by partial refresh
 - full base refresh
+- raw-coordinate region partial refresh
 - whole-screen mono partial refresh
 - panel sleep
 - refresh timing metrics
@@ -459,9 +460,12 @@ future product requirement explicitly asks for it.
 
 The first display update must use `RefreshFullBase()` so the SSD1677 current and
 previous RAM planes are seeded. Later full-screen mono updates may use
-`RefreshPartialFullScreen()`. If partial refresh is requested before a base
-image exists, after sleep/timeout, or after the partial-refresh limit, the raw
-driver falls back to `RefreshFullBase()`.
+`RefreshPartialFullScreen()`, which delegates to `RefreshPartialRegion()` with
+the full panel bounds. Region partial refresh takes raw framebuffer pixel
+coordinates with exclusive end bounds and internally byte-aligns the X range for
+1 bpp transfers. If partial refresh is requested before a base image exists,
+after sleep/timeout, or after the partial-refresh limit, the raw driver falls
+back to `RefreshFullBase()`.
 
 The driver can initialize its own SPI bus for standalone reuse, but Sticky code
 must pass `external_spi_bus=true` after `sticky_board::EnsureSharedSpiBus()` has
@@ -469,7 +473,6 @@ initialized the shared `SPI2_HOST` bus.
 
 Not yet ported from Folloup:
 
-- region partial refresh
 - wake API and display wake policy
 - fast refresh/base path
 - retained view dirty-region policy

@@ -53,6 +53,8 @@ public:
     esp_err_t Initialize();
     esp_err_t RefreshFull();
     esp_err_t RefreshFullBase();
+    esp_err_t RefreshPartialRegion(uint16_t raw_x_start, uint16_t raw_y_start,
+                                   uint16_t raw_x_end, uint16_t raw_y_end);
     esp_err_t RefreshPartialFullScreen();
     esp_err_t Sleep();
     void Clear(bool white = true);
@@ -77,13 +79,18 @@ private:
     esp_err_t SendData(uint8_t data);
     esp_err_t SendCommandWithData(uint8_t command, const uint8_t* data, int len);
     esp_err_t WriteBytes(const uint8_t* data, int len);
+    esp_err_t WriteRegionBytes(const uint8_t* data, uint16_t x_start, uint16_t y_start,
+                               uint16_t x_end, uint16_t y_end);
+    esp_err_t SetWindow(uint16_t x_start, uint16_t y_start, uint16_t x_end, uint16_t y_end);
+    esp_err_t SetCursor(uint16_t x_start, uint16_t y_start);
     esp_err_t InitFull();
     esp_err_t InitPartial();
     esp_err_t DisplayFullBase();
-    esp_err_t DisplayPartialFullScreen();
     esp_err_t TurnOnDisplay();
     esp_err_t TurnOnDisplayPart();
     void CopyFramebufferToPrevious();
+    void CopyFramebufferRegionToPrevious(uint16_t x_start, uint16_t y_start, uint16_t x_end,
+                                         uint16_t y_end);
     void SetCs(int level);
     void SetDc(int level);
     void SetRst(int level);
