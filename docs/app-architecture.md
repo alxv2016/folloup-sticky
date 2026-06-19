@@ -211,7 +211,35 @@ runtime behavior: IMU inactivity polling, the event worker task, display sleep
 commands, ESP light-sleep entry, POWER_OK wake handling, and app-level blocker
 aggregation. `app_shell` should only provide settings, provide app-owned
 signals such as shutdown-pending state, start the runtime, and forward user
-activity.
+activity. See `docs/auto-sleep.md` for the stable feature behavior and the
+deferred FIFO/shared-interrupt plan.
+
+Current auto-sleep behavior:
+
+- `main/device_sleep_runtime.cpp` polls `imu_service::ReadSample(...)` every
+  `200 ms` and converts acceleration deltas from `g` to `mg`.
+- Motion is detected when the axis-delta sum is at least `60 mg` or the largest
+  axis delta is at least `25 mg`.
+- Stillness is detected only after a continuous `2 s` window where the
+  axis-delta sum is at most `20 mg` and the largest axis delta is at most
+  `8 mg`.
+- Display sleep renders the full-screen `Display sleep` message, waits for the
+  e-paper refresh to finish, and then puts the panel to sleep.
+- ESP32-S3 light sleep renders the full-screen `Light sleep` message, waits for
+  the e-paper refresh to finish, puts the panel to sleep, and then enters
+  `esp_light_sleep_start()` with `POWER_OK` / `GPIO4` armed as the active-low
+  wake source.
+- The wake-causing power-button events are consumed as wake-only after light
+  sleep, so they do not immediately trigger normal power-button behavior.
+- After light-sleep wake, the display is restored with a full refresh and
+  `touch_service` recovers the GT911 controller before normal touch input
+  resumes.
+- Inactivity is blocked while recording is active, armed, saving, or exporting;
+  while shutdown is pending; while an e-paper refresh is active; and during
+  app-declared storage write activity.
+- The proven demo defaults are `10 s` for display sleep and `30 s` for light
+  sleep. Production defaults should be raised later when product behavior is no
+  longer being tuned on the bench.
 
 UP/DOWN single-click button events are routed by `app_shell` into
 `display_service` as demo selection intents. `display_service` owns the two-card
@@ -461,10 +489,11 @@ Current scope:
 - exposes a typed event callback API for app-level policy routing in
   `app_shell`
 
-Power-save button wake is intentionally disabled for this first pass. Before
-enabling button wake from light sleep, verify whether the managed component
-version includes the GPIO power-save ISR safety behavior noted in the reference
-demo's patched vendored component.
+The auto-sleep runtime arms `POWER_OK` / `GPIO4` directly as the ESP light-sleep
+wake source when entering light sleep. The managed button component still owns
+normal awake-state debounce and event generation; light-sleep wake setup stays
+in `main/device_sleep_runtime.cpp` so the wake-only power-button event
+suppression remains part of the auto-sleep policy.
 
 ### `components/buzzer_service`
 
@@ -717,11 +746,19 @@ Current scope:
 - enable `TP_PWR_EN`
 - initialize the dedicated touch I2C bus on `I2C_NUM_0`
 - initialize GT911 with logical portrait coordinates `480 x 800`
+- recover GT911 after ESP light sleep by resetting/reinitializing the controller
+  before normal touch input resumes
 - attach a negative-edge ISR to `TP_INT`
 - wake a touch worker task from the ISR
 - service the GT911 outside interrupt context
 - log bring-up details, interrupt servicing, and mapped touch points
 - expose a typed event callback API for app-level routing in `app_shell`
+
+The light-sleep recovery path is required on this board. After ESP light sleep,
+the GT911 can stop reporting touches unless the service runs the reset/begin
+sequence again and reattaches `TP_INT`. The GPIO ISR service itself is global
+and may already be installed; recovery should handle that as an already-ready
+state instead of logging it as an error.
 
 The service intentionally does not draw directly to e-paper. Touch gestures and
 points are app intents; display drawing remains owned by `display_service`.
@@ -768,6 +805,21 @@ The first port intentionally does not enable FIFO streaming or claim the IMU
 interrupt on `GPIO7`. FIFO and interrupt-driven wake/sleep policy should be
 added only after direct samples are verified on hardware and the shared
 `GPIO7` ownership with the BQ27220 interrupt path is designed explicitly.
+
+The current auto-sleep implementation uses direct 200 ms polling through
+`imu_service::ReadSample(...)`. Hardware validation showed this is responsive
+enough for pickup/display wake behavior, so FIFO-backed sampling and IMU
+interrupt handling are deferred. The IMU service must not attach a `GPIO7` ISR
+or configure IMU interrupt routing until a measured power or responsiveness
+problem justifies that optimization.
+
+If a future milestone enables the IMU interrupt path, `GPIO7` must be owned by
+one shared-line runtime instead of by `power_service` or `imu_service`
+independently. That owner should keep the ISR minimal, defer all I2C work to a
+task, preserve the existing BQ27220 `BFG_INT` level/status diagnostics, and then
+query the IMU interrupt status or FIFO state. Logs should identify which source
+asserted the shared line so battery diagnostics and inactivity wake behavior
+remain debuggable together.
 
 ### `components/sht40`
 
@@ -856,8 +908,9 @@ weather UI, and persistence should be layered above this service later.
   part of the boot-mode decision.
 - `GPIO7` is shared by the BQ27220 interrupt line and the IMU interrupt path.
   The first IMU port does not attach an ISR or configure IMU interrupt routing.
-  Future inactivity/sleep work must coordinate this shared line instead of
-  letting either service claim GPIO7 independently.
+  Current auto-sleep behavior intentionally keeps using IMU polling. Future
+  inactivity/sleep work must coordinate this shared line through one deferred
+  interrupt owner instead of letting either service claim GPIO7 independently.
 
 ## Configuration
 
@@ -866,6 +919,11 @@ Configuration is file-based and should stay reproducible:
 - `sdkconfig.defaults` captures the intended project defaults.
 - `sdkconfig` captures the resolved ESP-IDF configuration.
 - `partitions.csv` defines the OTA partition table.
+
+Project-specific Kconfig options live under `Folloup Settings`. Auto-sleep
+currently exposes reproducible build-time defaults for display sleep and light
+sleep timeout seconds; `0` disables the corresponding stage, and a nonzero light
+sleep timeout must be greater than or equal to the display sleep timeout.
 
 The partition table currently contains:
 
@@ -891,6 +949,7 @@ app / integration code
        -> pcf8563 -> ESP-IDF I2C driver
   -> button_service -> espressif/button
   -> buzzer_service -> board -> ESP-IDF LEDC driver
+  -> device_sleep_service
   -> storage_service
        -> board
        -> sd_card -> ESP-IDF SDSPI/FATFS/SDMMC drivers
