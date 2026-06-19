@@ -28,11 +28,8 @@ constexpr int kGlyphAdvance = 6;
 constexpr int kLineGap = 12;
 constexpr int kDemoCardWidth = 360;
 constexpr int kDemoCardHeight = 220;
-constexpr int kDemoCardGap = 64;
 constexpr int kDemoCardX = (kPortraitWidth - kDemoCardWidth) / 2;
-constexpr int kDemoCardsHeight = kDemoCardHeight * 2 + kDemoCardGap;
-constexpr int kDemoCardTopY = (kPortraitHeight - kDemoCardsHeight) / 2;
-constexpr int kDemoCardBottomY = kDemoCardTopY + kDemoCardHeight + kDemoCardGap;
+constexpr int kDemoCardY = (kPortraitHeight - kDemoCardHeight) / 2;
 constexpr uint32_t kDisplayTaskStackWords = 4096;
 constexpr UBaseType_t kDisplayTaskPriority = 4;
 
@@ -128,6 +125,15 @@ const uint8_t* GlyphFor(char c)
         0b10000,
         0b11111,
     };
+    static constexpr uint8_t kF[kGlyphHeight] = {
+        0b11111,
+        0b10000,
+        0b10000,
+        0b11110,
+        0b10000,
+        0b10000,
+        0b10000,
+    };
     static constexpr uint8_t kG[kGlyphHeight] = {
         0b01110,
         0b10001,
@@ -145,6 +151,15 @@ const uint8_t* GlyphFor(char c)
         0b10000,
         0b10000,
         0b11111,
+    };
+    static constexpr uint8_t kM[kGlyphHeight] = {
+        0b10001,
+        0b11011,
+        0b10101,
+        0b10101,
+        0b10001,
+        0b10001,
+        0b10001,
     };
     static constexpr uint8_t kO[kGlyphHeight] = {
         0b01110,
@@ -241,12 +256,18 @@ const uint8_t* GlyphFor(char c)
         case 'E':
         case 'e':
             return kE;
+        case 'F':
+        case 'f':
+            return kF;
         case 'G':
         case 'g':
             return kG;
         case 'L':
         case 'l':
             return kL;
+        case 'M':
+        case 'm':
+            return kM;
         case 'O':
         case 'o':
             return kO;
@@ -343,42 +364,38 @@ void DrawText(uint8_t* framebuffer, int x, int y, std::string_view text, bool bl
     }
 }
 
-void DrawHelloWorldInRect(uint8_t* framebuffer,
-                          int x,
-                          int y,
-                          int width,
-                          int height,
-                          bool selected)
+void DrawActionInRect(uint8_t* framebuffer,
+                      int x,
+                      int y,
+                      int width,
+                      int height,
+                      std::string_view first,
+                      std::string_view second,
+                      bool selected)
 {
-    constexpr std::string_view kHello = "Hello";
-    constexpr std::string_view kWorld = "world";
     const int text_height = kGlyphHeight * kTextScale;
     const int block_height = text_height * 2 + kLineGap;
-    const int hello_x = x + (width - TextWidth(kHello)) / 2;
-    const int world_x = x + (width - TextWidth(kWorld)) / 2;
-    const int hello_y = y + (height - block_height) / 2;
-    const int world_y = hello_y + text_height + kLineGap;
+    const int first_x = x + (width - TextWidth(first)) / 2;
+    const int second_x = x + (width - TextWidth(second)) / 2;
+    const int first_y = y + (height - block_height) / 2;
+    const int second_y = first_y + text_height + kLineGap;
     const bool text_black = !selected;
 
     FillPortraitRect(framebuffer, x, y, width, height, selected);
-    DrawText(framebuffer, hello_x, hello_y, kHello, text_black);
-    DrawText(framebuffer, world_x, world_y, kWorld, text_black);
+    DrawText(framebuffer, first_x, first_y, first, text_black);
+    DrawText(framebuffer, second_x, second_y, second, text_black);
 }
 
 void DrawDemoFrame(uint8_t* framebuffer, DemoSelection selection)
 {
-    DrawHelloWorldInRect(framebuffer,
-                         kDemoCardX,
-                         kDemoCardTopY,
-                         kDemoCardWidth,
-                         kDemoCardHeight,
-                         selection == DemoSelection::kTop);
-    DrawHelloWorldInRect(framebuffer,
-                         kDemoCardX,
-                         kDemoCardBottomY,
-                         kDemoCardWidth,
-                         kDemoCardHeight,
-                         selection == DemoSelection::kBottom);
+    DrawActionInRect(framebuffer,
+                     kDemoCardX,
+                     kDemoCardY,
+                     kDemoCardWidth,
+                     kDemoCardHeight,
+                     "FORMAT",
+                     "SD",
+                     selection == DemoSelection::kTop);
 }
 
 void DrawCenteredLine(uint8_t* framebuffer, int center_y, std::string_view text, bool black)
@@ -448,8 +465,7 @@ void DisplayTask(void*)
             continue;
         }
 
-        ESP_LOGI(kTag, "Demo selection requested: %s",
-                 command.selection == DemoSelection::kTop ? "top" : "bottom");
+        ESP_LOGI(kTag, "Demo selection requested: format_sd");
         std::lock_guard<std::mutex> lock(s_panel_mutex);
         if (s_display_sleeping) {
             s_current_selection = command.selection;

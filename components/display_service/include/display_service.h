@@ -7,7 +7,6 @@ namespace display_service {
 
 enum class DemoSelection {
     kTop,
-    kBottom,
 };
 
 esp_err_t Init();

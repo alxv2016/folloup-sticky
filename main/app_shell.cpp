@@ -39,7 +39,6 @@ constexpr const char* kMicDemoWavName = "mic_demo.wav";
 
 TaskHandle_t s_shutdown_task = nullptr;
 std::atomic<bool> s_power_button_shutdown_pending = false;
-display_service::DemoSelection s_demo_selection = display_service::DemoSelection::kTop;
 bool s_touch_contact_active = false;
 TickType_t s_last_touch_event_tick = 0;
 
@@ -59,9 +58,34 @@ void RequestDemoSelection(display_service::DemoSelection selection, const char* 
                  source, esp_err_to_name(err));
         return;
     }
+}
 
-    if (err == ESP_OK) {
-        s_demo_selection = selection;
+const char* DemoActionName()
+{
+    return "format_sd";
+}
+
+bool IsStorageActionBlocked()
+{
+    const storage_service::Snapshot snapshot = storage_service::GetSnapshot();
+    return snapshot.mode != storage_service::Mode::kAppMounted ||
+           storage_service::IsWriteBusy();
+}
+
+void ActivateSelectedDemoAction()
+{
+    ESP_LOGI(kTag, "Activating selected demo action: %s", DemoActionName());
+    if (IsStorageActionBlocked()) {
+        const storage_service::Snapshot snapshot = storage_service::GetSnapshot();
+        ESP_LOGW(kTag, "Storage action ignored while mode=%s write_busy=%d",
+                 storage_service::ModeName(snapshot.mode),
+                 storage_service::IsWriteBusy() ? 1 : 0);
+        return;
+    }
+
+    const esp_err_t err = storage_service::RequestFormatSdCard();
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "Format SD request failed: %s", esp_err_to_name(err));
     }
 }
 
@@ -147,12 +171,26 @@ void HandleRecordingEvent(const recording_service::Event& event, void*)
              static_cast<unsigned>(event.ui_state.input_level_percent));
 }
 
+void HandleStorageEvent(const storage_service::Event& event, void*)
+{
+    ESP_LOGI(kTag, "Storage intent: mode=%s operation=%s phase=%s err=%s",
+             storage_service::ModeName(event.snapshot.mode),
+             storage_service::OperationName(event.snapshot.operation),
+             storage_service::OperationPhaseName(event.snapshot.phase),
+             esp_err_to_name(event.snapshot.last_error));
+}
+
 void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
 {
     ESP_LOGI(kTag, "Button intent: button=%s event=%s pressed_ms=%lu",
              ButtonIdName(event.button), ButtonEventName(event.event),
              static_cast<unsigned long>(event.pressed_ms));
     if (device_sleep_runtime::ConsumeWakeOnlyPowerButtonEvent(event)) {
+        return;
+    }
+
+    if (storage_service::IsWriteBusy()) {
+        ESP_LOGI(kTag, "Button ignored while storage write is active");
         return;
     }
 
@@ -163,15 +201,14 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
             PlayBuzzerPattern(buzzer_service::Pattern::kClick, "click");
             if (event.button == button_service::ButtonId::kUp ||
                 event.button == button_service::ButtonId::kDown) {
-                const display_service::DemoSelection selection =
-                    event.button == button_service::ButtonId::kUp
-                        ? display_service::DemoSelection::kTop
-                        : display_service::DemoSelection::kBottom;
-                RequestDemoSelection(selection, "button");
+                RequestDemoSelection(display_service::DemoSelection::kTop, "button");
             }
             break;
         case button_service::ButtonEvent::kDoubleClick:
             PlayBuzzerPattern(buzzer_service::Pattern::kDoubleClick, "double-click");
+            if (event.button == button_service::ButtonId::kDown) {
+                ActivateSelectedDemoAction();
+            }
             break;
         case button_service::ButtonEvent::kLongPressStart:
             PlayBuzzerPattern(buzzer_service::Pattern::kLongClick, "long-click");
@@ -214,6 +251,9 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
 void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
 {
     ESP_LOGD(kTag, "Touch intent: count=%u", static_cast<unsigned>(event.count));
+    if (storage_service::IsWriteBusy()) {
+        return;
+    }
     if (event.count > 0) {
         device_sleep_runtime::NotifyUserActivity();
 
@@ -224,15 +264,7 @@ void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
         s_last_touch_event_tick = now;
 
         if (new_contact) {
-            const display_service::DemoSelection next_selection =
-                s_demo_selection == display_service::DemoSelection::kTop
-                    ? display_service::DemoSelection::kBottom
-                    : display_service::DemoSelection::kTop;
-            ESP_LOGI(kTag, "Touch toggles display demo selection to %s",
-                     next_selection == display_service::DemoSelection::kTop
-                         ? "top"
-                         : "bottom");
-            RequestDemoSelection(next_selection, "touch");
+            RequestDemoSelection(display_service::DemoSelection::kTop, "touch");
             PlayBuzzerPattern(buzzer_service::Pattern::kClick, "touch");
         }
     }
@@ -314,6 +346,7 @@ void InitDisplayService()
 
 void InitStorageService()
 {
+    storage_service::SetEventHandler(HandleStorageEvent, nullptr);
     const esp_err_t err = storage_service::Init();
     if (err != ESP_OK) {
         ESP_LOGW(kTag, "Storage service init failed: %s", esp_err_to_name(err));

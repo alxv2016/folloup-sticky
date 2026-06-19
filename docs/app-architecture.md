@@ -24,8 +24,8 @@ The repository is currently a minimal ESP-IDF application scaffold with:
 - A `buzzer_service` component that owns PWM buzzer setup and app-facing sound
   patterns.
 - A ported `sd_card` component for SDSPI/FATFS MicroSD access.
-- A `storage_service` component that owns app-facing MicroSD mount and debug
-  status policy.
+- A `storage_service` component that owns app-facing MicroSD mount, format, and
+  debug status policy.
 - An input-only `pdm_mic` component that owns ESP-IDF I2S PDM RX capture.
 - A `microphone_service` component that owns Sticky microphone pin mapping,
   microphone power/read lifecycle, and input-level calculation.
@@ -34,7 +34,7 @@ The repository is currently a minimal ESP-IDF application scaffold with:
   to MicroSD.
 - A ported mono SSD1677 e-paper panel driver.
 - A `display_service` component that owns app-facing e-paper bring-up and the
-  portrait "Hello world" partial-refresh demo.
+  portrait storage action selector demo.
 - A ported GT911 capacitive touch controller driver.
 - A `touch_service` component that owns app-facing touch bring-up, interrupt
   servicing, and touch event logging.
@@ -248,17 +248,16 @@ Current auto-sleep behavior:
   longer being tuned on the bench.
 
 UP/DOWN single-click button events are routed by `app_shell` into
-`display_service` as demo selection intents. `display_service` owns the two-card
-portrait demo framebuffer, draws the initial top-selected state with a full base
-refresh, then uses whole-screen partial refreshes from its own worker task to
-move the black-background/white-text selection between the top and bottom
-"Hello world" cards.
+`display_service` as demo refresh intents for the `FORMAT SD` action card.
+DOWN double-click requests SD-card formatting. The earlier OTG action was
+removed for this board revision because schematic page 8 routes USB-C
+`USB_DP`/`USB_DN` into the CH343P USB-UART bridge, while ESP32-S3 native USB
+pins `GPIO19`/`GPIO20` are used by the PDM microphone path.
 
-Touch events are also routed by `app_shell` into the same display demo selection
-path. A new touch contact toggles between the top and bottom "Hello world" cards
-and requests buzzer click feedback. `app_shell` uses a short touch-contact gap
-filter so repeated GT911 scan samples from one held finger do not continuously
-toggle the e-paper demo.
+Touch events are also routed by `app_shell` into the same display demo refresh
+path and request buzzer click feedback. `app_shell` uses a short touch-contact
+gap filter so repeated GT911 scan samples from one held finger do not
+continuously refresh the e-paper demo.
 
 ### `components/bq27220`
 
@@ -558,16 +557,19 @@ adds its SDSPI device to the existing bus.
 ### `components/storage_service`
 
 This is the app-facing storage layer. It composes `board` pin definitions with
-the `sd_card` wrapper.
+the `sd_card` wrapper and owns app SD-card mount and format state.
 
 Current scope:
 
 - use the schematic page 5 MicroSD pin map
 - check `SD_DETECT`
 - mount `/sdcard` when a card is present
+- format the SD card on request, set the `FOLLOUP` volume label, and recreate
+  the source-app directory layout:
+  `/recordings`, `/todos`, `/summaries`, `/files`, `/trash`,
+  `/trash/recordings`, and `/trash/todos`
 - log mount status, total/free bytes, and a small root directory preview
-- write/read `/sdcard/sticky_sd_probe.txt` once as a bring-up probe
-- leave formatting disabled by default
+- write/read `/sdcard/SDPROBE.TXT` once as a bring-up probe
 
 An absent SD card is not a fatal app startup error. Mount failures are logged
 and returned to AppShell as non-fatal service initialization failures.
@@ -697,7 +699,7 @@ Current scope:
 - initialize the shared SPI bus through `sticky_board::EnsureSharedSpiBus()`
 - enable e-paper panel power through `sticky_board::EnableEpaperPower()`
 - initialize the raw SSD1677 panel driver
-- draw the two-card portrait "Hello world" partial-refresh demo
+- draw the portrait FORMAT SD partial-refresh demo
 - perform the first `RefreshFullBase()` and log panel metrics
 - own the e-paper demo worker task so UP/DOWN button callbacks enqueue display
   selection requests instead of blocking on panel refresh

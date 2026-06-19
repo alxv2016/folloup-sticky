@@ -14,6 +14,7 @@
 #include "esp_log.h"
 #include "esp_vfs_fat.h"
 #include "sdmmc_cmd.h"
+#include "sdkconfig.h"
 
 namespace {
 
@@ -238,6 +239,7 @@ esp_err_t SdCard::SetVolumeLabel(const char* volume_label)
         return ESP_ERR_INVALID_ARG;
     }
 
+#if CONFIG_FATFS_USE_LABEL
     FRESULT result = f_setlabel(volume_label);
     if (result != FR_OK) {
         ESP_LOGW(kTag, "failed to set SD card volume label to %s: FatFS error %d", volume_label,
@@ -245,6 +247,10 @@ esp_err_t SdCard::SetVolumeLabel(const char* volume_label)
         return ESP_FAIL;
     }
     return ESP_OK;
+#else
+    ESP_LOGW(kTag, "FATFS volume labels are disabled; skipping label %s", volume_label);
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
 }
 
 void SdCard::Unmount()
