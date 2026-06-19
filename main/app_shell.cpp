@@ -21,9 +21,12 @@ constexpr bool kEnablePowerButtonShutdown = true;
 constexpr uint32_t kShutdownTaskStackWords = 3072;
 constexpr UBaseType_t kShutdownTaskPriority = 5;
 constexpr TickType_t kPowerButtonReleaseSettleDelay = pdMS_TO_TICKS(500);
+constexpr TickType_t kTouchFeedbackMinInterval = pdMS_TO_TICKS(500);
 
 TaskHandle_t s_shutdown_task = nullptr;
 bool s_power_button_shutdown_pending = false;
+bool s_touch_feedback_played = false;
+TickType_t s_last_touch_feedback_tick = 0;
 
 void PlayBuzzerPattern(buzzer_service::Pattern pattern, const char* name)
 {
@@ -145,6 +148,16 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
 void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
 {
     ESP_LOGI(kTag, "Touch intent: count=%u", static_cast<unsigned>(event.count));
+    if (event.count > 0) {
+        const TickType_t now = xTaskGetTickCount();
+        if (!s_touch_feedback_played ||
+            now - s_last_touch_feedback_tick >= kTouchFeedbackMinInterval) {
+            PlayBuzzerPattern(buzzer_service::Pattern::kClick, "touch");
+            s_last_touch_feedback_tick = now;
+            s_touch_feedback_played = true;
+        }
+    }
+
     for (uint8_t i = 0; i < event.count; ++i) {
         ESP_LOGI(kTag, "Touch intent point[%u]: x=%u y=%u size=%u id=%u",
                  static_cast<unsigned>(i), static_cast<unsigned>(event.points[i].x),
