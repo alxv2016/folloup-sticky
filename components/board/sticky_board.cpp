@@ -426,12 +426,52 @@ esp_err_t EnableEpaperPower()
     return ESP_OK;
 }
 
+esp_err_t EnableTouchPower()
+{
+    esp_err_t err = EnableOutputPin(STICKY_TOUCH_POWER_EN_PIN, 1);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(STICKY_TOUCH_POWER_DELAY_MS));
+    ESP_LOGI(kTag, "Touch power enabled on GPIO%d after %dms delay",
+             STICKY_TOUCH_POWER_EN_PIN, STICKY_TOUCH_POWER_DELAY_MS);
+    return ESP_OK;
+}
+
+esp_err_t ConfigureTouchInterruptPin(gpio_int_type_t intr_type)
+{
+    gpio_config_t config = {};
+    config.pin_bit_mask = 1ULL << STICKY_TOUCH_INT_PIN;
+    config.mode = GPIO_MODE_INPUT;
+    config.pull_up_en = GPIO_PULLUP_ENABLE;
+    config.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    config.intr_type = intr_type;
+    return gpio_config(&config);
+}
+
+esp_err_t ReadTouchInterruptLevel(int* level)
+{
+    if (level == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    *level = gpio_get_level(STICKY_TOUCH_INT_PIN);
+    return ESP_OK;
+}
+
 esp_err_t CreateSensorI2cBus(i2c_master_bus_handle_t* out_bus)
 {
     // GPIO0 is also an ESP32-S3 strapping pin, so call this after startup
     // levels are no longer part of the boot-mode decision.
     return CreateI2cBus(STICKY_SENSOR_I2C_PORT, STICKY_SENSOR_I2C_SCL_PIN,
                         STICKY_SENSOR_I2C_SDA_PIN, out_bus);
+}
+
+esp_err_t CreateTouchI2cBus(i2c_master_bus_handle_t* out_bus)
+{
+    return CreateI2cBus(STICKY_TOUCH_I2C_PORT, STICKY_TOUCH_I2C_SCL_PIN,
+                        STICKY_TOUCH_I2C_SDA_PIN, out_bus);
 }
 
 esp_err_t AddBq27220Device(i2c_master_bus_handle_t bus,

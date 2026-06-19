@@ -29,6 +29,9 @@ The repository is currently a minimal ESP-IDF application scaffold with:
 - A ported mono SSD1677 e-paper panel driver.
 - A `display_service` component that owns app-facing e-paper bring-up and the
   portrait "Hello world" partial-refresh demo.
+- A ported GT911 capacitive touch controller driver.
+- A `touch_service` component that owns app-facing touch bring-up, interrupt
+  servicing, and touch event logging.
 
 The rest of the board peripherals have not been ported yet.
 
@@ -67,6 +70,10 @@ components/
     include/
       display_service.h
     display_service.cpp
+  touch_service/
+    include/
+      touch_service.h
+    touch_service.cpp
   sd_card/
     include/
       sd_card.h
@@ -86,6 +93,10 @@ components/
     include/
       pcf8563.h
     pcf8563.cpp
+  gt911/
+    include/
+      gt911.h
+    gt911.cpp
 partitions.csv
 sdkconfig
 sdkconfig.defaults
@@ -120,6 +131,7 @@ The current early startup sequence is:
 - Logs one power/battery diagnostic snapshot.
 - Initializes `buzzer_service` and requests the startup pattern.
 - Initializes `display_service` and draws the initial e-paper demo screen.
+- Initializes `touch_service` and logs app-facing touch events.
 - Initializes `storage_service` and logs one MicroSD diagnostic snapshot.
 - Initializes `button_service`.
 - Subscribes to button events and routes app-level display demo and power-button
@@ -219,6 +231,12 @@ scope.
 - e-paper reset: `GPIO_NUM_17`
 - e-paper data/command: `GPIO_NUM_16`
 - e-paper chip select: `GPIO_NUM_15`
+- touch power enable: `GPIO_NUM_42`
+- touch interrupt: `GPIO_NUM_21`
+- touch reset: `GPIO_NUM_41`
+- touch I2C bus port: `I2C_NUM_0`
+- touch I2C SCL: `GPIO_NUM_2`
+- touch I2C SDA: `GPIO_NUM_3`
 - charger enable: `GPIO_NUM_39`, active low
 - charger state: `GPIO_NUM_40`
 - power-input ADC sense: `GPIO_NUM_9`
@@ -243,7 +261,11 @@ scope.
 - `sticky_board::ReadBq27220InterruptLevel(...)`
 - `sticky_board::EnsureSharedSpiBus()`
 - `sticky_board::EnableEpaperPower()`
+- `sticky_board::EnableTouchPower()`
+- `sticky_board::ConfigureTouchInterruptPin(...)`
+- `sticky_board::ReadTouchInterruptLevel(...)`
 - `sticky_board::CreateSensorI2cBus(...)`
+- `sticky_board::CreateTouchI2cBus(...)`
 - `sticky_board::AddBq27220Device(...)`
 - `sticky_board::AddPcf8563Device(...)`
 
@@ -507,6 +529,61 @@ Current scope:
 SSD1677 commands must stay out of `main`. Raw board pin ownership stays in
 `board`, and low-level SSD1677 command sequencing stays in `epaper_panel`.
 
+### `components/gt911`
+
+This is the generic GT911 capacitive touch driver ported from:
+
+```text
+/Users/tieuvong/Desktop/folloup/sticky_port/Device_Peripheral_Demo 7.38.00 AM/components/gt911
+```
+
+The driver should stay board-agnostic. It receives an initialized
+`i2c_master_bus_handle_t`, the GT911 interrupt/reset pins, and the logical
+coordinate size from its caller. It should not own Sticky-specific GPIO numbers,
+I2C ports, power-enable behavior, or app policy.
+
+Current scope:
+
+- select and probe GT911 address `0x14` / `0x5D`
+- perform the Goodix reset sequence, including the post-reset INT-low sync pulse
+  needed for reliable scan startup
+- read product ID and sensor resolution
+- read up to five touch points from `0x8150`
+- clear the status register after each ready report
+- map raw sensor coordinates into caller-provided logical dimensions
+- expose a simple callback/polling API
+
+For bring-up, a readable product ID is not sufficient proof that touch is
+working. If the resolution reads as zero or remains at the driver's fallback
+`2048x2048`, inspect the reset/INT sync sequence before chasing unrelated
+peripherals or config blobs. See `docs/gt911-touch-reset-debugging.md`.
+
+Important: the post-reset INT-low sync pulse in `components/gt911/gt911.cpp`
+must be preserved. It was added from the debugging work documented in
+`docs/gt911-touch-reset-debugging.md`: without that pulse, this board's GT911
+can respond to I2C product-ID reads while failing to report the real `480 x 800`
+resolution or any usable touch points.
+
+### `components/touch_service`
+
+This is the app-facing touch layer. It composes `board` pin definitions, touch
+power control, the dedicated touch I2C bus, the GT911 driver, and the
+`TOUCH_INT` interrupt.
+
+Current scope:
+
+- enable `TP_PWR_EN`
+- initialize the dedicated touch I2C bus on `I2C_NUM_0`
+- initialize GT911 with logical portrait coordinates `480 x 800`
+- attach a negative-edge ISR to `TP_INT`
+- wake a touch worker task from the ISR
+- service the GT911 outside interrupt context
+- log bring-up details, interrupt servicing, and mapped touch points
+- expose a typed event callback API for app-level routing in `app_shell`
+
+The service intentionally does not draw directly to e-paper. Touch gestures and
+points are app intents; display drawing remains owned by `display_service`.
+
 ## Hardware Notes
 
 - Main controller: `ESP32-S3R8`.
@@ -525,6 +602,10 @@ SSD1677 commands must stay out of `main`. Raw board pin ownership stays in
 - The e-paper panel is 800 x 480 raw landscape pixels. The bring-up
   `display_service` draws portrait content by mapping logical 480 x 800
   coordinates into the raw SSD1677 framebuffer.
+- GT911 touch uses a separate I2C bus: `TP_I2C_SCL` on `GPIO2`,
+  `TP_I2C_SDA` on `GPIO3`, `TP_PWR_EN` on `GPIO42`, `TP_INT` on `GPIO21`, and
+  `TP_RSTn` on `GPIO41`. The app-facing touch coordinate space is currently
+  logical portrait `480 x 800` to match `display_service`.
 - Power latch uses `PWR_HOLD` on `GPIO45` as U3 D and `PWR_LOCK` on `GPIO46`
   as U3 CP. Firmware sets the desired D value and pulses CP to latch it.
 - `VDD_3V3_ENn` is not currently mapped to a firmware GPIO, so there is no
@@ -584,7 +665,10 @@ app / integration code
   -> display_service
        -> board
        -> epaper_panel -> ESP-IDF SPI/GPIO drivers
+  -> touch_service
+       -> board
+       -> gt911 -> ESP-IDF I2C/GPIO drivers
 ```
 
-Avoid making `bq27220`, `pcf8563`, `sd_card`, or `epaper_panel` depend on
-`board`; that would make generic drivers board-specific.
+Avoid making `bq27220`, `pcf8563`, `sd_card`, `epaper_panel`, or `gt911`
+depend on `board`; that would make generic drivers board-specific.

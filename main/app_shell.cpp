@@ -11,6 +11,7 @@
 #include "freertos/task.h"
 #include "power_service.h"
 #include "storage_service.h"
+#include "touch_service.h"
 
 namespace app_shell {
 namespace {
@@ -141,6 +142,18 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
     xTaskNotifyGive(s_shutdown_task);
 }
 
+void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
+{
+    ESP_LOGI(kTag, "Touch intent: count=%u", static_cast<unsigned>(event.count));
+    for (uint8_t i = 0; i < event.count; ++i) {
+        ESP_LOGI(kTag, "Touch intent point[%u]: x=%u y=%u size=%u id=%u",
+                 static_cast<unsigned>(i), static_cast<unsigned>(event.points[i].x),
+                 static_cast<unsigned>(event.points[i].y),
+                 static_cast<unsigned>(event.points[i].size),
+                 static_cast<unsigned>(event.points[i].id));
+    }
+}
+
 void ShutdownTask(void*)
 {
     while (true) {
@@ -216,6 +229,15 @@ void InitStorageService()
     storage_service::LogDebugStatus();
 }
 
+void InitTouchService()
+{
+    touch_service::SetEventHandler(HandleTouchEvent, nullptr);
+    const esp_err_t err = touch_service::Init();
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "Touch service init failed: %s", esp_err_to_name(err));
+    }
+}
+
 }  // namespace
 
 void Run()
@@ -226,6 +248,7 @@ void Run()
     power_service::LogDebugStatus();
     InitBuzzerService();
     InitDisplayService();
+    InitTouchService();
     InitStorageService();
     StartShutdownTask();
     InitButtonService();
