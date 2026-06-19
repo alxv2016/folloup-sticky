@@ -26,6 +26,12 @@ The repository is currently a minimal ESP-IDF application scaffold with:
 - A ported `sd_card` component for SDSPI/FATFS MicroSD access.
 - A `storage_service` component that owns app-facing MicroSD mount and debug
   status policy.
+- An input-only `pdm_mic` component that owns ESP-IDF I2S PDM RX capture.
+- A `microphone_service` component that owns Sticky microphone pin mapping,
+  microphone power/read lifecycle, and input-level calculation.
+- A `recording_service` component that owns voice-input recording state,
+  pre-roll buffering, PSRAM-backed clips, input-level tracking, and WAV export
+  to MicroSD.
 - A ported mono SSD1677 e-paper panel driver.
 - A `display_service` component that owns app-facing e-paper bring-up and the
   portrait "Hello world" partial-refresh demo.
@@ -72,6 +78,18 @@ components/
     include/
       storage_service.h
     storage_service.cpp
+  pdm_mic/
+    include/
+      pdm_mic.h
+    pdm_mic.cpp
+  microphone_service/
+    include/
+      microphone_service.h
+    microphone_service.cpp
+  recording_service/
+    include/
+      recording_service.h
+    recording_service.cpp
   display_service/
     include/
       display_service.h
@@ -160,6 +178,8 @@ The current early startup sequence is:
 - Initializes `environment_service` and logs three direct SHT40 samples for
   bring-up.
 - Initializes `storage_service` and logs one MicroSD diagnostic snapshot.
+- Initializes `recording_service`; when `/sdcard` is mounted, captures a short
+  voice-input validation clip and saves it as `/sdcard/mic_demo.wav`.
 - Initializes `button_service`.
 - Subscribes to button and touch events, routes app-level display demo intents,
   and handles power-button shutdown intents.
@@ -249,6 +269,9 @@ scope.
 - up button: `GPIO_NUM_5`
 - down button: `GPIO_NUM_6`
 - buzzer PWM output: `GPIO_NUM_48`
+- PDM microphone clock: `GPIO_NUM_19`
+- PDM microphone data: `GPIO_NUM_20`
+- PDM microphone power enable: `GPIO_NUM_38`, active high
 - MicroSD power enable: `GPIO_NUM_10`
 - MicroSD card detect: `GPIO_NUM_11`
 - MicroSD chip select: `GPIO_NUM_8`
@@ -509,6 +532,65 @@ MicroSD shares SPI lines with the e-paper path:
 the SD card. Shared SPI bus ownership belongs in `board`, not in `sd_card`,
 `epaper_panel`, `storage_service`, or `display_service`.
 
+### `components/pdm_mic`
+
+This is the input-only PDM microphone driver adapted from:
+
+```text
+/Users/tieuvong/Desktop/folloup/sticky_port/Device_Peripheral_Demo 7.38.00 AM/components/pdm_mic
+```
+
+The source demo modeled the microphone as an `AudioCodec`, but Sticky has no
+speaker/playback path in current product scope. This port intentionally keeps
+only the ESP-IDF I2S PDM RX side and omits output volume, mute, TX channels,
+duplex behavior, and playback state.
+
+Current scope:
+
+- initialize ESP-IDF I2S PDM RX with 16 kHz, mono, signed 16-bit PCM output
+- use bounded `i2s_channel_read(...)` calls for PCM capture
+- leave recording policy, buffering, voice activity, and file output to
+  higher-level services
+
+### `components/microphone_service`
+
+This is the app-facing microphone hardware layer. It composes Sticky board pin
+definitions with the input-only `pdm_mic` driver.
+
+Current scope:
+
+- configure `PDM_CLK` on `GPIO19` and `PDM_DATA` on `GPIO20`
+- control microphone power with `PDM_EN` on `GPIO38`, active high
+- initialize, enable, disable, and read PCM samples from the PDM mic driver
+- expose the 16 kHz sample rate used by voice recording
+- calculate and retain a simple input-level percentage from captured PCM chunks
+- keep recording policy, pre-roll, clip ownership, VAD, and WAV output out of
+  the microphone hardware layer
+
+### `components/recording_service`
+
+This is the app-facing voice-input recording layer. It composes the input-only
+`microphone_service` with app policy for pre-roll, recording state, clip
+ownership, input-level telemetry, and WAV file output.
+
+Current scope:
+
+- create a dedicated capture task that reads short PCM chunks from
+  `microphone_service`
+- keep a one-second PSRAM-backed pre-roll ring buffer while armed
+- support starting a recording with or without pre-roll
+- store the active clip in PSRAM-backed chunks with a 10-second max duration
+- track a simple input-level percentage for UI/debug/VAD preparation
+- expose `Arm()`, `Start()`, `Finish()`, `Cancel()`, `DiscardClip()`, and
+  `GetRecordedClip()`
+- save the latest clip as a mono 16-bit PCM WAV file on MicroSD
+- run a boot-time validation capture to `/sdcard/mic_demo.wav` only when the SD
+  card is mounted
+
+The service does not implement playback. Future voice-product work should build
+VAD, upload/transcription, and display status on top of this service rather
+than adding those policies to `pdm_mic`.
+
 ### `components/epaper_panel`
 
 This is the raw mono SSD1677 e-paper panel driver ported from:
@@ -725,6 +807,8 @@ weather UI, and persistence should be layered above this service later.
 - LSM6DS3TR-C address: `0x6A`.
 - SHT40 address: primary `0x44`, fallback `0x45`.
 - Buzzer PWM output: `GPIO48`.
+- PDM microphone uses `PDM_CLK` on `GPIO19`, `PDM_DATA` on `GPIO20`, and
+  `PDM_EN` on `GPIO38`.
 - MicroSD uses SDSPI mode only: `SD_CLK/SCK` on `GPIO13`, `SD_CMD/MOSI` on
   `GPIO14`, `SD_D0/MISO` on `GPIO12`, `SD_D3/CS` on `GPIO8`, `SD_PWR_EN` on
   `GPIO10`, and `SD_DETECT` on `GPIO11`. `SD_D1` and `SD_D2` are not connected.
@@ -795,6 +879,10 @@ app / integration code
   -> storage_service
        -> board
        -> sd_card -> ESP-IDF SDSPI/FATFS/SDMMC drivers
+  -> recording_service
+       -> microphone_service
+            -> board
+            -> pdm_mic -> ESP-IDF I2S/GPIO drivers
   -> display_service
        -> board
        -> epaper_panel -> ESP-IDF SPI/GPIO drivers
@@ -809,6 +897,7 @@ app / integration code
        -> sht40 -> ESP-IDF I2C driver
 ```
 
-Avoid making `bq27220`, `pcf8563`, `sd_card`, `epaper_panel`, `gt911`,
-`lsm6ds3`, or `sht40` depend on `board`; that would make generic drivers
-board-specific.
+Avoid making `bq27220`, `pcf8563`, `sd_card`, `pdm_mic`, `epaper_panel`,
+`gt911`, `lsm6ds3`, or `sht40` depend on `board`; that would make generic
+drivers board-specific. `microphone_service` is allowed to depend on `board`
+because it is the Sticky-specific app-facing microphone layer.

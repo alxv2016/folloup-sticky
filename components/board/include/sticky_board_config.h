@@ -22,6 +22,11 @@
 
 #define STICKY_BUZZER_PIN             GPIO_NUM_48
 
+#define STICKY_PDM_CLK_PIN            GPIO_NUM_19
+#define STICKY_PDM_DATA_PIN           GPIO_NUM_20
+#define STICKY_PDM_POWER_EN_PIN       GPIO_NUM_38
+#define STICKY_PDM_POWER_ACTIVE_LEVEL 1
+
 #define STICKY_SD_POWER_EN_PIN        GPIO_NUM_10
 #define STICKY_SD_DETECT_PIN          GPIO_NUM_11
 #define STICKY_SD_CS_PIN              GPIO_NUM_8

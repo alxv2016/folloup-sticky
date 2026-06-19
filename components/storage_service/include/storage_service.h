@@ -8,6 +8,7 @@ namespace storage_service {
 esp_err_t Init();
 void LogDebugStatus();
 bool IsMounted();
+const char* MountPoint();
 
 }  // namespace storage_service
 

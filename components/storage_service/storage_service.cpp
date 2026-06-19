@@ -144,4 +144,9 @@ bool IsMounted()
     return Card().IsMounted();
 }
 
+const char* MountPoint()
+{
+    return kMountPoint;
+}
+
 }  // namespace storage_service

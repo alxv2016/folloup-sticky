@@ -1,5 +1,7 @@
 #include "app_shell.h"
 
+#include <cstdio>
+
 #include "buzzer_service.h"
 #include "button_service.h"
 #include "display_service.h"
@@ -12,6 +14,7 @@
 #include "freertos/task.h"
 #include "imu_service.h"
 #include "power_service.h"
+#include "recording_service.h"
 #include "storage_service.h"
 #include "touch_service.h"
 
@@ -24,6 +27,7 @@ constexpr uint32_t kShutdownTaskStackWords = 3072;
 constexpr UBaseType_t kShutdownTaskPriority = 5;
 constexpr TickType_t kPowerButtonReleaseSettleDelay = pdMS_TO_TICKS(500);
 constexpr TickType_t kTouchContactGap = pdMS_TO_TICKS(300);
+constexpr const char* kMicDemoWavName = "mic_demo.wav";
 
 TaskHandle_t s_shutdown_task = nullptr;
 bool s_power_button_shutdown_pending = false;
@@ -97,6 +101,35 @@ const char* ButtonEventName(button_service::ButtonEvent event)
         default:
             return "UNKNOWN";
     }
+}
+
+const char* RecordingStateName(recording_service::State state)
+{
+    switch (state) {
+        case recording_service::State::kIdle:
+            return "IDLE";
+        case recording_service::State::kArmed:
+            return "ARMED";
+        case recording_service::State::kRecording:
+            return "RECORDING";
+        case recording_service::State::kClipReady:
+            return "CLIP_READY";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+void HandleRecordingEvent(const recording_service::Event& event, void*)
+{
+    ESP_LOGI(kTag,
+             "Recording intent: state=%s armed=%d recording=%d has_clip=%d samples=%u duration_ms=%lu level=%u",
+             RecordingStateName(event.state),
+             event.ui_state.armed ? 1 : 0,
+             event.ui_state.recording ? 1 : 0,
+             event.ui_state.has_clip ? 1 : 0,
+             static_cast<unsigned>(event.ui_state.recorded_samples),
+             static_cast<unsigned long>(event.ui_state.duration_ms),
+             static_cast<unsigned>(event.ui_state.input_level_percent));
 }
 
 void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
@@ -266,6 +299,31 @@ void InitStorageService()
     storage_service::LogDebugStatus();
 }
 
+void InitRecordingService()
+{
+    recording_service::SetEventHandler(HandleRecordingEvent, nullptr);
+    const esp_err_t err = recording_service::Init();
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "Recording service init failed: %s", esp_err_to_name(err));
+        return;
+    }
+
+    recording_service::LogDebugStatus();
+    if (!storage_service::IsMounted()) {
+        ESP_LOGW(kTag, "Storage not mounted; skipping mic WAV capture demo");
+        return;
+    }
+
+    char wav_path[96] = {};
+    std::snprintf(wav_path, sizeof(wav_path), "%s/%s",
+                  storage_service::MountPoint(), kMicDemoWavName);
+    const esp_err_t capture_err = recording_service::RecordDebugClipToWav(wav_path);
+    if (capture_err != ESP_OK) {
+        ESP_LOGW(kTag, "Mic WAV capture demo failed: %s", esp_err_to_name(capture_err));
+    }
+    recording_service::LogDebugStatus();
+}
+
 void InitTouchService()
 {
     touch_service::SetEventHandler(HandleTouchEvent, nullptr);
@@ -309,6 +367,7 @@ void Run()
     InitImuService();
     InitEnvironmentService();
     InitStorageService();
+    InitRecordingService();
     StartShutdownTask();
     InitButtonService();
 }
