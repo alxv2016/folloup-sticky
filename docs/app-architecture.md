@@ -134,8 +134,8 @@ The current early startup sequence is:
 - Initializes `touch_service` and logs app-facing touch events.
 - Initializes `storage_service` and logs one MicroSD diagnostic snapshot.
 - Initializes `button_service`.
-- Subscribes to button events and routes app-level display demo and power-button
-  shutdown intents.
+- Subscribes to button and touch events, routes app-level display demo intents,
+  and handles power-button shutdown intents.
 - Runs a small shutdown task so button callbacks can request shutdown without
   directly executing the power-latch release sequence.
 
@@ -157,6 +157,12 @@ portrait demo framebuffer, draws the initial top-selected state with a full base
 refresh, then uses whole-screen partial refreshes from its own worker task to
 move the black-background/white-text selection between the top and bottom
 "Hello world" cards.
+
+Touch events are also routed by `app_shell` into the same display demo selection
+path. A new touch contact toggles between the top and bottom "Hello world" cards
+and requests buzzer click feedback. `app_shell` uses a short touch-contact gap
+filter so repeated GT911 scan samples from one held finger do not continuously
+toggle the e-paper demo.
 
 ### `components/bq27220`
 

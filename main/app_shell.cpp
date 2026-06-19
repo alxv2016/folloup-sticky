@@ -21,18 +21,33 @@ constexpr bool kEnablePowerButtonShutdown = true;
 constexpr uint32_t kShutdownTaskStackWords = 3072;
 constexpr UBaseType_t kShutdownTaskPriority = 5;
 constexpr TickType_t kPowerButtonReleaseSettleDelay = pdMS_TO_TICKS(500);
-constexpr TickType_t kTouchFeedbackMinInterval = pdMS_TO_TICKS(500);
+constexpr TickType_t kTouchContactGap = pdMS_TO_TICKS(300);
 
 TaskHandle_t s_shutdown_task = nullptr;
 bool s_power_button_shutdown_pending = false;
-bool s_touch_feedback_played = false;
-TickType_t s_last_touch_feedback_tick = 0;
+display_service::DemoSelection s_demo_selection = display_service::DemoSelection::kTop;
+bool s_touch_contact_active = false;
+TickType_t s_last_touch_event_tick = 0;
 
 void PlayBuzzerPattern(buzzer_service::Pattern pattern, const char* name)
 {
     const esp_err_t err = buzzer_service::PlayPattern(pattern);
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(kTag, "Buzzer %s pattern failed: %s", name, esp_err_to_name(err));
+    }
+}
+
+void RequestDemoSelection(display_service::DemoSelection selection, const char* source)
+{
+    const esp_err_t err = display_service::SelectDemoSelection(selection);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Display demo selection from %s failed: %s",
+                 source, esp_err_to_name(err));
+        return;
+    }
+
+    if (err == ESP_OK) {
+        s_demo_selection = selection;
     }
 }
 
@@ -97,11 +112,7 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
                     event.button == button_service::ButtonId::kUp
                         ? display_service::DemoSelection::kTop
                         : display_service::DemoSelection::kBottom;
-                const esp_err_t err = display_service::SelectDemoSelection(selection);
-                if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-                    ESP_LOGW(kTag, "Display demo selection failed: %s",
-                             esp_err_to_name(err));
-                }
+                RequestDemoSelection(selection, "button");
             }
             break;
         case button_service::ButtonEvent::kDoubleClick:
@@ -150,11 +161,22 @@ void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
     ESP_LOGI(kTag, "Touch intent: count=%u", static_cast<unsigned>(event.count));
     if (event.count > 0) {
         const TickType_t now = xTaskGetTickCount();
-        if (!s_touch_feedback_played ||
-            now - s_last_touch_feedback_tick >= kTouchFeedbackMinInterval) {
+        const bool new_contact =
+            !s_touch_contact_active || now - s_last_touch_event_tick >= kTouchContactGap;
+        s_touch_contact_active = true;
+        s_last_touch_event_tick = now;
+
+        if (new_contact) {
+            const display_service::DemoSelection next_selection =
+                s_demo_selection == display_service::DemoSelection::kTop
+                    ? display_service::DemoSelection::kBottom
+                    : display_service::DemoSelection::kTop;
+            ESP_LOGI(kTag, "Touch toggles display demo selection to %s",
+                     next_selection == display_service::DemoSelection::kTop
+                         ? "top"
+                         : "bottom");
+            RequestDemoSelection(next_selection, "touch");
             PlayBuzzerPattern(buzzer_service::Pattern::kClick, "touch");
-            s_last_touch_feedback_tick = now;
-            s_touch_feedback_played = true;
         }
     }
 
