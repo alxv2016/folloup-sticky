@@ -32,6 +32,9 @@ The repository is currently a minimal ESP-IDF application scaffold with:
 - A ported GT911 capacitive touch controller driver.
 - A `touch_service` component that owns app-facing touch bring-up, interrupt
   servicing, and touch event logging.
+- A ported LSM6DS3 / LSM6DS3TR-C inertial sensor driver.
+- An `imu_service` component that owns app-facing IMU bring-up and direct sample
+  logging for first hardware validation.
 
 The rest of the board peripherals have not been ported yet.
 
@@ -74,6 +77,10 @@ components/
     include/
       touch_service.h
     touch_service.cpp
+  imu_service/
+    include/
+      imu_service.h
+    imu_service.cpp
   sd_card/
     include/
       sd_card.h
@@ -97,6 +104,12 @@ components/
     include/
       gt911.h
     gt911.cpp
+  lsm6ds3/
+    include/
+      lsm6ds3.h
+    priv_include/
+      lsm6ds3_reg.h
+    lsm6ds3.cpp
 partitions.csv
 sdkconfig
 sdkconfig.defaults
@@ -132,6 +145,7 @@ The current early startup sequence is:
 - Initializes `buzzer_service` and requests the startup pattern.
 - Initializes `display_service` and draws the initial e-paper demo screen.
 - Initializes `touch_service` and logs app-facing touch events.
+- Initializes `imu_service` and logs three direct IMU samples for bring-up.
 - Initializes `storage_service` and logs one MicroSD diagnostic snapshot.
 - Initializes `button_service`.
 - Subscribes to button and touch events, routes app-level display demo intents,
@@ -252,6 +266,8 @@ scope.
 - BQ27220 I2C address: `0x55`
 - BQ27220 interrupt pin: `GPIO_NUM_7`
 - PCF8563 I2C address: `0x51`
+- LSM6DS3TR-C I2C address: `0x6A`
+- IMU interrupt pin: `GPIO_NUM_7`
 - I2C glitch filter and bus speed constants
 
 `sticky_board.h/.cpp` owns small board helper functions:
@@ -270,13 +286,20 @@ scope.
 - `sticky_board::EnableTouchPower()`
 - `sticky_board::ConfigureTouchInterruptPin(...)`
 - `sticky_board::ReadTouchInterruptLevel(...)`
+- `sticky_board::EnsureSensorI2cBus(...)`
 - `sticky_board::CreateSensorI2cBus(...)`
 - `sticky_board::CreateTouchI2cBus(...)`
 - `sticky_board::AddBq27220Device(...)`
 - `sticky_board::AddPcf8563Device(...)`
+- `sticky_board::AddLsm6ds3Device(...)`
 
 Keep this layer focused on raw board mechanics: pins, buses, GPIO polarity, ADC
 setup, and latch timing.
+
+The sensor I2C bus is shared by the BQ27220, PCF8563, and LSM6DS3TR-C. New
+callers should use `sticky_board::EnsureSensorI2cBus(...)` instead of creating
+their own bus handle. This keeps the ESP-IDF bus object singleton-like while
+allowing each service to add its own device handle.
 
 Power-latch GPIOs are configured as input/output during bring-up so firmware can
 both drive `PWR_HOLD` / `PWR_LOCK` and log the observed pad levels for hardware
@@ -590,6 +613,49 @@ Current scope:
 The service intentionally does not draw directly to e-paper. Touch gestures and
 points are app intents; display drawing remains owned by `display_service`.
 
+### `components/lsm6ds3`
+
+This is the generic LSM6DS3 / LSM6DS3TR-C inertial sensor driver ported from:
+
+```text
+/Users/tieuvong/Desktop/folloup/sticky_port/Device_Peripheral_Demo 7.38.00 AM/components/lsm6ds3
+```
+
+The driver should stay board-agnostic. It receives an initialized
+`i2c_master_dev_handle_t` or `spi_device_handle_t` from its caller and exposes
+register reads, register writes, accelerometer, gyro, temperature, and FIFO
+helpers. It should not own Sticky-specific GPIO numbers, I2C ports, interrupt
+policy, sleep policy, or app-level inactivity decisions.
+
+Current scope:
+
+- probe WHO_AM_I register `0x0F`
+- accept `0x6A` for LSM6DS3TR-C and `0x69` for LSM6DS3
+- configure direct accelerometer and gyro sampling for bring-up
+- expose temperature, acceleration, gyro, and FIFO helper APIs from the source
+  driver
+
+### `components/imu_service`
+
+This is the app-facing IMU layer. It composes `board` sensor-bus helpers with
+the generic LSM6DS3 driver.
+
+Current scope:
+
+- initialize the shared sensor I2C bus on `I2C_NUM_1`
+- add the LSM6DS3TR-C at address `0x6A`
+- verify WHO_AM_I before marking the service initialized
+- configure the same first-pass settings as the source demo: accelerometer
+  `4g` / `104Hz` / `100Hz BW`, gyro `245dps` / `104Hz` / `100Hz BW`
+- log three direct sample reads at startup for hardware validation
+- expose `imu_service::ReadSample(...)` for direct temperature, acceleration,
+  and gyro reads
+
+The first port intentionally does not enable FIFO streaming or claim the IMU
+interrupt on `GPIO7`. FIFO and interrupt-driven wake/sleep policy should be
+added only after direct samples are verified on hardware and the shared
+`GPIO7` ownership with the BQ27220 interrupt path is designed explicitly.
+
 ## Hardware Notes
 
 - Main controller: `ESP32-S3R8`.
@@ -597,6 +663,7 @@ points are app intents; display drawing remains owned by `display_service`.
 - PSRAM: 8 MB octal PSRAM.
 - BQ27220 address: `0x55`.
 - PCF8563 address: `0x51`.
+- LSM6DS3TR-C address: `0x6A`.
 - Buzzer PWM output: `GPIO48`.
 - MicroSD uses SDSPI mode only: `SD_CLK/SCK` on `GPIO13`, `SD_CMD/MOSI` on
   `GPIO14`, `SD_D0/MISO` on `GPIO12`, `SD_D3/CS` on `GPIO8`, `SD_PWR_EN` on
@@ -623,15 +690,15 @@ points are app intents; display drawing remains owned by `display_service`.
 - Power-input voltage is sensed on `GPIO9`. The service currently logs ADC pin
   millivolts, not reconstructed VIN, because the divider ratio has not been
   confirmed in this project.
-- BQ27220 shares the sensor I2C bus with other future peripherals.
+- BQ27220, PCF8563, and LSM6DS3TR-C share the sensor I2C bus.
 - Sensor I2C uses `GPIO0` for SCL and `GPIO1` for SDA.
 - `GPIO0` is also an ESP32-S3 boot strapping/download pin. Create the sensor
   I2C bus only after boot has completed and startup pin levels are no longer
   part of the boot-mode decision.
-- `GPIO7` is the BQ27220 interrupt line in the current scope. The hardware spec
-  also notes this line is shared with the IMU interrupt path, so future IMU work
-  must coordinate ownership. Do not add an IMU interrupt handler that claims
-  GPIO7 independently of the power/fuel-gauge path.
+- `GPIO7` is shared by the BQ27220 interrupt line and the IMU interrupt path.
+  The first IMU port does not attach an ISR or configure IMU interrupt routing.
+  Future inactivity/sleep work must coordinate this shared line instead of
+  letting either service claim GPIO7 independently.
 
 ## Configuration
 
@@ -674,7 +741,10 @@ app / integration code
   -> touch_service
        -> board
        -> gt911 -> ESP-IDF I2C/GPIO drivers
+  -> imu_service
+       -> board
+       -> lsm6ds3 -> ESP-IDF I2C/SPI drivers
 ```
 
-Avoid making `bq27220`, `pcf8563`, `sd_card`, `epaper_panel`, or `gt911`
-depend on `board`; that would make generic drivers board-specific.
+Avoid making `bq27220`, `pcf8563`, `sd_card`, `epaper_panel`, `gt911`, or
+`lsm6ds3` depend on `board`; that would make generic drivers board-specific.

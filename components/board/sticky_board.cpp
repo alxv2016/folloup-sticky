@@ -26,6 +26,7 @@ adc_unit_t s_power_adc_unit = ADC_UNIT_1;
 adc_channel_t s_power_adc_channel = ADC_CHANNEL_0;
 bool s_power_adc_calibrated = false;
 bool s_shared_spi_bus_initialized = false;
+i2c_master_bus_handle_t s_sensor_i2c_bus = nullptr;
 
 esp_err_t EnableOutputPin(gpio_num_t pin, int level)
 {
@@ -460,12 +461,36 @@ esp_err_t ReadTouchInterruptLevel(int* level)
     return ESP_OK;
 }
 
-esp_err_t CreateSensorI2cBus(i2c_master_bus_handle_t* out_bus)
+esp_err_t EnsureSensorI2cBus(i2c_master_bus_handle_t* out_bus)
 {
+    if (out_bus == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (s_sensor_i2c_bus != nullptr) {
+        *out_bus = s_sensor_i2c_bus;
+        return ESP_OK;
+    }
+
     // GPIO0 is also an ESP32-S3 strapping pin, so call this after startup
     // levels are no longer part of the boot-mode decision.
-    return CreateI2cBus(STICKY_SENSOR_I2C_PORT, STICKY_SENSOR_I2C_SCL_PIN,
-                        STICKY_SENSOR_I2C_SDA_PIN, out_bus);
+    esp_err_t err = CreateI2cBus(STICKY_SENSOR_I2C_PORT, STICKY_SENSOR_I2C_SCL_PIN,
+                                 STICKY_SENSOR_I2C_SDA_PIN, &s_sensor_i2c_bus);
+    if (err != ESP_OK) {
+        s_sensor_i2c_bus = nullptr;
+        return err;
+    }
+
+    *out_bus = s_sensor_i2c_bus;
+    ESP_LOGI(kTag, "Sensor I2C bus initialized: port=%d scl=GPIO%d sda=GPIO%d",
+             static_cast<int>(STICKY_SENSOR_I2C_PORT),
+             static_cast<int>(STICKY_SENSOR_I2C_SCL_PIN),
+             static_cast<int>(STICKY_SENSOR_I2C_SDA_PIN));
+    return ESP_OK;
+}
+
+esp_err_t CreateSensorI2cBus(i2c_master_bus_handle_t* out_bus)
+{
+    return EnsureSensorI2cBus(out_bus);
 }
 
 esp_err_t CreateTouchI2cBus(i2c_master_bus_handle_t* out_bus)
@@ -499,6 +524,21 @@ esp_err_t AddPcf8563Device(i2c_master_bus_handle_t bus,
     i2c_device_config_t config = {};
     config.dev_addr_length = I2C_ADDR_BIT_LEN_7;
     config.device_address = STICKY_PCF8563_I2C_ADDR;
+    config.scl_speed_hz = STICKY_I2C_SPEED_HZ;
+
+    return i2c_master_bus_add_device(bus, &config, out_device);
+}
+
+esp_err_t AddLsm6ds3Device(i2c_master_bus_handle_t bus,
+                           i2c_master_dev_handle_t* out_device)
+{
+    if (bus == nullptr || out_device == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    i2c_device_config_t config = {};
+    config.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+    config.device_address = STICKY_LSM6DS3_I2C_ADDR;
     config.scl_speed_hz = STICKY_I2C_SPEED_HZ;
 
     return i2c_master_bus_add_device(bus, &config, out_device);

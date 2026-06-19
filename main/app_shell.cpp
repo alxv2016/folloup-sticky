@@ -9,6 +9,7 @@
 #include "esp_partition.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "imu_service.h"
 #include "power_service.h"
 #include "storage_service.h"
 #include "touch_service.h"
@@ -273,6 +274,16 @@ void InitTouchService()
     }
 }
 
+void InitImuService()
+{
+    const esp_err_t err = imu_service::Init();
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "IMU service init failed: %s", esp_err_to_name(err));
+        return;
+    }
+    imu_service::LogDebugStatus();
+}
+
 }  // namespace
 
 void Run()
@@ -284,6 +295,7 @@ void Run()
     InitBuzzerService();
     InitDisplayService();
     InitTouchService();
+    InitImuService();
     InitStorageService();
     StartShutdownTask();
     InitButtonService();

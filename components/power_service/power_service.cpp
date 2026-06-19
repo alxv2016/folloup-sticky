@@ -347,7 +347,7 @@ esp_err_t Init()
         ESP_LOGW(kTag, "Power-input sense init failed: %s", esp_err_to_name(err));
     }
 
-    err = sticky_board::CreateSensorI2cBus(&s_sensor_bus);
+    err = sticky_board::EnsureSensorI2cBus(&s_sensor_bus);
     if (err == ESP_OK) {
         err = EnsureRtc();
         if (err != ESP_OK) {

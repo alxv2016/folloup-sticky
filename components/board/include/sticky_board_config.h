@@ -69,6 +69,9 @@
 
 #define STICKY_PCF8563_I2C_ADDR      0x51
 
+#define STICKY_LSM6DS3_I2C_ADDR      0x6A
+#define STICKY_IMU_INT_PIN           GPIO_NUM_7
+
 #define STICKY_I2C_GLITCH_IGNORE_CNT 7
 #define STICKY_I2C_SPEED_HZ          400000
 
