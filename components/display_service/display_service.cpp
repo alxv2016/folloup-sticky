@@ -582,6 +582,21 @@ esp_err_t WakeDisplay()
     return ESP_OK;
 }
 
+esp_err_t RecoverAfterLightSleep()
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    std::lock_guard<std::mutex> lock(s_panel_mutex);
+    ESP_RETURN_ON_ERROR(ApplyDemoSelection(s_current_selection, true),
+                        kTag,
+                        "display light-sleep recovery refresh failed");
+    s_display_sleeping = false;
+    ESP_LOGI(kTag, "Display recovered after light sleep with forced full refresh");
+    return ESP_OK;
+}
+
 bool IsRefreshInProgress()
 {
     return s_refresh_in_progress.load(std::memory_order_relaxed);

@@ -444,6 +444,25 @@ void NotifyUserActivity(ActivitySource source)
     DispatchEvent(action, reason, snapshot);
 }
 
+bool NotifyLightSleepWake(TransitionReason reason)
+{
+    const int64_t now_us = esp_timer_get_time();
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        EnsureActivityTimestampLocked(now_us);
+        if (s_stage != Stage::kLightSleeping) {
+            ESP_LOGW(kTag, "Light-sleep wake ignored from stage=%s", StageName(s_stage));
+            return false;
+        }
+
+        TransitionToLocked(Stage::kAwake, Action::kWakeFromLightSleep, reason, now_us);
+    }
+
+    ESP_LOGI(kTag, "Light-sleep wake committed: reason=%s",
+             TransitionReasonName(reason));
+    return true;
+}
+
 void NotifyMotionDetected()
 {
     NotifyUserActivity(ActivitySource::kMotion);

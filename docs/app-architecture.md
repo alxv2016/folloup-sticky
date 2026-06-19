@@ -225,15 +225,21 @@ Current auto-sleep behavior:
   `8 mg`.
 - Display sleep renders the full-screen `Display sleep` message, waits for the
   e-paper refresh to finish, and then puts the panel to sleep.
-- ESP32-S3 light sleep renders the full-screen `Light sleep` message, waits for
-  the e-paper refresh to finish, puts the panel to sleep, and then enters
-  `esp_light_sleep_start()` with `POWER_OK` / `GPIO4` armed as the active-low
-  wake source.
+- ESP32-S3 light sleep first configures `PWR_HOLD` / `GPIO45` and `PWR_LOCK` /
+  `GPIO46` to remain driven high during light sleep, waits for `POWER_OK` /
+  `GPIO4` to be released, and arms `POWER_OK` through EXT1 as the active-low
+  wake source. It also arms wake-only `POWER_OK` event suppression before
+  entering ESP light sleep so the wake press cannot become a normal long-press
+  shutdown request. It then renders the full-screen `Light sleep` message, waits
+  for the e-paper refresh to finish, puts the panel to sleep, and enters
+  `esp_light_sleep_start()`.
 - The wake-causing power-button events are consumed as wake-only after light
-  sleep, so they do not immediately trigger normal power-button behavior.
-- After light-sleep wake, the display is restored with a full refresh and
+  sleep, so they do not trigger normal power-button behavior or leave
+  `shutdown_pending` set as an auto-sleep blocker.
+- After light-sleep wake, the display is restored with a forced full refresh and
   `touch_service` recovers the GT911 controller before normal touch input
-  resumes.
+  resumes. The forced display refresh is intentional because e-paper retains the
+  `Light sleep` image even if software state has already returned to awake.
 - Inactivity is blocked while recording is active, armed, saving, or exporting;
   while shutdown is pending; while an e-paper refresh is active; and during
   app-declared storage write activity.
@@ -489,11 +495,13 @@ Current scope:
 - exposes a typed event callback API for app-level policy routing in
   `app_shell`
 
-The auto-sleep runtime arms `POWER_OK` / `GPIO4` directly as the ESP light-sleep
-wake source when entering light sleep. The managed button component still owns
+The auto-sleep runtime preserves `PWR_HOLD` / `GPIO45` and `PWR_LOCK` /
+`GPIO46` as driven-high outputs during ESP light sleep, then arms `POWER_OK` /
+`GPIO4` through EXT1 as the wake source. The managed button component still owns
 normal awake-state debounce and event generation; light-sleep wake setup stays
-in `main/device_sleep_runtime.cpp` so the wake-only power-button event
-suppression remains part of the auto-sleep policy.
+in `main/device_sleep_runtime.cpp` so pre-sleep wake-only power-button event
+suppression and immediate display/touch recovery remain part of the auto-sleep
+policy.
 
 ### `components/buzzer_service`
 

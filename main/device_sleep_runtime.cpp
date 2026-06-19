@@ -9,6 +9,7 @@
 #include "device_sleep_service.h"
 #include "display_service.h"
 #include "driver/gpio.h"
+#include "driver/rtc_io.h"
 #include "esp_check.h"
 #include "esp_err.h"
 #include "esp_log.h"
@@ -38,6 +39,10 @@ constexpr UBaseType_t kMotionTaskPriority = 3;
 constexpr uint32_t kAutoSleepTaskStackWords = 4096;
 constexpr UBaseType_t kAutoSleepTaskPriority = 4;
 constexpr size_t kAutoSleepEventQueueDepth = 8;
+constexpr TickType_t kPowerButtonReleasePollDelay = pdMS_TO_TICKS(20);
+constexpr uint32_t kPowerButtonReleaseStableSamples = 10;
+constexpr uint32_t kPowerButtonReleaseMaxSamples = 250;
+constexpr uint64_t kPowerButtonWakeMask = 1ULL << STICKY_POWER_BUTTON_PIN;
 
 enum class MotionState {
     kUnknown,
@@ -154,48 +159,253 @@ void HandleAutoSleepEvent(const device_sleep_service::Event& event, void*)
     }
 }
 
-esp_err_t EnterLightSleep()
+void LogLightSleepPins(const char* phase)
 {
-    ESP_RETURN_ON_ERROR(display_service::EnterLightSleep(),
-                        kTag,
-                        "display light sleep message failed");
+    ESP_LOGI(kTag,
+             "Light-sleep %s pins: POWER_OK(GPIO%d)=%d PWR_HOLD(GPIO%d)=%d "
+             "PWR_LOCK(GPIO%d)=%d",
+             phase,
+             STICKY_POWER_BUTTON_PIN,
+             gpio_get_level(STICKY_POWER_BUTTON_PIN),
+             STICKY_POWER_HOLD_PIN,
+             gpio_get_level(STICKY_POWER_HOLD_PIN),
+             STICKY_POWER_LOCK_PIN,
+             gpio_get_level(STICKY_POWER_LOCK_PIN));
+}
 
+esp_err_t ConfigurePowerButtonWakeInput(const char* context)
+{
+    ESP_LOGI(kTag, "Light-sleep wake input config begin: %s", context);
     gpio_config_t power_button_config = {};
     power_button_config.pin_bit_mask = 1ULL << STICKY_POWER_BUTTON_PIN;
     power_button_config.mode = GPIO_MODE_INPUT;
     power_button_config.pull_up_en = GPIO_PULLUP_ENABLE;
     power_button_config.pull_down_en = GPIO_PULLDOWN_DISABLE;
     power_button_config.intr_type = GPIO_INTR_DISABLE;
-    ESP_RETURN_ON_ERROR(gpio_config(&power_button_config),
-                        kTag,
-                        "configure POWER_OK light-sleep wake GPIO failed");
 
-    ESP_RETURN_ON_ERROR(gpio_wakeup_enable(STICKY_POWER_BUTTON_PIN, GPIO_INTR_LOW_LEVEL),
-                        kTag,
-                        "enable POWER_OK GPIO wake failed");
-    ESP_RETURN_ON_ERROR(esp_sleep_enable_gpio_wakeup(),
-                        kTag,
-                        "enable GPIO light-sleep wake failed");
+    const esp_err_t err = gpio_config(&power_button_config);
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "Configure POWER_OK %s input failed: %s",
+                 context, esp_err_to_name(err));
+    } else {
+        LogLightSleepPins("after POWER_OK input config");
+    }
+    return err;
+}
 
-    ESP_LOGI(kTag, "Entering light sleep with POWER_OK wake");
-    const esp_err_t sleep_err = esp_light_sleep_start();
-    const esp_sleep_wakeup_cause_t wakeup_cause = esp_sleep_get_wakeup_cause();
-    const bool power_button_wake = gpio_get_level(STICKY_POWER_BUTTON_PIN) == 0;
+esp_err_t ConfigureSleepOutputHigh(gpio_num_t pin, const char* label)
+{
+    ESP_LOGI(kTag, "Light-sleep latch config begin: %s GPIO%d output high",
+             label, pin);
 
-    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_GPIO);
-    gpio_wakeup_disable(STICKY_POWER_BUTTON_PIN);
-
-    ESP_LOGI(kTag, "Exited light sleep: cause=%s power_button=%d err=%s",
-             WakeupCauseName(wakeup_cause),
-             power_button_wake ? 1 : 0,
-             esp_err_to_name(sleep_err));
-
-    if (power_button_wake) {
-        s_power_button_wake_only_active.store(true, std::memory_order_relaxed);
+    esp_err_t err = gpio_set_level(pin, 1);
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "Set %s GPIO%d high before light sleep failed: %s",
+                 label, pin, esp_err_to_name(err));
+        return err;
     }
 
-    device_sleep_service::NotifyUserActivity(device_sleep_service::ActivitySource::kInteraction);
-    return sleep_err;
+    err = gpio_sleep_set_direction(pin, GPIO_MODE_OUTPUT);
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "Set %s GPIO%d sleep output mode failed: %s",
+                 label, pin, esp_err_to_name(err));
+        return err;
+    }
+
+    err = gpio_sleep_set_pull_mode(pin, GPIO_FLOATING);
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "Set %s GPIO%d sleep pull mode failed: %s",
+                 label, pin, esp_err_to_name(err));
+        return err;
+    }
+
+    err = gpio_sleep_sel_en(pin);
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "Enable %s GPIO%d sleep config failed: %s",
+                 label, pin, esp_err_to_name(err));
+        return err;
+    }
+
+    ESP_LOGI(kTag, "Light-sleep latch config done: %s GPIO%d level=%d",
+             label, pin, gpio_get_level(pin));
+    return ESP_OK;
+}
+
+esp_err_t PreservePowerLatchDuringLightSleep()
+{
+    LogLightSleepPins("before latch sleep config");
+    ESP_RETURN_ON_ERROR(ConfigureSleepOutputHigh(STICKY_POWER_HOLD_PIN, "PWR_HOLD"),
+                        kTag,
+                        "preserve PWR_HOLD during light sleep failed");
+    ESP_RETURN_ON_ERROR(ConfigureSleepOutputHigh(STICKY_POWER_LOCK_PIN, "PWR_LOCK"),
+                        kTag,
+                        "preserve PWR_LOCK during light sleep failed");
+
+    ESP_LOGI(kTag, "Power latch sleep hold armed: PWR_HOLD(GPIO%d)=1 PWR_LOCK(GPIO%d)=1",
+             STICKY_POWER_HOLD_PIN,
+             STICKY_POWER_LOCK_PIN);
+    LogLightSleepPins("after latch sleep config");
+    return ESP_OK;
+}
+
+esp_err_t WaitForPowerButtonReleased()
+{
+    ESP_LOGI(kTag, "Light-sleep POWER_OK release wait begin");
+    uint32_t stable_high_samples = 0;
+    for (uint32_t sample = 0; sample < kPowerButtonReleaseMaxSamples; ++sample) {
+        const int level = gpio_get_level(STICKY_POWER_BUTTON_PIN);
+        if (level == 1) {
+            ++stable_high_samples;
+            if (stable_high_samples >= kPowerButtonReleaseStableSamples) {
+                ESP_LOGI(kTag,
+                         "Light-sleep POWER_OK released: stable_samples=%lu "
+                         "elapsed_ms=%lu",
+                         static_cast<unsigned long>(stable_high_samples),
+                         static_cast<unsigned long>(
+                             (sample + 1) * kPowerButtonReleasePollDelay *
+                             portTICK_PERIOD_MS));
+                LogLightSleepPins("after POWER_OK release wait");
+                return ESP_OK;
+            }
+        } else {
+            stable_high_samples = 0;
+        }
+        vTaskDelay(kPowerButtonReleasePollDelay);
+    }
+
+    ESP_LOGW(kTag, "POWER_OK stayed active; light sleep not armed");
+    return ESP_ERR_TIMEOUT;
+}
+
+esp_err_t RestoreAfterLightSleep()
+{
+    ESP_LOGI(kTag, "Light-sleep restore begin");
+    LogLightSleepPins("before restore");
+    esp_err_t err = display_service::RecoverAfterLightSleep();
+    if (touch_service::IsInitialized()) {
+        const esp_err_t touch_err = touch_service::RecoverAfterLightSleep();
+        if (touch_err != ESP_OK) {
+            ESP_LOGW(kTag, "Touch recovery after light sleep failed: %s",
+                     esp_err_to_name(touch_err));
+        }
+    }
+    LogLightSleepPins("after restore");
+    ESP_LOGI(kTag, "Light-sleep restore done: display_err=%s",
+             esp_err_to_name(err));
+    return err;
+}
+
+esp_err_t AbortLightSleepEntry(esp_err_t err, const char* reason)
+{
+    ESP_LOGW(kTag, "Aborting light sleep entry: %s: %s",
+             reason, esp_err_to_name(err));
+    esp_sleep_disable_ext1_wakeup_io(kPowerButtonWakeMask);
+    s_power_button_wake_only_active.store(false, std::memory_order_relaxed);
+
+    const bool wake_committed =
+        device_sleep_service::NotifyLightSleepWake(device_sleep_service::TransitionReason::kNone);
+    if (!wake_committed) {
+        ESP_LOGW(kTag, "Light-sleep abort did not transition service state");
+    }
+
+    const esp_err_t restore_err = RestoreAfterLightSleep();
+    if (restore_err != ESP_OK) {
+        ESP_LOGW(kTag, "Display restore after light-sleep abort failed: %s",
+                 esp_err_to_name(restore_err));
+    }
+    return err;
+}
+
+esp_err_t EnterLightSleep()
+{
+    ESP_LOGI(kTag, "Light-sleep entry begin");
+    LogLightSleepPins("entry");
+
+    esp_err_t err = PreservePowerLatchDuringLightSleep();
+    if (err != ESP_OK) {
+        return AbortLightSleepEntry(err, "preserve power latch sleep state failed");
+    }
+
+    err = ConfigurePowerButtonWakeInput("light-sleep wake");
+    if (err != ESP_OK) {
+        return AbortLightSleepEntry(err, "configure POWER_OK wake input failed");
+    }
+
+    err = WaitForPowerButtonReleased();
+    if (err != ESP_OK) {
+        return AbortLightSleepEntry(err, "POWER_OK release wait failed");
+    }
+
+    err = esp_sleep_enable_ext1_wakeup_io(kPowerButtonWakeMask,
+                                          ESP_EXT1_WAKEUP_ANY_LOW);
+    if (err != ESP_OK) {
+        return AbortLightSleepEntry(err, "enable POWER_OK EXT1 wake failed");
+    }
+    ESP_LOGI(kTag,
+             "Light-sleep EXT1 wake armed: mask=0x%llX mode=ANY_LOW",
+             static_cast<unsigned long long>(kPowerButtonWakeMask));
+
+    ESP_LOGI(kTag, "Light-sleep display preparation begin");
+    err = display_service::EnterLightSleep();
+    if (err != ESP_OK) {
+        return AbortLightSleepEntry(err, "display light sleep message failed");
+    }
+    ESP_LOGI(kTag, "Light-sleep display preparation done");
+    LogLightSleepPins("after display preparation");
+
+    ESP_LOGI(kTag,
+             "Light-sleep start now. Expect 'returned from esp_light_sleep_start' "
+             "next; if logs show a boot banner instead, the board reset or lost power.");
+    s_power_button_wake_only_active.store(true, std::memory_order_relaxed);
+    ESP_LOGI(kTag, "Wake-only POWER_OK suppression armed before light sleep");
+    vTaskDelay(pdMS_TO_TICKS(50));
+    const esp_err_t sleep_err = esp_light_sleep_start();
+    ESP_LOGI(kTag, "Light-sleep returned from esp_light_sleep_start: err=%s",
+             esp_err_to_name(sleep_err));
+
+    const esp_sleep_wakeup_cause_t wakeup_cause = esp_sleep_get_wakeup_cause();
+    const uint64_t ext1_status = esp_sleep_get_ext1_wakeup_status();
+    const bool power_button_wake =
+        (wakeup_cause == ESP_SLEEP_WAKEUP_EXT1 &&
+         (ext1_status & kPowerButtonWakeMask) != 0) ||
+        gpio_get_level(STICKY_POWER_BUTTON_PIN) == 0;
+
+    esp_sleep_disable_ext1_wakeup_io(kPowerButtonWakeMask);
+    ESP_LOGI(kTag, "Light-sleep EXT1 wake disabled");
+
+    const esp_err_t rtc_deinit_err = rtc_gpio_deinit(STICKY_POWER_BUTTON_PIN);
+    if (rtc_deinit_err != ESP_OK) {
+        ESP_LOGW(kTag, "POWER_OK RTC GPIO deinit after light sleep failed: %s",
+                 esp_err_to_name(rtc_deinit_err));
+    }
+    const esp_err_t reconfig_err = ConfigurePowerButtonWakeInput("post-light-sleep");
+    if (reconfig_err != ESP_OK) {
+        ESP_LOGW(kTag, "POWER_OK digital input restore after light sleep failed: %s",
+                 esp_err_to_name(reconfig_err));
+    }
+
+    ESP_LOGI(kTag, "Exited light sleep: cause=%s ext1_status=0x%llX power_button=%d err=%s",
+             WakeupCauseName(wakeup_cause),
+             static_cast<unsigned long long>(ext1_status),
+             power_button_wake ? 1 : 0,
+             esp_err_to_name(sleep_err));
+    LogLightSleepPins("after wake source cleanup");
+
+    if (!power_button_wake) {
+        s_power_button_wake_only_active.store(false, std::memory_order_relaxed);
+        ESP_LOGI(kTag, "Wake-only POWER_OK suppression cleared; wake was not POWER_OK");
+    }
+
+    const bool wake_committed =
+        device_sleep_service::NotifyLightSleepWake(device_sleep_service::TransitionReason::kInteraction);
+    if (!wake_committed) {
+        ESP_LOGW(kTag, "Light-sleep wake did not transition service state");
+    }
+
+    const esp_err_t restore_err = RestoreAfterLightSleep();
+    ESP_LOGI(kTag, "Light-sleep exit complete: sleep_err=%s restore_err=%s",
+             esp_err_to_name(sleep_err), esp_err_to_name(restore_err));
+    return sleep_err == ESP_OK ? restore_err : sleep_err;
 }
 
 void ProcessAutoSleepEvent(const device_sleep_service::Event& event)
@@ -218,14 +428,7 @@ void ProcessAutoSleepEvent(const device_sleep_service::Event& event)
             err = EnterLightSleep();
             break;
         case device_sleep_service::Action::kWakeFromLightSleep:
-            err = display_service::WakeDisplay();
-            if (touch_service::IsInitialized()) {
-                const esp_err_t touch_err = touch_service::RecoverAfterLightSleep();
-                if (touch_err != ESP_OK) {
-                    ESP_LOGW(kTag, "Touch recovery after light sleep failed: %s",
-                             esp_err_to_name(touch_err));
-                }
-            }
+            err = RestoreAfterLightSleep();
             break;
         case device_sleep_service::Action::kNone:
         default:

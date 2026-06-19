@@ -16,6 +16,7 @@ esp_err_t SelectDemoSelection(DemoSelection selection);
 esp_err_t EnterDisplaySleep();
 esp_err_t EnterLightSleep();
 esp_err_t WakeDisplay();
+esp_err_t RecoverAfterLightSleep();
 bool IsRefreshInProgress();
 
 }  // namespace display_service

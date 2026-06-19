@@ -68,17 +68,36 @@ with a full refresh.
 After the configured light-sleep timeout has elapsed during the same no-motion
 period, the runtime enters ESP32-S3 light sleep.
 
+The Sticky power path needs two board-specific protections during light sleep:
+
+- `PWR_HOLD` / `GPIO45` and `PWR_LOCK` / `GPIO46` must remain driven high while
+  the ESP32-S3 sleeps. Without an explicit sleep GPIO configuration, ESP-IDF's
+  automatic sleep GPIO handling can let the latch pins stop holding the board in
+  the same powered state. USB power can mask this on the bench, but battery-only
+  light sleep depends on the latch pins staying asserted.
+- `POWER_OK` / `GPIO4` is both the active-low light-sleep wake source and the
+  normal app power button. The runtime arms wake-only suppression before calling
+  `esp_light_sleep_start()` so the wake-causing press cannot leak into
+  `app_shell` as a normal long-press shutdown request. The suppression is
+  cleared by the matching release/click event after wake.
+
 The light-sleep sequence is:
 
-1. Render the full-screen `Light sleep` message.
-2. Wait for the e-paper refresh to finish.
-3. Put the e-paper panel into sleep.
-4. Arm `POWER_OK` / `GPIO4` as an active-low light-sleep wake source.
-5. Call `esp_light_sleep_start()`.
-6. On wake, disable the GPIO wake source.
-7. Consume the wake-causing power-button event as wake-only.
-8. Restore the display with a full refresh.
-9. Recover the GT911 touch controller before normal touch input resumes.
+1. Configure `PWR_HOLD` / `GPIO45` and `PWR_LOCK` / `GPIO46` to remain driven
+   high during light sleep.
+2. Configure `POWER_OK` / `GPIO4` as an input with pull-up.
+3. Wait for `POWER_OK` / `GPIO4` to be released/high.
+4. Arm `POWER_OK` / `GPIO4` through EXT1 as an active-low light-sleep wake source.
+5. Arm wake-only `POWER_OK` event suppression.
+6. Render the full-screen `Light sleep` message.
+7. Wait for the e-paper refresh to finish and put the panel into sleep.
+8. Call `esp_light_sleep_start()`.
+9. On wake, disable the EXT1 wake source and restore GPIO4 to digital input mode.
+10. Commit the wake transition immediately, without queueing a second wake event.
+11. Consume the wake-causing power-button event as wake-only.
+12. Restore the display with a forced full refresh, even if software state has
+    already moved back to awake.
+13. Recover the GT911 touch controller before normal touch input resumes.
 
 GT911 recovery is required after ESP light sleep on this hardware. The touch
 controller can remain unresponsive after the ESP32-S3 wakes unless

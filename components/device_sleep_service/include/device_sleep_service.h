@@ -86,6 +86,7 @@ void SetBlockerProvider(BlockerProvider provider, void* context);
 
 bool NotifyNoMotionStarted();
 void NotifyUserActivity(ActivitySource source = ActivitySource::kInteraction);
+bool NotifyLightSleepWake(TransitionReason reason = TransitionReason::kInteraction);
 void NotifyMotionDetected();
 
 const char* StageName(Stage stage);
