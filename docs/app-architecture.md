@@ -35,6 +35,9 @@ The repository is currently a minimal ESP-IDF application scaffold with:
 - A ported LSM6DS3 / LSM6DS3TR-C inertial sensor driver.
 - An `imu_service` component that owns app-facing IMU bring-up and direct sample
   logging for first hardware validation.
+- A ported SHT40 temperature/humidity sensor driver.
+- An `environment_service` component that owns app-facing ambient
+  temperature/humidity bring-up and sample logging.
 
 The rest of the board peripherals have not been ported yet.
 
@@ -81,6 +84,10 @@ components/
     include/
       imu_service.h
     imu_service.cpp
+  environment_service/
+    include/
+      environment_service.h
+    environment_service.cpp
   sd_card/
     include/
       sd_card.h
@@ -110,6 +117,10 @@ components/
     priv_include/
       lsm6ds3_reg.h
     lsm6ds3.cpp
+  sht40/
+    include/
+      sht40.h
+    sht40.cpp
 partitions.csv
 sdkconfig
 sdkconfig.defaults
@@ -146,6 +157,8 @@ The current early startup sequence is:
 - Initializes `display_service` and draws the initial e-paper demo screen.
 - Initializes `touch_service` and logs app-facing touch events.
 - Initializes `imu_service` and logs three direct IMU samples for bring-up.
+- Initializes `environment_service` and logs three direct SHT40 samples for
+  bring-up.
 - Initializes `storage_service` and logs one MicroSD diagnostic snapshot.
 - Initializes `button_service`.
 - Subscribes to button and touch events, routes app-level display demo intents,
@@ -268,6 +281,8 @@ scope.
 - PCF8563 I2C address: `0x51`
 - LSM6DS3TR-C I2C address: `0x6A`
 - IMU interrupt pin: `GPIO_NUM_7`
+- SHT40 primary I2C address: `0x44`
+- SHT40 alternate I2C address: `0x45`
 - I2C glitch filter and bus speed constants
 
 `sticky_board.h/.cpp` owns small board helper functions:
@@ -292,14 +307,15 @@ scope.
 - `sticky_board::AddBq27220Device(...)`
 - `sticky_board::AddPcf8563Device(...)`
 - `sticky_board::AddLsm6ds3Device(...)`
+- `sticky_board::AddSht40Device(...)`
 
 Keep this layer focused on raw board mechanics: pins, buses, GPIO polarity, ADC
 setup, and latch timing.
 
-The sensor I2C bus is shared by the BQ27220, PCF8563, and LSM6DS3TR-C. New
-callers should use `sticky_board::EnsureSensorI2cBus(...)` instead of creating
-their own bus handle. This keeps the ESP-IDF bus object singleton-like while
-allowing each service to add its own device handle.
+The sensor I2C bus is shared by the BQ27220, PCF8563, LSM6DS3TR-C, and SHT40.
+New callers should use `sticky_board::EnsureSensorI2cBus(...)` instead of
+creating their own bus handle. This keeps the ESP-IDF bus object singleton-like
+while allowing each service to add its own device handle.
 
 Power-latch GPIOs are configured as input/output during bring-up so firmware can
 both drive `PWR_HOLD` / `PWR_LOCK` and log the observed pad levels for hardware
@@ -656,6 +672,49 @@ interrupt on `GPIO7`. FIFO and interrupt-driven wake/sleep policy should be
 added only after direct samples are verified on hardware and the shared
 `GPIO7` ownership with the BQ27220 interrupt path is designed explicitly.
 
+### `components/sht40`
+
+This is the generic SHT40 temperature/humidity sensor driver ported from:
+
+```text
+/Users/tieuvong/Desktop/folloup/sticky_port/Device_Peripheral_Demo 7.38.00 AM/components/sht40
+```
+
+The driver should stay board-agnostic. It receives an initialized
+`i2c_master_dev_handle_t` from its caller and exposes soft reset, serial-number
+read, and temperature/humidity measurement helpers. It should not own
+Sticky-specific GPIO numbers, I2C ports, address fallback policy, or app-level
+environment display/logging policy.
+
+Current scope:
+
+- soft reset with command `0x94`
+- read serial number with command `0x89`
+- read high/medium/low precision temperature and humidity measurements
+- validate SHT40 CRC bytes before accepting serial or measurement data
+- convert raw values to degrees Celsius and relative humidity percent
+
+### `components/environment_service`
+
+This is the app-facing ambient environment layer. It composes `board`
+sensor-bus helpers with the generic SHT40 driver.
+
+Current scope:
+
+- initialize the shared sensor I2C bus on `I2C_NUM_1`
+- try SHT40 primary address `0x44`
+- fall back to SHT40 alternate address `0x45` when the primary probe fails
+- read the sensor serial number before marking the service initialized
+- reset the shared sensor I2C bus after failed SHT40 serial/measurement
+  transactions so a bad probe does not poison later shared-bus users
+- log three high-precision temperature/humidity samples at startup for hardware
+  validation
+- expose `environment_service::ReadSample(...)` for direct app-facing reads
+
+The first port intentionally does not create a background sampling task or draw
+environment values to e-paper. Product policy for sampling cadence, smoothing,
+weather UI, and persistence should be layered above this service later.
+
 ## Hardware Notes
 
 - Main controller: `ESP32-S3R8`.
@@ -664,6 +723,7 @@ added only after direct samples are verified on hardware and the shared
 - BQ27220 address: `0x55`.
 - PCF8563 address: `0x51`.
 - LSM6DS3TR-C address: `0x6A`.
+- SHT40 address: primary `0x44`, fallback `0x45`.
 - Buzzer PWM output: `GPIO48`.
 - MicroSD uses SDSPI mode only: `SD_CLK/SCK` on `GPIO13`, `SD_CMD/MOSI` on
   `GPIO14`, `SD_D0/MISO` on `GPIO12`, `SD_D3/CS` on `GPIO8`, `SD_PWR_EN` on
@@ -690,7 +750,7 @@ added only after direct samples are verified on hardware and the shared
 - Power-input voltage is sensed on `GPIO9`. The service currently logs ADC pin
   millivolts, not reconstructed VIN, because the divider ratio has not been
   confirmed in this project.
-- BQ27220, PCF8563, and LSM6DS3TR-C share the sensor I2C bus.
+- BQ27220, PCF8563, LSM6DS3TR-C, and SHT40 share the sensor I2C bus.
 - Sensor I2C uses `GPIO0` for SCL and `GPIO1` for SDA.
 - `GPIO0` is also an ESP32-S3 boot strapping/download pin. Create the sensor
   I2C bus only after boot has completed and startup pin levels are no longer
@@ -744,7 +804,11 @@ app / integration code
   -> imu_service
        -> board
        -> lsm6ds3 -> ESP-IDF I2C/SPI drivers
+  -> environment_service
+       -> board
+       -> sht40 -> ESP-IDF I2C driver
 ```
 
-Avoid making `bq27220`, `pcf8563`, `sd_card`, `epaper_panel`, `gt911`, or
-`lsm6ds3` depend on `board`; that would make generic drivers board-specific.
+Avoid making `bq27220`, `pcf8563`, `sd_card`, `epaper_panel`, `gt911`,
+`lsm6ds3`, or `sht40` depend on `board`; that would make generic drivers
+board-specific.

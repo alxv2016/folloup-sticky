@@ -3,6 +3,7 @@
 #include "buzzer_service.h"
 #include "button_service.h"
 #include "display_service.h"
+#include "environment_service.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
@@ -284,6 +285,16 @@ void InitImuService()
     imu_service::LogDebugStatus();
 }
 
+void InitEnvironmentService()
+{
+    const esp_err_t err = environment_service::Init();
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "Environment service init failed: %s", esp_err_to_name(err));
+        return;
+    }
+    environment_service::LogDebugStatus();
+}
+
 }  // namespace
 
 void Run()
@@ -296,6 +307,7 @@ void Run()
     InitDisplayService();
     InitTouchService();
     InitImuService();
+    InitEnvironmentService();
     InitStorageService();
     StartShutdownTask();
     InitButtonService();

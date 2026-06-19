@@ -544,4 +544,22 @@ esp_err_t AddLsm6ds3Device(i2c_master_bus_handle_t bus,
     return i2c_master_bus_add_device(bus, &config, out_device);
 }
 
+esp_err_t AddSht40Device(i2c_master_bus_handle_t bus, uint8_t address,
+                         i2c_master_dev_handle_t* out_device)
+{
+    if (bus == nullptr || out_device == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (address != STICKY_SHT40_I2C_ADDR && address != STICKY_SHT40_ALT_I2C_ADDR) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    i2c_device_config_t config = {};
+    config.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+    config.device_address = address;
+    config.scl_speed_hz = STICKY_I2C_SPEED_HZ;
+
+    return i2c_master_bus_add_device(bus, &config, out_device);
+}
+
 }  // namespace sticky_board

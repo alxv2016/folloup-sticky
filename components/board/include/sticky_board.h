@@ -46,6 +46,8 @@ esp_err_t AddPcf8563Device(i2c_master_bus_handle_t bus,
                            i2c_master_dev_handle_t* out_device);
 esp_err_t AddLsm6ds3Device(i2c_master_bus_handle_t bus,
                            i2c_master_dev_handle_t* out_device);
+esp_err_t AddSht40Device(i2c_master_bus_handle_t bus, uint8_t address,
+                         i2c_master_dev_handle_t* out_device);
 
 }  // namespace sticky_board
 
