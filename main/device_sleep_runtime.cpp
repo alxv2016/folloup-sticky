@@ -21,6 +21,7 @@
 #include "recording_service.h"
 #include "sticky_board_config.h"
 #include "storage_service.h"
+#include "touch_service.h"
 
 namespace device_sleep_runtime {
 namespace {
@@ -218,6 +219,13 @@ void ProcessAutoSleepEvent(const device_sleep_service::Event& event)
             break;
         case device_sleep_service::Action::kWakeFromLightSleep:
             err = display_service::WakeDisplay();
+            if (touch_service::IsInitialized()) {
+                const esp_err_t touch_err = touch_service::RecoverAfterLightSleep();
+                if (touch_err != ESP_OK) {
+                    ESP_LOGW(kTag, "Touch recovery after light sleep failed: %s",
+                             esp_err_to_name(touch_err));
+                }
+            }
             break;
         case device_sleep_service::Action::kNone:
         default:

@@ -26,6 +26,7 @@ using EventHandler = void (*)(const TouchEventInfo& event, void* context);
 esp_err_t Init();
 bool IsInitialized();
 void SetEventHandler(EventHandler handler, void* context);
+esp_err_t RecoverAfterLightSleep();
 
 }  // namespace touch_service
 
