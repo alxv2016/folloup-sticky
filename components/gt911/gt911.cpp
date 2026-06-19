@@ -158,7 +158,7 @@ bool GT911::is_available()
         return false;
     }
 
-    ESP_LOGI(kTag, "status read: addr=0x%02X status=0x%02X ready=%u count=%u",
+    ESP_LOGD(kTag, "status read: addr=0x%02X status=0x%02X ready=%u count=%u",
              addr_, status, static_cast<unsigned>((status & 0x80U) != 0U),
              static_cast<unsigned>(status & 0x0FU));
 
@@ -168,7 +168,7 @@ bool GT911::is_available()
 
     const uint8_t touch_count = status & 0x0FU;
     if (touch_count == 0U) {
-        ESP_LOGI(kTag, "status ready with no active touch, clearing status");
+        ESP_LOGD(kTag, "status ready with no active touch, clearing status");
         (void)clearStatus();
         return false;
     }
@@ -201,7 +201,7 @@ int8_t GT911::read_points(GTPoint* points, uint8_t max_points)
         return -1;
     }
 
-    ESP_LOGI(kTag, "read_points: addr=0x%02X status=0x%02X ready=%u count=%u max=%u",
+    ESP_LOGD(kTag, "read_points: addr=0x%02X status=0x%02X ready=%u count=%u max=%u",
              addr_, status, static_cast<unsigned>((status & 0x80U) != 0U),
              static_cast<unsigned>(status & 0x0FU),
              static_cast<unsigned>(max_points));
@@ -212,7 +212,7 @@ int8_t GT911::read_points(GTPoint* points, uint8_t max_points)
 
     const uint8_t touch_count = status & 0x0FU;
     if (touch_count == 0U) {
-        ESP_LOGI(kTag, "read_points: ready with no active touch, clearing status");
+        ESP_LOGD(kTag, "read_points: ready with no active touch, clearing status");
         (void)clearStatus();
         return 0;
     }
@@ -373,7 +373,7 @@ bool GT911::clearStatus()
     cached_status_ = 0;
     const bool ok = writeRegister(GT911_REG_STATUS, 0);
     if (ok) {
-        ESP_LOGI(kTag, "clear status ok addr=0x%02X", addr_);
+        ESP_LOGD(kTag, "clear status ok addr=0x%02X", addr_);
     }
     return ok;
 }

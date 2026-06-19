@@ -493,9 +493,11 @@ size_t SdCard::AppendToFile(const char* path, const char* buffer, size_t length)
         return 0;
     }
 
+    errno = 0;
     FILE* file = fopen(path, "ab");
     if (file == nullptr) {
-        ESP_LOGE(kTag, "failed to open file for append: %s", path);
+        ESP_LOGE(kTag, "failed to open file for append: %s errno=%d (%s)",
+                 path, errno, strerror(errno));
         return 0;
     }
 
@@ -510,9 +512,11 @@ bool SdCard::TruncateFile(const char* path) const
         return false;
     }
 
+    errno = 0;
     FILE* file = fopen(path, "wb");
     if (file == nullptr) {
-        ESP_LOGE(kTag, "failed to truncate file: %s", path);
+        ESP_LOGE(kTag, "failed to truncate file: %s errno=%d (%s)",
+                 path, errno, strerror(errno));
         return false;
     }
     fclose(file);
@@ -554,13 +558,20 @@ bool SdCard::WriteBufferToFile(const char* path, const uint8_t* buffer, size_t b
         return false;
     }
 
+    errno = 0;
     FILE* file = fopen(path, "wb");
     if (file == nullptr) {
-        ESP_LOGW(kTag, "failed to open file for write: %s", path);
+        ESP_LOGW(kTag, "failed to open file for write: %s errno=%d (%s)",
+                 path, errno, strerror(errno));
         return false;
     }
 
     size_t bytes_written = fwrite(buffer, 1, buffer_size, file);
+    if (bytes_written != buffer_size) {
+        ESP_LOGW(kTag, "short write: %s wrote=%u expected=%u errno=%d (%s)",
+                 path, static_cast<unsigned>(bytes_written),
+                 static_cast<unsigned>(buffer_size), errno, strerror(errno));
+    }
     fclose(file);
     return bytes_written == buffer_size;
 }

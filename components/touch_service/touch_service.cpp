@@ -42,7 +42,7 @@ void DispatchTouchPoints(int8_t count, const GTPoint* points)
         event.points[i].y = points[i].y;
         event.points[i].size = points[i].size;
         event.points[i].id = points[i].id;
-        ESP_LOGI(kTag, "Touch point[%u]: x=%u y=%u size=%u id=%u",
+        ESP_LOGD(kTag, "Touch point[%u]: x=%u y=%u size=%u id=%u",
                  static_cast<unsigned>(i), static_cast<unsigned>(event.points[i].x),
                  static_cast<unsigned>(event.points[i].y),
                  static_cast<unsigned>(event.points[i].size),
@@ -100,7 +100,7 @@ void TouchTask(void*)
             continue;
         }
 
-        ESP_LOGI(kTag, "Servicing touch controller: notifications=%lu int_level=%d",
+        ESP_LOGD(kTag, "Servicing touch controller: notifications=%lu int_level=%d",
                  static_cast<unsigned long>(notifications), int_level);
         TouchController().loop();
     }

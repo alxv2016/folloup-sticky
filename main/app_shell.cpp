@@ -193,7 +193,7 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
 
 void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
 {
-    ESP_LOGI(kTag, "Touch intent: count=%u", static_cast<unsigned>(event.count));
+    ESP_LOGD(kTag, "Touch intent: count=%u", static_cast<unsigned>(event.count));
     if (event.count > 0) {
         const TickType_t now = xTaskGetTickCount();
         const bool new_contact =
@@ -216,7 +216,7 @@ void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
     }
 
     for (uint8_t i = 0; i < event.count; ++i) {
-        ESP_LOGI(kTag, "Touch intent point[%u]: x=%u y=%u size=%u id=%u",
+        ESP_LOGD(kTag, "Touch intent point[%u]: x=%u y=%u size=%u id=%u",
                  static_cast<unsigned>(i), static_cast<unsigned>(event.points[i].x),
                  static_cast<unsigned>(event.points[i].y),
                  static_cast<unsigned>(event.points[i].size),
