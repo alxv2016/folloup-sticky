@@ -1,7 +1,9 @@
 #include "display_service.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
+#include <mutex>
 #include <string_view>
 
 #include "epaper_panel.h"
@@ -41,6 +43,26 @@ struct DisplayCommand {
 bool s_initialized = false;
 QueueHandle_t s_command_queue = nullptr;
 TaskHandle_t s_display_task = nullptr;
+std::mutex s_panel_mutex;
+bool s_display_sleeping = false;
+std::atomic<bool> s_refresh_in_progress = false;
+DemoSelection s_current_selection = DemoSelection::kTop;
+
+class RefreshBusyGuard {
+public:
+    RefreshBusyGuard()
+    {
+        s_refresh_in_progress.store(true, std::memory_order_relaxed);
+    }
+
+    ~RefreshBusyGuard()
+    {
+        s_refresh_in_progress.store(false, std::memory_order_relaxed);
+    }
+
+    RefreshBusyGuard(const RefreshBusyGuard&) = delete;
+    RefreshBusyGuard& operator=(const RefreshBusyGuard&) = delete;
+};
 
 EpaperPanelConfig BuildPanelConfig()
 {
@@ -106,6 +128,15 @@ const uint8_t* GlyphFor(char c)
         0b10000,
         0b11111,
     };
+    static constexpr uint8_t kG[kGlyphHeight] = {
+        0b01110,
+        0b10001,
+        0b10000,
+        0b10111,
+        0b10001,
+        0b10001,
+        0b01110,
+    };
     static constexpr uint8_t kL[kGlyphHeight] = {
         0b10000,
         0b10000,
@@ -124,6 +155,33 @@ const uint8_t* GlyphFor(char c)
         0b10001,
         0b01110,
     };
+    static constexpr uint8_t kA[kGlyphHeight] = {
+        0b01110,
+        0b10001,
+        0b10001,
+        0b11111,
+        0b10001,
+        0b10001,
+        0b10001,
+    };
+    static constexpr uint8_t kI[kGlyphHeight] = {
+        0b11111,
+        0b00100,
+        0b00100,
+        0b00100,
+        0b00100,
+        0b00100,
+        0b11111,
+    };
+    static constexpr uint8_t kP[kGlyphHeight] = {
+        0b11110,
+        0b10001,
+        0b10001,
+        0b11110,
+        0b10000,
+        0b10000,
+        0b10000,
+    };
     static constexpr uint8_t kR[kGlyphHeight] = {
         0b11110,
         0b10001,
@@ -132,6 +190,24 @@ const uint8_t* GlyphFor(char c)
         0b10100,
         0b10010,
         0b10001,
+    };
+    static constexpr uint8_t kS[kGlyphHeight] = {
+        0b01111,
+        0b10000,
+        0b10000,
+        0b01110,
+        0b00001,
+        0b00001,
+        0b11110,
+    };
+    static constexpr uint8_t kT[kGlyphHeight] = {
+        0b11111,
+        0b00100,
+        0b00100,
+        0b00100,
+        0b00100,
+        0b00100,
+        0b00100,
     };
     static constexpr uint8_t kW[kGlyphHeight] = {
         0b10001,
@@ -142,8 +218,20 @@ const uint8_t* GlyphFor(char c)
         0b10101,
         0b01010,
     };
+    static constexpr uint8_t kY[kGlyphHeight] = {
+        0b10001,
+        0b10001,
+        0b01010,
+        0b00100,
+        0b00100,
+        0b00100,
+        0b00100,
+    };
 
     switch (c) {
+        case 'A':
+        case 'a':
+            return kA;
         case 'H':
         case 'h':
             return kH;
@@ -153,18 +241,36 @@ const uint8_t* GlyphFor(char c)
         case 'E':
         case 'e':
             return kE;
+        case 'G':
+        case 'g':
+            return kG;
         case 'L':
         case 'l':
             return kL;
         case 'O':
         case 'o':
             return kO;
+        case 'I':
+        case 'i':
+            return kI;
+        case 'P':
+        case 'p':
+            return kP;
         case 'R':
         case 'r':
             return kR;
+        case 'S':
+        case 's':
+            return kS;
+        case 'T':
+        case 't':
+            return kT;
         case 'W':
         case 'w':
             return kW;
+        case 'Y':
+        case 'y':
+            return kY;
         default:
             return kSpace;
     }
@@ -275,6 +381,22 @@ void DrawDemoFrame(uint8_t* framebuffer, DemoSelection selection)
                          selection == DemoSelection::kBottom);
 }
 
+void DrawCenteredLine(uint8_t* framebuffer, int center_y, std::string_view text, bool black)
+{
+    const int text_x = (kPortraitWidth - TextWidth(text)) / 2;
+    const int text_y = center_y - (kGlyphHeight * kTextScale) / 2;
+    DrawText(framebuffer, text_x, text_y, text, black);
+}
+
+void DrawTwoLineMessage(uint8_t* framebuffer, std::string_view first, std::string_view second)
+{
+    constexpr int kLineDistance = 62;
+    const int center_y = kPortraitHeight / 2;
+
+    DrawCenteredLine(framebuffer, center_y - kLineDistance / 2, first, true);
+    DrawCenteredLine(framebuffer, center_y + kLineDistance / 2, second, true);
+}
+
 void LogMetrics(const EpaperPanelMetrics& metrics)
 {
     ESP_LOGI(kTag,
@@ -292,6 +414,7 @@ esp_err_t ApplyDemoSelection(DemoSelection selection, bool full_refresh)
     panel.Clear(true);
     DrawDemoFrame(panel.framebuffer(), selection);
 
+    RefreshBusyGuard refresh_busy;
     const esp_err_t err = full_refresh ? panel.RefreshFullBase()
                                        : panel.RefreshPartialFullScreen();
     if (err != ESP_OK) {
@@ -299,6 +422,21 @@ esp_err_t ApplyDemoSelection(DemoSelection selection, bool full_refresh)
     }
 
     LogMetrics(panel.metrics());
+    s_current_selection = selection;
+    return ESP_OK;
+}
+
+esp_err_t ApplyPanelSleepMessage(std::string_view first, std::string_view second)
+{
+    EpaperPanel& panel = Panel();
+    panel.Clear(true);
+    DrawTwoLineMessage(panel.framebuffer(), first, second);
+
+    RefreshBusyGuard refresh_busy;
+    ESP_RETURN_ON_ERROR(panel.RefreshFullBase(), kTag, "sleep message refresh failed");
+    LogMetrics(panel.metrics());
+    ESP_RETURN_ON_ERROR(panel.Sleep(), kTag, "panel sleep failed");
+    s_display_sleeping = true;
     return ESP_OK;
 }
 
@@ -312,6 +450,13 @@ void DisplayTask(void*)
 
         ESP_LOGI(kTag, "Demo selection requested: %s",
                  command.selection == DemoSelection::kTop ? "top" : "bottom");
+        std::lock_guard<std::mutex> lock(s_panel_mutex);
+        if (s_display_sleeping) {
+            s_current_selection = command.selection;
+            ESP_LOGI(kTag, "Demo selection suppressed while display sleeping");
+            continue;
+        }
+
         const esp_err_t err = ApplyDemoSelection(command.selection, false);
         if (err != ESP_OK) {
             ESP_LOGW(kTag, "Demo partial refresh failed: %s", esp_err_to_name(err));
@@ -359,9 +504,12 @@ esp_err_t Init()
 
     EpaperPanel& panel = Panel();
     ESP_RETURN_ON_ERROR(panel.Initialize(), kTag, "panel initialize failed");
-    ESP_RETURN_ON_ERROR(ApplyDemoSelection(DemoSelection::kTop, true),
-                        kTag,
-                        "panel base refresh failed");
+    {
+        std::lock_guard<std::mutex> lock(s_panel_mutex);
+        ESP_RETURN_ON_ERROR(ApplyDemoSelection(DemoSelection::kTop, true),
+                            kTag,
+                            "panel base refresh failed");
+    }
     ESP_RETURN_ON_ERROR(StartDisplayTask(), kTag, "display task init failed");
 
     s_initialized = true;
@@ -382,6 +530,61 @@ esp_err_t SelectDemoSelection(DemoSelection selection)
 
     const DisplayCommand command{selection};
     return xQueueOverwrite(s_command_queue, &command) == pdPASS ? ESP_OK : ESP_FAIL;
+}
+
+esp_err_t EnterDisplaySleep()
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    std::lock_guard<std::mutex> lock(s_panel_mutex);
+    if (s_display_sleeping) {
+        return ESP_OK;
+    }
+    ESP_RETURN_ON_ERROR(ApplyPanelSleepMessage("Display", "sleep"),
+                        kTag,
+                        "display sleep message failed");
+    ESP_LOGI(kTag, "Display entered sleep");
+    return ESP_OK;
+}
+
+esp_err_t EnterLightSleep()
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    std::lock_guard<std::mutex> lock(s_panel_mutex);
+    ESP_RETURN_ON_ERROR(ApplyPanelSleepMessage("Light", "sleep"),
+                        kTag,
+                        "light sleep message failed");
+    ESP_LOGI(kTag, "Display prepared for light sleep");
+    return ESP_OK;
+}
+
+esp_err_t WakeDisplay()
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    std::lock_guard<std::mutex> lock(s_panel_mutex);
+    if (!s_display_sleeping) {
+        return ESP_OK;
+    }
+
+    ESP_RETURN_ON_ERROR(ApplyDemoSelection(s_current_selection, true),
+                        kTag,
+                        "display wake refresh failed");
+    s_display_sleeping = false;
+    ESP_LOGI(kTag, "Display woke with full refresh");
+    return ESP_OK;
+}
+
+bool IsRefreshInProgress()
+{
+    return s_refresh_in_progress.load(std::memory_order_relaxed);
 }
 
 }  // namespace display_service

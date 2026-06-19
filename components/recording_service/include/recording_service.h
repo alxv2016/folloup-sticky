@@ -39,6 +39,8 @@ struct UiState {
     bool armed = false;
     bool recording = false;
     bool has_clip = false;
+    bool saving = false;
+    bool exporting = false;
     size_t recorded_samples = 0;
     uint32_t duration_ms = 0;
     uint32_t max_recording_ms = 0;

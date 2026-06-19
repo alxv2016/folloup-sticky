@@ -1,9 +1,12 @@
 #include "app_shell.h"
 
+#include <atomic>
+#include <cstdint>
 #include <cstdio>
 
 #include "buzzer_service.h"
 #include "button_service.h"
+#include "device_sleep_runtime.h"
 #include "display_service.h"
 #include "environment_service.h"
 #include "esp_err.h"
@@ -15,6 +18,7 @@
 #include "imu_service.h"
 #include "power_service.h"
 #include "recording_service.h"
+#include "sdkconfig.h"
 #include "storage_service.h"
 #include "touch_service.h"
 
@@ -23,6 +27,10 @@ namespace {
 
 constexpr const char* kTag = "AppShell";
 constexpr bool kEnablePowerButtonShutdown = true;
+constexpr uint32_t kAutoSleepDisplaySleepTimeoutSeconds =
+    CONFIG_FOLLOWUP_AUTO_SLEEP_DISPLAY_SLEEP_TIMEOUT_SECONDS;
+constexpr uint32_t kAutoSleepLightSleepTimeoutSeconds =
+    CONFIG_FOLLOWUP_AUTO_SLEEP_LIGHT_SLEEP_TIMEOUT_SECONDS;
 constexpr uint32_t kShutdownTaskStackWords = 3072;
 constexpr UBaseType_t kShutdownTaskPriority = 5;
 constexpr TickType_t kPowerButtonReleaseSettleDelay = pdMS_TO_TICKS(500);
@@ -30,7 +38,7 @@ constexpr TickType_t kTouchContactGap = pdMS_TO_TICKS(300);
 constexpr const char* kMicDemoWavName = "mic_demo.wav";
 
 TaskHandle_t s_shutdown_task = nullptr;
-bool s_power_button_shutdown_pending = false;
+std::atomic<bool> s_power_button_shutdown_pending = false;
 display_service::DemoSelection s_demo_selection = display_service::DemoSelection::kTop;
 bool s_touch_contact_active = false;
 TickType_t s_last_touch_event_tick = 0;
@@ -119,14 +127,21 @@ const char* RecordingStateName(recording_service::State state)
     }
 }
 
+bool IsShutdownPending(void*)
+{
+    return s_power_button_shutdown_pending.load(std::memory_order_relaxed);
+}
+
 void HandleRecordingEvent(const recording_service::Event& event, void*)
 {
     ESP_LOGI(kTag,
-             "Recording intent: state=%s armed=%d recording=%d has_clip=%d samples=%u duration_ms=%lu level=%u",
+             "Recording intent: state=%s armed=%d recording=%d has_clip=%d saving=%d exporting=%d samples=%u duration_ms=%lu level=%u",
              RecordingStateName(event.state),
              event.ui_state.armed ? 1 : 0,
              event.ui_state.recording ? 1 : 0,
              event.ui_state.has_clip ? 1 : 0,
+             event.ui_state.saving ? 1 : 0,
+             event.ui_state.exporting ? 1 : 0,
              static_cast<unsigned>(event.ui_state.recorded_samples),
              static_cast<unsigned long>(event.ui_state.duration_ms),
              static_cast<unsigned>(event.ui_state.input_level_percent));
@@ -137,6 +152,11 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
     ESP_LOGI(kTag, "Button intent: button=%s event=%s pressed_ms=%lu",
              ButtonIdName(event.button), ButtonEventName(event.event),
              static_cast<unsigned long>(event.pressed_ms));
+    if (device_sleep_runtime::ConsumeWakeOnlyPowerButtonEvent(event)) {
+        return;
+    }
+
+    device_sleep_runtime::NotifyUserActivity();
 
     switch (event.event) {
         case button_service::ButtonEvent::kSingleClick:
@@ -165,17 +185,17 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
     }
 
     if (event.event == button_service::ButtonEvent::kLongPressStart) {
-        s_power_button_shutdown_pending = true;
+        s_power_button_shutdown_pending.store(true, std::memory_order_relaxed);
         ESP_LOGW(kTag, "Power button long press detected; release to shutdown");
         return;
     }
 
     if (event.event != button_service::ButtonEvent::kLongPressUp ||
-        !s_power_button_shutdown_pending) {
+        !s_power_button_shutdown_pending.load(std::memory_order_relaxed)) {
         return;
     }
 
-    s_power_button_shutdown_pending = false;
+    s_power_button_shutdown_pending.store(false, std::memory_order_relaxed);
 
     if constexpr (!kEnablePowerButtonShutdown) {
         ESP_LOGW(kTag, "Power button released after long press; shutdown is disabled");
@@ -195,6 +215,8 @@ void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
 {
     ESP_LOGD(kTag, "Touch intent: count=%u", static_cast<unsigned>(event.count));
     if (event.count > 0) {
+        device_sleep_runtime::NotifyUserActivity();
+
         const TickType_t now = xTaskGetTickCount();
         const bool new_contact =
             !s_touch_contact_active || now - s_last_touch_event_tick >= kTouchContactGap;
@@ -353,6 +375,29 @@ void InitEnvironmentService()
     environment_service::LogDebugStatus();
 }
 
+void InitDeviceSleepRuntime()
+{
+    device_sleep_runtime::SetShutdownPendingProvider(IsShutdownPending, nullptr);
+
+    device_sleep_runtime::AutoSleepSettings settings = {};
+    settings.enabled = true;
+    settings.display_sleep_timeout_seconds = kAutoSleepDisplaySleepTimeoutSeconds;
+    settings.light_sleep_timeout_seconds = kAutoSleepLightSleepTimeoutSeconds;
+    settings.motion_wake_enabled = true;
+    settings.interaction_wake_enabled = true;
+
+    const esp_err_t err = device_sleep_runtime::StartAutoSleep(settings);
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "Device auto-sleep init failed: %s", esp_err_to_name(err));
+    }
+
+    const esp_err_t motion_err = device_sleep_runtime::StartMotionPolling();
+    if (motion_err != ESP_OK) {
+        ESP_LOGW(kTag, "Device sleep motion polling init failed: %s",
+                 esp_err_to_name(motion_err));
+    }
+}
+
 }  // namespace
 
 void Run()
@@ -366,6 +411,7 @@ void Run()
     InitTouchService();
     InitImuService();
     InitEnvironmentService();
+    InitDeviceSleepRuntime();
     InitStorageService();
     InitRecordingService();
     StartShutdownTask();

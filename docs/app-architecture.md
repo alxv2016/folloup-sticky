@@ -41,6 +41,8 @@ The repository is currently a minimal ESP-IDF application scaffold with:
 - A ported LSM6DS3 / LSM6DS3TR-C inertial sensor driver.
 - An `imu_service` component that owns app-facing IMU bring-up and direct sample
   logging for first hardware validation.
+- A `device_sleep_service` component that owns auto-sleep policy state,
+  inactivity timing, app-level blocker checks, and staged sleep events.
 - A ported SHT40 temperature/humidity sensor driver.
 - An `environment_service` component that owns app-facing ambient
   temperature/humidity bring-up and sample logging.
@@ -177,6 +179,9 @@ The current early startup sequence is:
 - Initializes `imu_service` and logs three direct IMU samples for bring-up.
 - Initializes `environment_service` and logs three direct SHT40 samples for
   bring-up.
+- Starts the auto-sleep runtime, which wires `device_sleep_service`, polls IMU
+  samples for inactivity, owns the auto-sleep worker task, and handles display
+  sleep/light sleep actions.
 - Initializes `storage_service` and logs one MicroSD diagnostic snapshot.
 - Initializes `recording_service`; when `/sdcard` is mounted, captures a short
   voice-input validation clip and saves it as `/sdcard/mic_demo.wav`.
@@ -197,6 +202,16 @@ latch-release timing does not run inside the button callback.
 Driver-specific wiring should stay out of `main/`; app startup should call
 service-level APIs instead. Add product-specific sequencing in `app_shell`, not
 inside reusable components.
+
+Auto-sleep is split across a policy component and a product runtime helper:
+`device_sleep_service` owns sleep state, timers, timeout validation, blocker
+state, and transition events, but it does not touch display, GPIO, or ESP sleep
+hardware. `main/device_sleep_runtime.cpp` owns product-specific auto-sleep
+runtime behavior: IMU inactivity polling, the event worker task, display sleep
+commands, ESP light-sleep entry, POWER_OK wake handling, and app-level blocker
+aggregation. `app_shell` should only provide settings, provide app-owned
+signals such as shutdown-pending state, start the runtime, and forward user
+activity.
 
 UP/DOWN single-click button events are routed by `app_shell` into
 `display_service` as demo selection intents. `display_service` owns the two-card

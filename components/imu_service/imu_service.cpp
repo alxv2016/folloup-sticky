@@ -179,7 +179,7 @@ esp_err_t ReadSample(ImuSample* out_sample)
     sample.read_error_count = s_imu->nonSuccessCounter;
 
     *out_sample = sample;
-    ESP_LOGI(kTag, "sample status=0x%02X accel_drdy=%d gyro_drdy=%d",
+    ESP_LOGD(kTag, "sample status=0x%02X accel_drdy=%d gyro_drdy=%d",
              status_reg,
              (status_reg & lsm6ds3::kStatusAccelDataReadyMask) != 0 ? 1 : 0,
              (status_reg & lsm6ds3::kStatusGyroDataReadyMask) != 0 ? 1 : 0);

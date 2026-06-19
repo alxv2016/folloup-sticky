@@ -1,5 +1,6 @@
 #include "storage_service.h"
 
+#include <atomic>
 #include <cstring>
 #include <vector>
 
@@ -21,6 +22,23 @@ constexpr size_t kMaxLoggedEntries = 5;
 
 bool s_initialized = false;
 esp_err_t s_mount_result = ESP_ERR_INVALID_STATE;
+std::atomic<bool> s_write_busy = false;
+
+class WriteBusyGuard {
+public:
+    WriteBusyGuard()
+    {
+        s_write_busy.store(true, std::memory_order_relaxed);
+    }
+
+    ~WriteBusyGuard()
+    {
+        s_write_busy.store(false, std::memory_order_relaxed);
+    }
+
+    WriteBusyGuard(const WriteBusyGuard&) = delete;
+    WriteBusyGuard& operator=(const WriteBusyGuard&) = delete;
+};
 
 SdCardPins BuildPins()
 {
@@ -65,6 +83,7 @@ void LogRootDirectory(SdCard& card)
 
 void RunProbeFile(SdCard& card)
 {
+    WriteBusyGuard write_busy;
     const bool write_ok = card.WriteBufferToFile(
         kProbePath,
         reinterpret_cast<const uint8_t*>(kProbeText),
@@ -142,6 +161,11 @@ void LogDebugStatus()
 bool IsMounted()
 {
     return Card().IsMounted();
+}
+
+bool IsWriteBusy()
+{
+    return s_write_busy.load(std::memory_order_relaxed);
 }
 
 const char* MountPoint()

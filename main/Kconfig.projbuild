@@ -1,0 +1,21 @@
+menu "Folloup Settings"
+
+    config FOLLOWUP_AUTO_SLEEP_DISPLAY_SLEEP_TIMEOUT_SECONDS
+        int "Display sleep timeout"
+        range 0 86400
+        default 10
+        help
+            Seconds of IMU-detected inactivity before the e-paper panel enters
+            display sleep. Set to 0 to disable the display-sleep stage.
+
+    config FOLLOWUP_AUTO_SLEEP_LIGHT_SLEEP_TIMEOUT_SECONDS
+        int "Light sleep timeout"
+        range 0 86400
+        default 30
+        help
+            Seconds of IMU-detected inactivity before the ESP32-S3 enters light
+            sleep. Set to 0 to disable the light-sleep stage. When both display
+            sleep and light sleep are enabled, this value must be greater than
+            or equal to the display sleep timeout.
+
+endmenu

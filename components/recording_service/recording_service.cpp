@@ -153,11 +153,31 @@ bool s_initialized = false;
 bool s_capture_armed = false;
 bool s_recording = false;
 bool s_has_clip = false;
+bool s_saving = false;
+bool s_exporting = false;
 uint8_t s_input_level_percent = 0;
 StopReason s_stop_reason = StopReason::kNone;
 PcmRingBuffer s_preroll_buffer;
 ClipBuffer s_clip_buffer;
 RecordedClipPtr s_last_clip;
+
+void SetSaveExportActive(bool active);
+
+class SaveExportGuard {
+public:
+    SaveExportGuard()
+    {
+        SetSaveExportActive(true);
+    }
+
+    ~SaveExportGuard()
+    {
+        SetSaveExportActive(false);
+    }
+
+    SaveExportGuard(const SaveExportGuard&) = delete;
+    SaveExportGuard& operator=(const SaveExportGuard&) = delete;
+};
 
 size_t PrerollCapacitySamples()
 {
@@ -192,6 +212,8 @@ UiState BuildUiStateLocked()
     state.armed = s_capture_armed;
     state.recording = s_recording;
     state.has_clip = s_has_clip;
+    state.saving = s_saving;
+    state.exporting = s_exporting;
     state.recorded_samples = s_clip_buffer.sample_count();
     if (s_has_clip && s_last_clip) {
         state.recorded_samples = s_last_clip->sample_count();
@@ -227,6 +249,17 @@ void Notify()
     if (handler != nullptr) {
         handler(BuildEvent(), context);
     }
+}
+
+void SetSaveExportActive(bool active)
+{
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        s_saving = active;
+        s_exporting = active;
+    }
+    ESP_LOGI(kTag, "Recording save/export %s", active ? "started" : "finished");
+    Notify();
 }
 
 WavHeader BuildWavHeader(const RecordedClip& clip)
@@ -360,6 +393,8 @@ esp_err_t Init()
         s_has_clip = false;
         s_capture_armed = false;
         s_recording = false;
+        s_saving = false;
+        s_exporting = false;
         s_stop_reason = StopReason::kNone;
         s_initialized = true;
     }
@@ -420,6 +455,8 @@ esp_err_t Arm()
         std::lock_guard<std::mutex> lock(s_mutex);
         s_capture_armed = true;
         s_recording = false;
+        s_saving = false;
+        s_exporting = false;
         s_stop_reason = StopReason::kNone;
         s_input_level_percent = 0;
         s_preroll_buffer.Clear();
@@ -491,6 +528,8 @@ esp_err_t Cancel()
         }
         s_capture_armed = false;
         s_recording = false;
+        s_saving = false;
+        s_exporting = false;
         s_stop_reason = StopReason::kCanceled;
         s_preroll_buffer.Clear();
         s_clip_buffer.Clear();
@@ -510,6 +549,8 @@ void DiscardClip()
         std::lock_guard<std::mutex> lock(s_mutex);
         s_last_clip.reset();
         s_has_clip = false;
+        s_saving = false;
+        s_exporting = false;
         if (!s_capture_armed && !s_recording) {
             s_stop_reason = StopReason::kNone;
         }
@@ -533,6 +574,8 @@ esp_err_t SaveLastClipWav(const char* path)
     if (!clip || clip->empty()) {
         return ESP_ERR_INVALID_STATE;
     }
+
+    SaveExportGuard save_export_guard;
 
     struct stat st = {};
     if (stat(path, &st) == 0) {
@@ -604,11 +647,13 @@ void LogDebugStatus()
 {
     const UiState state = GetUiState();
     ESP_LOGI(kTag,
-             "status: initialized=%d armed=%d recording=%d has_clip=%d samples=%u duration_ms=%lu level=%u stop_reason=%u",
+             "status: initialized=%d armed=%d recording=%d has_clip=%d saving=%d exporting=%d samples=%u duration_ms=%lu level=%u stop_reason=%u",
              state.initialized ? 1 : 0,
              state.armed ? 1 : 0,
              state.recording ? 1 : 0,
              state.has_clip ? 1 : 0,
+             state.saving ? 1 : 0,
+             state.exporting ? 1 : 0,
              static_cast<unsigned>(state.recorded_samples),
              static_cast<unsigned long>(state.duration_ms),
              static_cast<unsigned>(state.input_level_percent),
