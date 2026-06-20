@@ -21,8 +21,10 @@ The repository is currently a minimal ESP-IDF application scaffold with:
   diagnostic power/battery/RTC snapshot.
 - A `button_service` component that logs app-facing button events through
   Espressif's managed button component.
-- A `buzzer_service` component that owns PWM buzzer setup and app-facing sound
+- A `buzzer_service` component that owns PWM buzzer setup and low-level sound
   patterns.
+- A `feedback_service` component that owns app-facing interaction feedback
+  policy and maps app events onto buzzer patterns.
 - A ported `sd_card` component for SDSPI/FATFS MicroSD access.
 - A `storage_service` component that owns app-facing MicroSD mount, format, and
   debug status policy.
@@ -38,8 +40,8 @@ The repository is currently a minimal ESP-IDF application scaffold with:
   pre-roll buffering, PSRAM-backed clips, input-level tracking, and WAV export
   to MicroSD.
 - A ported mono SSD1677 e-paper panel driver.
-- A `display_service` component that owns app-facing e-paper bring-up and the
-  portrait storage action selector demo.
+- A `display_service` component that owns app-facing e-paper bring-up, blank
+  screen refresh, display sleep, and light-sleep recovery.
 - A ported GT911 capacitive touch controller driver.
 - A `touch_service` component that owns app-facing touch bring-up, interrupt
   servicing, and touch event logging.
@@ -83,6 +85,10 @@ components/
     include/
       buzzer_service.h
     buzzer_service.cpp
+  feedback_service/
+    include/
+      feedback_service.h
+    feedback_service.cpp
   storage_service/
     include/
       storage_service.h
@@ -191,8 +197,8 @@ The current early startup sequence is:
 - Asserts the Sticky power latch before OTA validation.
 - Initializes `power_service`.
 - Logs one power/battery diagnostic snapshot.
-- Initializes `buzzer_service` and requests the startup pattern.
-- Initializes `display_service` and draws the initial e-paper demo screen.
+- Initializes `feedback_service` and requests the startup feedback.
+- Initializes `display_service` and clears the e-paper panel to a blank screen.
 - Initializes `touch_service` and logs app-facing touch events.
 - Initializes `imu_service` and logs three direct IMU samples for bring-up.
 - Initializes `environment_service` and logs three direct SHT40 samples for
@@ -207,11 +213,11 @@ The current early startup sequence is:
   sdkconfig credentials, starts station mode when credentials exist, or starts
   AP setup mode when no credentials are available.
 - Initializes `storage_service` and logs one MicroSD diagnostic snapshot.
-- Initializes `recording_service`; when `/sdcard` is mounted, captures a short
-  voice-input validation clip and saves it as `/sdcard/mic_demo.wav`.
+- Initializes `recording_service` and logs recording status.
 - Initializes `button_service`.
-- Subscribes to button and touch events, routes app-level display demo intents,
-  and handles power-button shutdown intents.
+- Subscribes to button and touch events, forwards user activity into
+  auto-sleep, forwards interaction feedback into `feedback_service`, and handles
+  power-button shutdown intents.
 - Subscribes to Wi-Fi events and forwards connection state into
   `timezone_service` so network time sync starts after station connectivity is
   available.
@@ -235,9 +241,9 @@ around a simple split:
 - CPU0 is the system/network side. ESP-IDF already runs the main task,
   `esp_timer`, and Wi-Fi driver work there in the current `sdkconfig`, so app
   Wi-Fi/time coordination stays close to that side.
-- CPU1 is the product hardware/UI side. Display, touch, audio capture, storage
-  work, buzzer feedback, and sleep hardware transitions are kept away from
-  CPU0 as the app scales.
+- CPU1 is the product hardware/UI side. Touch, audio capture, storage work,
+  buzzer feedback, and sleep-driven display transitions are kept away from CPU0
+  as the app scales.
 
 On single-core builds, the shared task config maps the app core back to CPU0.
 
@@ -247,7 +253,6 @@ On single-core builds, the shared task config maps the app core back to CPU0.
 | `touch_service` | `touch_service` | 5 | CPU1 | GT911 interrupt servicing and app-facing touch events. |
 | `app_sleep` | `device_sleep_runtime` | 4 | CPU1 | Display sleep, light-sleep entry/exit, and wake recovery actions. |
 | `app_shutdown` | `app_shell` | 4 | CPU1 | Deferred power-latch release after POWER_OK long-press release. |
-| `display_service` | `display_service` | 3 | CPU1 | Queued e-paper demo refreshes. |
 | `sleep_motion` | `device_sleep_runtime` | 3 | CPU1 | 200 ms IMU polling and motion/stillness classification. |
 | `wifi_transition` | `wifi_service` | 3 | CPU0 | Wi-Fi station/AP/stop/disconnect transitions. |
 | `wifi_callbacks` | `wifi_service` | 3 | CPU0 | App-facing Wi-Fi event delivery outside ESP event callbacks. |
@@ -255,9 +260,9 @@ On single-core builds, the shared task config maps the app core back to CPU0.
 | `timezone_sync` | `timezone_service` | 2 | CPU0 | SNTP sync, system-time update, and RTC writeback. |
 | `buzzer` | `buzzer_service` | 2 | CPU1 | Non-critical PWM tone and pattern playback. |
 
-The mapping intentionally keeps long-running SD and display work below input
-and audio capture. Future tasks should be added to `task_config` first, with a
-short ownership rationale, rather than using local priority/core literals.
+The mapping intentionally keeps long-running SD work below input and audio
+capture. Future tasks should be added to `task_config` first, with a short
+ownership rationale, rather than using local priority/core literals.
 
 Driver-specific wiring should stay out of `main/`; app startup should call
 service-level APIs instead. Add product-specific sequencing in `app_shell`, not
@@ -331,42 +336,33 @@ Current auto-sleep behavior:
 - Stillness is detected only after a continuous `2 s` window where the
   axis-delta sum is at most `20 mg` and the largest axis delta is at most
   `8 mg`.
-- Display sleep renders the full-screen `Display sleep` message, waits for the
-  e-paper refresh to finish, and then puts the panel to sleep.
+- Display sleep refreshes the e-paper panel to a blank screen and then puts the
+  panel to sleep.
 - ESP32-S3 light sleep first configures `PWR_HOLD` / `GPIO45` and `PWR_LOCK` /
   `GPIO46` to remain driven high during light sleep, waits for `POWER_OK` /
   `GPIO4` to be released, and arms `POWER_OK` through EXT1 as the active-low
   wake source. It also arms wake-only `POWER_OK` event suppression before
   entering ESP light sleep so the wake press cannot become a normal long-press
-  shutdown request. It then renders the full-screen `Light sleep` message, waits
-  for the e-paper refresh to finish, puts the panel to sleep, and enters
+  shutdown request. It then refreshes the panel to a blank screen, puts the
+  panel to sleep, and enters
   `esp_light_sleep_start()`.
 - The wake-causing power-button events are consumed as wake-only after light
   sleep, so they do not trigger normal power-button behavior or leave
   `shutdown_pending` set as an auto-sleep blocker.
-- After light-sleep wake, the display is restored with a forced full refresh and
-  `touch_service` recovers the GT911 controller before normal touch input
-  resumes. The forced display refresh is intentional because e-paper retains the
-  `Light sleep` image even if software state has already returned to awake.
+- After light-sleep wake, the display is restored to a blank screen with a
+  forced full refresh and `touch_service` recovers the GT911 controller before
+  normal touch input resumes.
 - Inactivity is blocked while recording is active, armed, saving, or exporting;
   while shutdown is pending; while an e-paper refresh is active; during
   app-declared storage write activity; while AP setup mode is active; and while
   SNTP time sync is in progress.
-- The proven demo defaults are `10 s` for display sleep and `30 s` for light
+- The current bench defaults are `10 s` for display sleep and `30 s` for light
   sleep. Production defaults should be raised later when product behavior is no
   longer being tuned on the bench.
 
-UP/DOWN single-click button events are routed by `app_shell` into
-`display_service` as demo refresh intents for the `FORMAT SD` action card.
-DOWN double-click requests SD-card formatting. The earlier OTG action was
-removed for this board revision because schematic page 8 routes USB-C
-`USB_DP`/`USB_DN` into the CH343P USB-UART bridge, while ESP32-S3 native USB
-pins `GPIO19`/`GPIO20` are used by the PDM microphone path.
-
-Touch events are also routed by `app_shell` into the same display demo refresh
-path and request buzzer click feedback. `app_shell` uses a short touch-contact
-gap filter so repeated GT911 scan samples from one held finger do not
-continuously refresh the e-paper demo.
+SD-card formatting remains exposed through `storage_service`, but no demo
+button path currently invokes it. A future app UI should call the storage API
+through its own action/controller layer.
 
 ### `components/bq27220`
 
@@ -613,8 +609,9 @@ policy.
 
 ### `components/buzzer_service`
 
-This C++ component owns app-facing buzzer feedback. It uses ESP-IDF LEDC PWM on
-the Sticky buzzer pin and hides timer/channel/duty details from `main`.
+This C++ component owns low-level buzzer playback. It uses ESP-IDF LEDC PWM on
+the Sticky buzzer pin and hides timer/channel/duty details from app-facing
+services.
 
 Current scope:
 
@@ -626,17 +623,30 @@ Current scope:
 - `PlayTone(...)`, `PlayPattern(...)`, and `Stop()`
 - named startup, click, long-click, double-click, error, and shutdown patterns
 
-AppShell maps all button single-click, double-click, and long-press-start events
-to click, double-click, and long-click buzzer patterns. The shutdown task also
-requests the shutdown pattern before waiting for button-release settle and
-calling `power_service::RequestShutdown()`.
-
 The service drives tones at a 50 percent PWM duty cycle, which is the loudest
 useful square-wave drive for this passive PWM buzzer. A 100 percent duty cycle
 would be DC and would not produce the intended tone.
 
-AppShell may request patterns such as startup or shutdown, but it should not
-know about LEDC timer numbers, PWM duty values, or GPIO setup.
+App-facing code should normally call `feedback_service`, not this component
+directly. This keeps product feedback policy separate from PWM details.
+
+### `components/feedback_service`
+
+This C++ component owns app-facing haptic/audio feedback policy. It maps product
+events onto buzzer patterns without exposing buzzer hardware details to
+`app_shell`.
+
+Current scope:
+
+- initializes `buzzer_service`
+- maps startup, button click, button double-click, button long-press, touch
+  contact, shutdown, and error feedback onto buzzer patterns
+- keeps app-level feedback names separate from low-level tone/pattern names
+
+AppShell requests feedback events for button single-click, double-click,
+long-press-start, touch contact, startup, and shutdown. It should not know about
+LEDC timer numbers, PWM duty values, GPIO setup, or exact buzzer pattern
+composition.
 
 ### `components/sd_card`
 
@@ -747,8 +757,6 @@ Current scope:
 - expose `Arm()`, `Start()`, `Finish()`, `Cancel()`, `DiscardClip()`, and
   `GetRecordedClip()`
 - save the latest clip as a mono 16-bit PCM WAV file on MicroSD
-- run a boot-time validation capture to `/sdcard/mic_demo.wav` only when the SD
-  card is mounted
 
 The service does not implement playback. Future voice-product work should build
 VAD, upload/transcription, and display status on top of this service rather
@@ -808,12 +816,13 @@ Current scope:
 - initialize the shared SPI bus through `sticky_board::EnsureSharedSpiBus()`
 - enable e-paper panel power through `sticky_board::EnableEpaperPower()`
 - initialize the raw SSD1677 panel driver
-- draw the portrait FORMAT SD partial-refresh demo
-- perform the first `RefreshFullBase()` and log panel metrics
-- own the e-paper demo worker task so UP/DOWN button callbacks enqueue display
-  selection requests instead of blocking on panel refresh
-- redraw the demo framebuffer and call `RefreshPartialFullScreen()` for
-  selection changes
+- clear the physical panel to a blank white screen with `RefreshFullBase()`
+- keep display sleep and light-sleep preparation blank instead of rendering
+  transitional text
+- restore the blank app surface with a forced full refresh after display wake or
+  light-sleep recovery
+- log panel refresh metrics and expose refresh-in-progress state for
+  auto-sleep blocking
 
 `display_service` owns app-facing display policy. Driver-specific wiring and
 SSD1677 commands must stay out of `main`. Raw board pin ownership stays in
@@ -1067,7 +1076,8 @@ app / integration code
        -> bq27220 -> ESP-IDF I2C driver
        -> pcf8563 -> ESP-IDF I2C driver
   -> button_service -> espressif/button
-  -> buzzer_service -> board -> ESP-IDF LEDC driver
+  -> feedback_service
+       -> buzzer_service -> board -> ESP-IDF LEDC driver
   -> device_sleep_service
   -> storage_service
        -> board

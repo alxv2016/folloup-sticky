@@ -5,13 +5,8 @@
 
 namespace display_service {
 
-enum class DemoSelection {
-    kTop,
-};
-
 esp_err_t Init();
 bool IsInitialized();
-esp_err_t SelectDemoSelection(DemoSelection selection);
 esp_err_t EnterDisplaySleep();
 esp_err_t EnterLightSleep();
 esp_err_t WakeDisplay();

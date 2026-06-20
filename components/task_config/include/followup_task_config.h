@@ -17,7 +17,6 @@ inline constexpr UBaseType_t kPriorityRecordCapture = 5;
 inline constexpr UBaseType_t kPriorityTouch = 5;
 inline constexpr UBaseType_t kPriorityAppSleep = 4;
 inline constexpr UBaseType_t kPriorityAppShutdown = 4;
-inline constexpr UBaseType_t kPriorityDisplay = 3;
 inline constexpr UBaseType_t kPrioritySleepMotion = 3;
 inline constexpr UBaseType_t kPriorityWifiTransition = 3;
 inline constexpr UBaseType_t kPriorityWifiCallbacks = 3;
@@ -26,4 +25,3 @@ inline constexpr UBaseType_t kPriorityTimezoneSync = 2;
 inline constexpr UBaseType_t kPriorityBuzzer = 2;
 
 }  // namespace followup_task_config
-

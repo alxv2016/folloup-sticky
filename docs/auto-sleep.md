@@ -22,10 +22,10 @@ Auto sleep is split between policy and hardware runtime code:
 The device moves through three stages:
 
 - `awake`: normal app behavior.
-- `display_sleeping`: the e-paper panel has rendered `Display sleep` and then
-  entered panel sleep.
-- `light_sleeping`: the e-paper panel has rendered `Light sleep`, entered panel
-  sleep, and the ESP32-S3 has entered `esp_light_sleep_start()`.
+- `display_sleeping`: the e-paper panel has refreshed to a blank screen and
+  then entered panel sleep.
+- `light_sleeping`: the e-paper panel has refreshed to a blank screen, entered
+  panel sleep, and the ESP32-S3 has entered `esp_light_sleep_start()`.
 
 Motion or user interaction wakes the display from `display_sleeping`.
 `POWER_OK` / `GPIO4` wakes the ESP32-S3 from `light_sleeping`.
@@ -55,12 +55,12 @@ period, the runtime asks `display_service` to enter display sleep.
 
 The display sequence is:
 
-1. Render the full-screen `Display sleep` message.
+1. Refresh the e-paper panel to a blank screen.
 2. Wait for the e-paper refresh to finish.
 3. Put the e-paper panel into sleep.
-4. Suppress normal demo refreshes while the display is sleeping.
+4. Leave the panel asleep until motion or user interaction wakes it.
 
-Motion or user interaction wakes the display and restores the normal demo screen
+Motion or user interaction wakes the display and restores the blank app surface
 with a full refresh.
 
 ## Light Sleep
@@ -89,7 +89,7 @@ The light-sleep sequence is:
 3. Wait for `POWER_OK` / `GPIO4` to be released/high.
 4. Arm `POWER_OK` / `GPIO4` through EXT1 as an active-low light-sleep wake source.
 5. Arm wake-only `POWER_OK` event suppression.
-6. Render the full-screen `Light sleep` message.
+6. Refresh the e-paper panel to a blank screen.
 7. Wait for the e-paper refresh to finish and put the panel into sleep.
 8. Call `esp_light_sleep_start()`.
 9. On wake, disable the EXT1 wake source and restore GPIO4 to digital input mode.
@@ -133,7 +133,7 @@ The build-time settings live under `Folloup Settings`:
 - `CONFIG_FOLLOWUP_AUTO_SLEEP_DISPLAY_SLEEP_TIMEOUT_SECONDS`
 - `CONFIG_FOLLOWUP_AUTO_SLEEP_LIGHT_SLEEP_TIMEOUT_SECONDS`
 
-Current demo defaults:
+Current bench defaults:
 
 - display sleep: `10 s`
 - light sleep: `30 s`

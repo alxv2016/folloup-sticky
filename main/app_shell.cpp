@@ -2,9 +2,7 @@
 
 #include <atomic>
 #include <cstdint>
-#include <cstdio>
 
-#include "buzzer_service.h"
 #include "button_service.h"
 #include "device_sleep_runtime.h"
 #include "display_service.h"
@@ -13,6 +11,7 @@
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
+#include "feedback_service.h"
 #include "followup_task_config.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -36,59 +35,16 @@ constexpr uint32_t kAutoSleepLightSleepTimeoutSeconds =
     CONFIG_FOLLOWUP_AUTO_SLEEP_LIGHT_SLEEP_TIMEOUT_SECONDS;
 constexpr uint32_t kShutdownTaskStackWords = 3072;
 constexpr TickType_t kPowerButtonReleaseSettleDelay = pdMS_TO_TICKS(500);
-constexpr TickType_t kTouchContactGap = pdMS_TO_TICKS(300);
-constexpr const char* kMicDemoWavName = "mic_demo.wav";
+constexpr TickType_t kTouchFeedbackContactGap = pdMS_TO_TICKS(300);
 
 TaskHandle_t s_shutdown_task = nullptr;
 std::atomic<bool> s_power_button_shutdown_pending = false;
 bool s_touch_contact_active = false;
 TickType_t s_last_touch_event_tick = 0;
 
-void PlayBuzzerPattern(buzzer_service::Pattern pattern, const char* name)
+void PlayFeedback(feedback_service::FeedbackEvent event)
 {
-    const esp_err_t err = buzzer_service::PlayPattern(pattern);
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        ESP_LOGW(kTag, "Buzzer %s pattern failed: %s", name, esp_err_to_name(err));
-    }
-}
-
-void RequestDemoSelection(display_service::DemoSelection selection, const char* source)
-{
-    const esp_err_t err = display_service::SelectDemoSelection(selection);
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        ESP_LOGW(kTag, "Display demo selection from %s failed: %s",
-                 source, esp_err_to_name(err));
-        return;
-    }
-}
-
-const char* DemoActionName()
-{
-    return "format_sd";
-}
-
-bool IsStorageActionBlocked()
-{
-    const storage_service::Snapshot snapshot = storage_service::GetSnapshot();
-    return snapshot.mode != storage_service::Mode::kAppMounted ||
-           storage_service::IsWriteBusy();
-}
-
-void ActivateSelectedDemoAction()
-{
-    ESP_LOGI(kTag, "Activating selected demo action: %s", DemoActionName());
-    if (IsStorageActionBlocked()) {
-        const storage_service::Snapshot snapshot = storage_service::GetSnapshot();
-        ESP_LOGW(kTag, "Storage action ignored while mode=%s write_busy=%d",
-                 storage_service::ModeName(snapshot.mode),
-                 storage_service::IsWriteBusy() ? 1 : 0);
-        return;
-    }
-
-    const esp_err_t err = storage_service::RequestFormatSdCard();
-    if (err != ESP_OK) {
-        ESP_LOGW(kTag, "Format SD request failed: %s", esp_err_to_name(err));
-    }
+    (void)feedback_service::Play(event);
 }
 
 void ConfirmPendingOtaImage()
@@ -242,20 +198,13 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
 
     switch (event.event) {
         case button_service::ButtonEvent::kSingleClick:
-            PlayBuzzerPattern(buzzer_service::Pattern::kClick, "click");
-            if (event.button == button_service::ButtonId::kUp ||
-                event.button == button_service::ButtonId::kDown) {
-                RequestDemoSelection(display_service::DemoSelection::kTop, "button");
-            }
+            PlayFeedback(feedback_service::FeedbackEvent::kButtonClick);
             break;
         case button_service::ButtonEvent::kDoubleClick:
-            PlayBuzzerPattern(buzzer_service::Pattern::kDoubleClick, "double-click");
-            if (event.button == button_service::ButtonId::kDown) {
-                ActivateSelectedDemoAction();
-            }
+            PlayFeedback(feedback_service::FeedbackEvent::kButtonDoubleClick);
             break;
         case button_service::ButtonEvent::kLongPressStart:
-            PlayBuzzerPattern(buzzer_service::Pattern::kLongClick, "long-click");
+            PlayFeedback(feedback_service::FeedbackEvent::kButtonLongPress);
             break;
         default:
             break;
@@ -300,16 +249,14 @@ void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
     }
     if (event.count > 0) {
         device_sleep_runtime::NotifyUserActivity();
-
         const TickType_t now = xTaskGetTickCount();
         const bool new_contact =
-            !s_touch_contact_active || now - s_last_touch_event_tick >= kTouchContactGap;
+            !s_touch_contact_active ||
+            now - s_last_touch_event_tick >= kTouchFeedbackContactGap;
         s_touch_contact_active = true;
         s_last_touch_event_tick = now;
-
         if (new_contact) {
-            RequestDemoSelection(display_service::DemoSelection::kTop, "touch");
-            PlayBuzzerPattern(buzzer_service::Pattern::kClick, "touch");
+            PlayFeedback(feedback_service::FeedbackEvent::kTouchContact);
         }
     }
 
@@ -327,7 +274,7 @@ void ShutdownTask(void*)
     while (true) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         ESP_LOGW(kTag, "Shutdown request accepted; waiting for power button release settle");
-        PlayBuzzerPattern(buzzer_service::Pattern::kShutdown, "shutdown");
+        PlayFeedback(feedback_service::FeedbackEvent::kShutdown);
         vTaskDelay(kPowerButtonReleaseSettleDelay);
         ESP_LOGW(kTag, "Power button release settled; releasing power hold");
         const esp_err_t err = power_service::RequestShutdown();
@@ -368,20 +315,15 @@ void InitButtonService()
     }
 }
 
-void InitBuzzerService()
+void InitFeedbackService()
 {
-    const esp_err_t err = buzzer_service::Init();
+    const esp_err_t err = feedback_service::Init();
     if (err != ESP_OK) {
-        ESP_LOGW(kTag, "Buzzer service init failed: %s", esp_err_to_name(err));
+        ESP_LOGW(kTag, "Feedback service init failed: %s", esp_err_to_name(err));
         return;
     }
 
-    const esp_err_t play_err =
-        buzzer_service::PlayPattern(buzzer_service::Pattern::kStartup);
-    if (play_err != ESP_OK) {
-        ESP_LOGW(kTag, "Buzzer startup pattern failed: %s",
-                 esp_err_to_name(play_err));
-    }
+    PlayFeedback(feedback_service::FeedbackEvent::kStartup);
 }
 
 void InitDisplayService()
@@ -432,19 +374,6 @@ void InitRecordingService()
         return;
     }
 
-    recording_service::LogDebugStatus();
-    if (!storage_service::IsMounted()) {
-        ESP_LOGW(kTag, "Storage not mounted; skipping mic WAV capture demo");
-        return;
-    }
-
-    char wav_path[96] = {};
-    std::snprintf(wav_path, sizeof(wav_path), "%s/%s",
-                  storage_service::MountPoint(), kMicDemoWavName);
-    const esp_err_t capture_err = recording_service::RecordDebugClipToWav(wav_path);
-    if (capture_err != ESP_OK) {
-        ESP_LOGW(kTag, "Mic WAV capture demo failed: %s", esp_err_to_name(capture_err));
-    }
     recording_service::LogDebugStatus();
 }
 
@@ -508,7 +437,7 @@ void Run()
     ConfirmPendingOtaImage();
     ESP_ERROR_CHECK(power_service::Init());
     power_service::LogDebugStatus();
-    InitBuzzerService();
+    InitFeedbackService();
     InitDisplayService();
     InitTouchService();
     InitImuService();
