@@ -47,6 +47,45 @@ void PlayFeedback(feedback_service::FeedbackEvent event)
     (void)feedback_service::Play(event);
 }
 
+void RequestDemoSelection(display_service::DemoSelection selection, const char* source)
+{
+    const esp_err_t err = display_service::SelectDemoSelection(selection);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Display demo selection from %s failed: %s",
+                 source, esp_err_to_name(err));
+        return;
+    }
+}
+
+const char* DemoActionName()
+{
+    return "format_sd";
+}
+
+bool IsStorageActionBlocked()
+{
+    const storage_service::Snapshot snapshot = storage_service::GetSnapshot();
+    return snapshot.mode != storage_service::Mode::kAppMounted ||
+           storage_service::IsWriteBusy();
+}
+
+void ActivateSelectedDemoAction()
+{
+    ESP_LOGI(kTag, "Activating selected demo action: %s", DemoActionName());
+    if (IsStorageActionBlocked()) {
+        const storage_service::Snapshot snapshot = storage_service::GetSnapshot();
+        ESP_LOGW(kTag, "Storage action ignored while mode=%s write_busy=%d",
+                 storage_service::ModeName(snapshot.mode),
+                 storage_service::IsWriteBusy() ? 1 : 0);
+        return;
+    }
+
+    const esp_err_t err = storage_service::RequestFormatSdCard();
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "Format SD request failed: %s", esp_err_to_name(err));
+    }
+}
+
 void ConfirmPendingOtaImage()
 {
     const esp_partition_t* running = esp_ota_get_running_partition();
@@ -199,9 +238,16 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
     switch (event.event) {
         case button_service::ButtonEvent::kSingleClick:
             PlayFeedback(feedback_service::FeedbackEvent::kButtonClick);
+            if (event.button == button_service::ButtonId::kUp ||
+                event.button == button_service::ButtonId::kDown) {
+                RequestDemoSelection(display_service::DemoSelection::kTop, "button");
+            }
             break;
         case button_service::ButtonEvent::kDoubleClick:
             PlayFeedback(feedback_service::FeedbackEvent::kButtonDoubleClick);
+            if (event.button == button_service::ButtonId::kDown) {
+                ActivateSelectedDemoAction();
+            }
             break;
         case button_service::ButtonEvent::kLongPressStart:
             PlayFeedback(feedback_service::FeedbackEvent::kButtonLongPress);
@@ -256,6 +302,7 @@ void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
         s_touch_contact_active = true;
         s_last_touch_event_tick = now;
         if (new_contact) {
+            RequestDemoSelection(display_service::DemoSelection::kTop, "touch");
             PlayFeedback(feedback_service::FeedbackEvent::kTouchContact);
         }
     }
