@@ -547,6 +547,10 @@ const char* BlockerReasonName(BlockerReason reason)
             return "display_refresh";
         case BlockerReason::kStorageWrite:
             return "storage_write";
+        case BlockerReason::kWifiAccessPoint:
+            return "wifi_access_point";
+        case BlockerReason::kTimeSync:
+            return "time_sync";
         default:
             return "unknown";
     }

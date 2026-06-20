@@ -26,6 +26,11 @@ The repository is currently a minimal ESP-IDF application scaffold with:
 - A ported `sd_card` component for SDSPI/FATFS MicroSD access.
 - A `storage_service` component that owns app-facing MicroSD mount, format, and
   debug status policy.
+- A `wifi_service` component that owns ESP-IDF Wi-Fi station/AP lifecycle,
+  saved credentials, scan state, and the backend HTTP routes for setup/status.
+- A `timezone_service` component that owns timezone settings, SNTP sync,
+  system-time updates, PCF8563 RTC writeback, and backend HTTP routes for time
+  settings/runtime state.
 - An input-only `pdm_mic` component that owns ESP-IDF I2S PDM RX capture.
 - A `microphone_service` component that owns Sticky microphone pin mapping,
   microphone power/read lifecycle, and input-level calculation.
@@ -80,6 +85,14 @@ components/
     include/
       storage_service.h
     storage_service.cpp
+  wifi_service/
+    include/
+      wifi_service.h
+    wifi_service.cpp
+  timezone_service/
+    include/
+      timezone_service.h
+    timezone_service.cpp
   pdm_mic/
     include/
       pdm_mic.h
@@ -182,12 +195,21 @@ The current early startup sequence is:
 - Starts the auto-sleep runtime, which wires `device_sleep_service`, polls IMU
   samples for inactivity, owns the auto-sleep worker task, and handles display
   sleep/light sleep actions.
+- Initializes `timezone_service`, which loads timezone/time-sync state from
+  NVS, applies the configured timezone, and seeds system time from the PCF8563
+  RTC when available.
+- Initializes `wifi_service`, which loads saved Wi-Fi credentials or built-in
+  sdkconfig credentials, starts station mode when credentials exist, or starts
+  AP setup mode when no credentials are available.
 - Initializes `storage_service` and logs one MicroSD diagnostic snapshot.
 - Initializes `recording_service`; when `/sdcard` is mounted, captures a short
   voice-input validation clip and saves it as `/sdcard/mic_demo.wav`.
 - Initializes `button_service`.
 - Subscribes to button and touch events, routes app-level display demo intents,
   and handles power-button shutdown intents.
+- Subscribes to Wi-Fi events and forwards connection state into
+  `timezone_service` so network time sync starts after station connectivity is
+  available.
 - Runs a small shutdown task so button callbacks can request shutdown without
   directly executing the power-latch release sequence.
 
@@ -202,6 +224,54 @@ latch-release timing does not run inside the button callback.
 Driver-specific wiring should stay out of `main/`; app startup should call
 service-level APIs instead. Add product-specific sequencing in `app_shell`, not
 inside reusable components.
+
+Wi-Fi and time services follow the same boundary:
+
+- `wifi_service` owns `esp_netif`, the default ESP event-loop registration,
+  `esp_wifi` mode changes, station/AP configuration, NVS credential storage,
+  network scans, and the HTTP backend server used during AP setup.
+- `timezone_service` owns timezone catalog/aliases, persisted timezone settings,
+  SNTP setup, system-time updates, PCF8563 RTC read/write through
+  `power_service`, and backend HTTP routes for time settings.
+- `app_shell` wires the two services together by forwarding Wi-Fi connectivity
+  events into `timezone_service::SetNetworkConnected(...)`.
+
+Runtime-persisted settings live in service-owned NVS namespaces:
+
+- `wifi`: `ssid`, `password`
+- `timezone`: `enabled`, `tz_name`, `location`, `time_src`, `ntp_sync`,
+  `ntp_epoch`
+
+The build-time Wi-Fi/time defaults live under `Folloup Settings`:
+
+- `CONFIG_FOLLOWUP_WIFI_AP_PREFIX`
+- `CONFIG_FOLLOWUP_WIFI_STA_SSID`
+- `CONFIG_FOLLOWUP_WIFI_STA_PASSWORD`
+- `CONFIG_FOLLOWUP_WIFI_START_IN_AP_MODE`
+- `CONFIG_FOLLOWUP_TIME_SYNC_DEFAULT_ENABLED`
+- `CONFIG_FOLLOWUP_DEFAULT_TIMEZONE_NAME`
+
+Saved NVS Wi-Fi credentials take precedence over built-in sdkconfig
+credentials. If neither exists, or if `CONFIG_FOLLOWUP_WIFI_START_IN_AP_MODE`
+is enabled, `wifi_service` enters open AP setup mode and serves backend routes
+at the SoftAP URL, normally `http://192.168.4.1`. The current backend
+intentionally exposes JSON/form endpoints only; it does not embed the old
+portal UI and does not add DNS captive-portal redirection.
+
+Current Wi-Fi backend routes:
+
+- `GET /`
+- `GET /api/status`
+- `GET /api/scan`
+- `POST /api/configure`
+- `POST /api/disconnect`
+
+Current time backend routes registered on the same HTTP server:
+
+- `GET /api/settings/time`
+- `PATCH /api/settings/time`
+- `GET /api/runtime/time`
+- `GET /api/timezone/list`
 
 Auto-sleep is split across a policy component and a product runtime helper:
 `device_sleep_service` owns sleep state, timers, timeout validation, blocker
@@ -241,8 +311,9 @@ Current auto-sleep behavior:
   resumes. The forced display refresh is intentional because e-paper retains the
   `Light sleep` image even if software state has already returned to awake.
 - Inactivity is blocked while recording is active, armed, saving, or exporting;
-  while shutdown is pending; while an e-paper refresh is active; and during
-  app-declared storage write activity.
+  while shutdown is pending; while an e-paper refresh is active; during
+  app-declared storage write activity; while AP setup mode is active; and while
+  SNTP time sync is in progress.
 - The proven demo defaults are `10 s` for display sleep and `30 s` for light
   sleep. Production defaults should be raised later when product behavior is no
   longer being tuned on the bench.

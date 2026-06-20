@@ -22,7 +22,9 @@
 #include "recording_service.h"
 #include "sticky_board_config.h"
 #include "storage_service.h"
+#include "timezone_service.h"
 #include "touch_service.h"
+#include "wifi_service.h"
 
 namespace device_sleep_runtime {
 namespace {
@@ -138,6 +140,14 @@ device_sleep_service::BlockerReason GetAutoSleepBlocker(void*)
 
     if (storage_service::IsWriteBusy()) {
         return device_sleep_service::BlockerReason::kStorageWrite;
+    }
+
+    if (wifi_service::IsAccessPointMode()) {
+        return device_sleep_service::BlockerReason::kWifiAccessPoint;
+    }
+
+    if (timezone_service::IsSyncInProgress()) {
+        return device_sleep_service::BlockerReason::kTimeSync;
     }
 
     if (display_service::IsRefreshInProgress()) {

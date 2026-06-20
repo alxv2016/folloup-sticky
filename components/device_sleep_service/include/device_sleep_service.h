@@ -42,6 +42,8 @@ enum class BlockerReason : uint8_t {
     kShutdownPending,
     kDisplayRefresh,
     kStorageWrite,
+    kWifiAccessPoint,
+    kTimeSync,
 };
 
 struct Settings {

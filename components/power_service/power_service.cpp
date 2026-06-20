@@ -521,6 +521,44 @@ esp_err_t SetChargerEnabled(bool enabled)
     return err;
 }
 
+esp_err_t ReadRtcTime(std::tm* out_time)
+{
+    if (out_time == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_err_t err = EnsureRtc();
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    std::tm timeinfo = {};
+    if (!pcf8563::GetTime(s_rtc_device, timeinfo)) {
+        return ESP_FAIL;
+    }
+
+    *out_time = timeinfo;
+    return ESP_OK;
+}
+
+esp_err_t WriteRtcTime(const std::tm& time)
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_err_t err = EnsureRtc();
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    return pcf8563::SetTime(s_rtc_device, time) ? ESP_OK : ESP_FAIL;
+}
+
 esp_err_t RequestShutdown()
 {
     ESP_LOGI(kTag, "Shutdown requested");

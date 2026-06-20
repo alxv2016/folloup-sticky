@@ -2,6 +2,7 @@
 #define POWER_SERVICE_H_
 
 #include <cstdint>
+#include <ctime>
 
 #include "esp_err.h"
 
@@ -68,6 +69,8 @@ esp_err_t EnablePowerHold();
 esp_err_t ReadStatus(Status* out_status);
 void LogDebugStatus();
 esp_err_t SetChargerEnabled(bool enabled);
+esp_err_t ReadRtcTime(std::tm* out_time);
+esp_err_t WriteRtcTime(const std::tm& time);
 esp_err_t RequestShutdown();
 
 }  // namespace power_service

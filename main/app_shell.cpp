@@ -20,7 +20,9 @@
 #include "recording_service.h"
 #include "sdkconfig.h"
 #include "storage_service.h"
+#include "timezone_service.h"
 #include "touch_service.h"
+#include "wifi_service.h"
 
 namespace app_shell {
 namespace {
@@ -178,6 +180,48 @@ void HandleStorageEvent(const storage_service::Event& event, void*)
              storage_service::OperationName(event.snapshot.operation),
              storage_service::OperationPhaseName(event.snapshot.phase),
              esp_err_to_name(event.snapshot.last_error));
+}
+
+void HandleTimezoneEvent(const timezone_service::Event& event, void*)
+{
+    ESP_LOGI(kTag,
+             "Time intent: enabled=%d timezone=%s valid=%d source=%s ntp_synced=%d syncing=%d date=%s time=%s",
+             event.snapshot.settings.enabled ? 1 : 0,
+             event.snapshot.settings.timezone_name.empty()
+                 ? "<unset>"
+                 : event.snapshot.settings.timezone_name.c_str(),
+             event.snapshot.runtime.time_valid ? 1 : 0,
+             timezone_service::TimeSourceName(event.snapshot.runtime.time_source),
+             event.snapshot.runtime.has_network_sync ? 1 : 0,
+             event.snapshot.runtime.sync_in_progress ? 1 : 0,
+             event.snapshot.runtime.current_date.empty()
+                 ? "--"
+                 : event.snapshot.runtime.current_date.c_str(),
+             event.snapshot.runtime.current_time.empty()
+                 ? "--:--"
+                 : event.snapshot.runtime.current_time.c_str());
+}
+
+void RegisterWifiBackendRoutes(httpd_handle_t server, void*)
+{
+    timezone_service::RegisterPortalRoutes(server);
+}
+
+void HandleWifiEvent(const wifi_service::Event& event, void*)
+{
+    ESP_LOGI(kTag,
+             "Wi-Fi intent: state=%s detail=%s enabled=%d connected=%d ap=%d ssid=%s ip=%s ap_ssid=%s ap_url=%s rssi=%d",
+             wifi_service::StateName(event.state),
+             event.detail.empty() ? "" : event.detail.c_str(),
+             event.ui_state.wifi_enabled ? 1 : 0,
+             event.ui_state.connected ? 1 : 0,
+             event.ui_state.access_point_mode ? 1 : 0,
+             event.ui_state.ssid.empty() ? "<none>" : event.ui_state.ssid.c_str(),
+             event.ui_state.ip_address.empty() ? "<none>" : event.ui_state.ip_address.c_str(),
+             event.ui_state.ap_ssid.empty() ? "<none>" : event.ui_state.ap_ssid.c_str(),
+             event.ui_state.ap_url.empty() ? "<none>" : event.ui_state.ap_url.c_str(),
+             event.ui_state.rssi);
+    timezone_service::SetNetworkConnected(event.ui_state.connected);
 }
 
 void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
@@ -354,6 +398,27 @@ void InitStorageService()
     storage_service::LogDebugStatus();
 }
 
+void InitTimezoneService()
+{
+    timezone_service::SetEventHandler(HandleTimezoneEvent, nullptr);
+    const esp_err_t err = timezone_service::Init();
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "Timezone service init failed: %s", esp_err_to_name(err));
+    }
+}
+
+void InitWifiService()
+{
+    wifi_service::SetEventHandler(HandleWifiEvent, nullptr);
+    wifi_service::SetPortalRouteRegistrar(RegisterWifiBackendRoutes, nullptr);
+    const esp_err_t err = wifi_service::Init();
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "Wi-Fi service init failed: %s", esp_err_to_name(err));
+        return;
+    }
+    wifi_service::Start();
+}
+
 void InitRecordingService()
 {
     recording_service::SetEventHandler(HandleRecordingEvent, nullptr);
@@ -445,6 +510,8 @@ void Run()
     InitImuService();
     InitEnvironmentService();
     InitDeviceSleepRuntime();
+    InitTimezoneService();
+    InitWifiService();
     InitStorageService();
     InitRecordingService();
     StartShutdownTask();

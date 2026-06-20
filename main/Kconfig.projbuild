@@ -1,5 +1,47 @@
 menu "Folloup Settings"
 
+    config FOLLOWUP_WIFI_AP_PREFIX
+        string "Wi-Fi AP prefix"
+        default "Followup"
+        help
+            Prefix used when the device enters Wi-Fi access-point setup mode.
+            The full AP SSID appends the last three Wi-Fi MAC bytes.
+
+    config FOLLOWUP_WIFI_STA_SSID
+        string "Built-in Wi-Fi SSID"
+        default ""
+        help
+            Optional built-in station SSID. Runtime-saved NVS credentials take
+            precedence when present.
+
+    config FOLLOWUP_WIFI_STA_PASSWORD
+        string "Built-in Wi-Fi password"
+        default ""
+        help
+            Optional built-in station password paired with
+            FOLLOWUP_WIFI_STA_SSID.
+
+    config FOLLOWUP_WIFI_START_IN_AP_MODE
+        bool "Start Wi-Fi in AP setup mode"
+        default n
+        help
+            Start the Wi-Fi backend in access-point setup mode on boot instead
+            of first attempting saved or built-in station credentials.
+
+    config FOLLOWUP_TIME_SYNC_DEFAULT_ENABLED
+        bool "Enable clock sync by default"
+        default y
+        help
+            When enabled, the timezone service attempts SNTP sync after Wi-Fi
+            connects using the configured default timezone.
+
+    config FOLLOWUP_DEFAULT_TIMEZONE_NAME
+        string "Default timezone name"
+        default "North_America_Eastern"
+        help
+            Default timezone catalog entry used before a runtime timezone
+            setting has been saved in NVS.
+
     config FOLLOWUP_AUTO_SLEEP_DISPLAY_SLEEP_TIMEOUT_SECONDS
         int "Display sleep timeout"
         range 0 86400

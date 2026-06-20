@@ -121,6 +121,8 @@ Current blockers:
 - shutdown pending
 - display refresh active
 - app-declared storage write activity
+- Wi-Fi access-point setup mode
+- SNTP time sync in progress
 
 Plain USB power does not block auto sleep.
 
