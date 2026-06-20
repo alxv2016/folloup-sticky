@@ -25,6 +25,8 @@ The repository is currently a minimal ESP-IDF application scaffold with:
   patterns.
 - A `feedback_service` component that owns app-facing interaction feedback
   policy and maps app events onto buzzer patterns.
+- A `design_tokens` component that owns shared product UI constants such as
+  spacing, colors, typography roles, and component sizing.
 - A ported `sd_card` component for SDSPI/FATFS MicroSD access.
 - A `storage_service` component that owns app-facing MicroSD mount, format, and
   debug status policy.
@@ -96,6 +98,9 @@ components/
     include/
       feedback_service.h
     feedback_service.cpp
+  design_tokens/
+    include/
+      design_tokens.h
   project_assets/
     CMakeLists.txt
     asset_manifest.h
@@ -220,6 +225,23 @@ Current scope:
 
 Keep generated files reproducible from `assets/` and `scripts/`. Do not hand
 edit generated asset source files. See `docs/asset-generation.md`.
+
+### `components/design_tokens`
+
+This header-only component owns shared product UI constants. It is intentionally
+named `design_tokens`, not e-paper design tokens, because the values describe
+the Folloup UI language rather than the SSD1677 display driver.
+
+Current scope:
+
+- spacing scale
+- grayscale color roles
+- typography roles, sizes, and weights
+- common component sizing constants used by the e-paper UI being ported
+
+Use this component as the first dependency when porting small pieces from the
+old `epaper_lib`. Keep UI tokens independent from display hardware and
+framebuffer mechanics.
 
 ### `main`
 
