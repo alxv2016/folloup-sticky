@@ -1,0 +1,231 @@
+{
+  "logos": [
+    {
+      "path": "assets/logos/alxvlabs-logo.png",
+      "symbol": "kAlxvLabsLogo"
+    },
+    {
+      "path": "assets/logos/folloup-logo.png",
+      "symbol": "kFollowupLogo"
+    }
+  ],
+  "icons": [
+    {
+      "path": "assets/icons/add.png",
+      "symbol": "kAdd"
+    },
+    {
+      "path": "assets/icons/ai-connect.png",
+      "symbol": "kAiConnect"
+    },
+    {
+      "path": "assets/icons/api-key.png",
+      "symbol": "kApiKey"
+    },
+    {
+      "path": "assets/icons/audio.png",
+      "symbol": "kAudio"
+    },
+    {
+      "path": "assets/icons/bat_1.png",
+      "symbol": "kBattery1"
+    },
+    {
+      "path": "assets/icons/bat_2.png",
+      "symbol": "kBattery2"
+    },
+    {
+      "path": "assets/icons/bat_3.png",
+      "symbol": "kBattery3"
+    },
+    {
+      "path": "assets/icons/bat_4.png",
+      "symbol": "kBattery4"
+    },
+    {
+      "path": "assets/icons/bat_5.png",
+      "symbol": "kBattery5"
+    },
+    {
+      "path": "assets/icons/bat_6.png",
+      "symbol": "kBattery6"
+    },
+    {
+      "path": "assets/icons/ble_1.png",
+      "symbol": "kBle1"
+    },
+    {
+      "path": "assets/icons/ble_2.png",
+      "symbol": "kBle2"
+    },
+    {
+      "path": "assets/icons/ble_3.png",
+      "symbol": "kBle3"
+    },
+    {
+      "path": "assets/icons/check.png",
+      "symbol": "kCheck"
+    },
+    {
+      "path": "assets/icons/checkbox-checked.png",
+      "symbol": "kCheckboxChecked"
+    },
+    {
+      "path": "assets/icons/checkbox-unchecked.png",
+      "symbol": "kCheckboxUnchecked"
+    },
+    {
+      "path": "assets/icons/close.png",
+      "symbol": "kClose"
+    },
+    {
+      "path": "assets/icons/file-audio.png",
+      "symbol": "kFileAudio"
+    },
+    {
+      "path": "assets/icons/file-json.png",
+      "symbol": "kFileJson"
+    },
+    {
+      "path": "assets/icons/file-md.png",
+      "symbol": "kFileMd"
+    },
+    {
+      "path": "assets/icons/file-transcript.png",
+      "symbol": "kFileTranscript"
+    },
+    {
+      "path": "assets/icons/file.png",
+      "symbol": "kFile"
+    },
+    {
+      "path": "assets/icons/folder-open.png",
+      "symbol": "kFolderOpen"
+    },
+    {
+      "path": "assets/icons/folder.png",
+      "symbol": "kFolder"
+    },
+    {
+      "path": "assets/icons/gemini_api.png",
+      "symbol": "kGeminiApi"
+    },
+    {
+      "path": "assets/icons/goal.png",
+      "symbol": "kGoal"
+    },
+    {
+      "path": "assets/icons/home.png",
+      "symbol": "kHome"
+    },
+    {
+      "path": "assets/icons/idea.png",
+      "symbol": "kIdea"
+    },
+    {
+      "path": "assets/icons/invisible.png",
+      "symbol": "kInvisible"
+    },
+    {
+      "path": "assets/icons/keyboard.png",
+      "symbol": "kKeyboard"
+    },
+    {
+      "path": "assets/icons/lock.png",
+      "symbol": "kLock"
+    },
+    {
+      "path": "assets/icons/mic-off.png",
+      "symbol": "kMicOff"
+    },
+    {
+      "path": "assets/icons/mic-on.png",
+      "symbol": "kMicOn"
+    },
+    {
+      "path": "assets/icons/pin.png",
+      "symbol": "kPin"
+    },
+    {
+      "path": "assets/icons/power.png",
+      "symbol": "kPower"
+    },
+    {
+      "path": "assets/icons/refresh.png",
+      "symbol": "kRefresh"
+    },
+    {
+      "path": "assets/icons/remove.png",
+      "symbol": "kRemove"
+    },
+    {
+      "path": "assets/icons/sd_card.png",
+      "symbol": "kSdCard"
+    },
+    {
+      "path": "assets/icons/select.png",
+      "symbol": "kSelect"
+    },
+    {
+      "path": "assets/icons/settings.png",
+      "symbol": "kSettings"
+    },
+    {
+      "path": "assets/icons/sleep.png",
+      "symbol": "kSleep"
+    },
+    {
+      "path": "assets/icons/star.png",
+      "symbol": "kStar"
+    },
+    {
+      "path": "assets/icons/task-start.png",
+      "symbol": "kTaskStart"
+    },
+    {
+      "path": "assets/icons/time.png",
+      "symbol": "kTime"
+    },
+    {
+      "path": "assets/icons/transcribe.png",
+      "symbol": "kTranscribe"
+    },
+    {
+      "path": "assets/icons/usb-storage.png",
+      "symbol": "kUsbStorage"
+    },
+    {
+      "path": "assets/icons/visible.png",
+      "symbol": "kVisible"
+    },
+    {
+      "path": "assets/icons/wifi_1.png",
+      "symbol": "kWifi1"
+    },
+    {
+      "path": "assets/icons/wifi_2.png",
+      "symbol": "kWifi2"
+    },
+    {
+      "path": "assets/icons/wifi_2bar.png",
+      "symbol": "kWbar2"
+    },
+    {
+      "path": "assets/icons/wifi_3.png",
+      "symbol": "kWifi3"
+    },
+    {
+      "path": "assets/icons/wifi_3bar.png",
+      "symbol": "kWbar3"
+    },
+    {
+      "path": "assets/icons/wifi_4.png",
+      "symbol": "kWifi4"
+    },
+    {
+      "path": "assets/icons/wifi_config.png",
+      "symbol": "kWifiConfig"
+    }
+  ],
+  "footer_icons": []
+}

@@ -42,6 +42,8 @@ The repository is currently a minimal ESP-IDF application scaffold with:
 - A ported mono SSD1677 e-paper panel driver.
 - A `display_service` component that owns app-facing e-paper bring-up, blank
   screen refresh, display sleep, and light-sleep recovery.
+- Staged e-paper asset generation scripts and source PNG/TTF assets for the
+  upcoming app UI.
 - A ported GT911 capacitive touch controller driver.
 - A `touch_service` component that owns app-facing touch bring-up, interrupt
   servicing, and touch event logging.
@@ -62,6 +64,11 @@ The rest of the board peripherals have not been ported yet.
 
 ```text
 CMakeLists.txt
+assets/
+  epaper_assets.json
+  icons/
+  logos/
+fonts/
 main/
   CMakeLists.txt
   main.cpp
@@ -89,6 +96,18 @@ components/
     include/
       feedback_service.h
     feedback_service.cpp
+  project_assets/
+    CMakeLists.txt
+    asset_manifest.h
+    asset_types.h
+    generated_epaper_footer_icons.h
+    generated_epaper_footer_icons.cpp
+    generated_epaper_icons.h
+    generated_epaper_icons.cpp
+    generated_epaper_logos.h
+    generated_epaper_logos.cpp
+    project_assets.h
+    project_assets.cpp
   storage_service/
     include/
       storage_service.h
@@ -169,11 +188,38 @@ partitions.csv
 sdkconfig
 sdkconfig.defaults
 docs/
+  asset-generation.md
   app-architecture.md
   reTerminal_Sticky_Hardware_Spec_Software_Porting-en.md
+scripts/
+  generate_epaper_assets_common.py
+  generate_epaper_footer_icons.py
+  generate_epaper_fonts.py
+  generate_epaper_icons.py
+  generate_epaper_logos.py
+  generate_epaper_project_assets.py
 ```
 
 ## Component Boundaries
+
+### `components/project_assets`
+
+This component owns embedded assets that are compiled into the firmware image.
+The source PNG/TTF files and generator scripts live outside the component; this
+component exposes only the generated C++ data and a small app-facing lookup API.
+
+Current scope:
+
+- packed monochrome image metadata through `asset_types.h`
+- manifest-driven asset generation through `assets/epaper_assets.json`
+- generated e-paper logo assets for the ALXV Labs and Folloup logos
+- generated e-paper icon assets for all PNG files currently in `assets/icons/`
+- empty generated footer-icon scaffolding ready for future manifest entries
+- `project_assets::GetLogo(...)`, `GetIcon(...)`, and `GetFooterIcon(...)`
+  lookup helpers by generated enum IDs
+
+Keep generated files reproducible from `assets/` and `scripts/`. Do not hand
+edit generated asset source files. See `docs/asset-generation.md`.
 
 ### `main`
 
