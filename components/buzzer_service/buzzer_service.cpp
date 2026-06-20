@@ -5,6 +5,7 @@
 
 #include "driver/ledc.h"
 #include "esp_log.h"
+#include "followup_task_config.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -23,7 +24,6 @@ constexpr uint32_t kMaxVolumeDuty = 512;
 constexpr uint32_t kTonePollMs = 10;
 constexpr uint32_t kQueueLength = 8;
 constexpr uint32_t kWorkerStackBytes = 3072;
-constexpr UBaseType_t kWorkerPriority = 4;
 
 struct ToneStep {
     uint32_t frequency_hz;
@@ -257,9 +257,14 @@ esp_err_t Init()
         return ESP_ERR_NO_MEM;
     }
 
-    const BaseType_t created = xTaskCreate(WorkerTask, "buzzer",
-                                          kWorkerStackBytes, nullptr,
-                                          kWorkerPriority, &s_worker_task);
+    const BaseType_t created = xTaskCreatePinnedToCore(
+        WorkerTask,
+        "buzzer",
+        kWorkerStackBytes,
+        nullptr,
+        followup_task_config::kPriorityBuzzer,
+        &s_worker_task,
+        followup_task_config::kAppCore);
     if (created != pdPASS) {
         vQueueDelete(s_command_queue);
         s_command_queue = nullptr;

@@ -17,6 +17,7 @@
 #include "esp_log.h"
 #include "esp_sntp.h"
 #include "esp_timer.h"
+#include "followup_task_config.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -39,7 +40,6 @@ constexpr const char* kDefaultNtpServer = "pool.ntp.org";
 constexpr const char* kChinaNtpServer = "cn.pool.ntp.org";
 constexpr time_t kMinValidEpoch = 1600000000;
 constexpr size_t kMaxPortalPayloadLen = 512;
-constexpr UBaseType_t kSyncTaskPriority = 3;
 constexpr uint32_t kSyncTaskStackWords = 6144;
 constexpr UBaseType_t kSyncQueueDepth = 4;
 constexpr const char* kPortalApiSettingsTimeUri = "/api/settings/time";
@@ -848,12 +848,14 @@ esp_err_t Init()
         }
     }
     if (s_sync_task == nullptr) {
-        const BaseType_t created = xTaskCreate(SyncWorker,
-                                              "timezone_sync",
-                                              kSyncTaskStackWords,
-                                              nullptr,
-                                              kSyncTaskPriority,
-                                              &s_sync_task);
+            const BaseType_t created = xTaskCreatePinnedToCore(
+                SyncWorker,
+                "timezone_sync",
+                kSyncTaskStackWords,
+                nullptr,
+                followup_task_config::kPriorityTimezoneSync,
+                &s_sync_task,
+                followup_task_config::kSystemCore);
         if (created != pdPASS) {
             s_sync_task = nullptr;
             return ESP_ERR_NO_MEM;

@@ -48,6 +48,8 @@ The repository is currently a minimal ESP-IDF application scaffold with:
   logging for first hardware validation.
 - A `device_sleep_service` component that owns auto-sleep policy state,
   inactivity timing, app-level blocker checks, and staged sleep events.
+- A `task_config` component that owns the app-created FreeRTOS task priority
+  and core-affinity mapping.
 - A ported SHT40 temperature/humidity sensor driver.
 - An `environment_service` component that owns app-facing ambient
   temperature/humidity bring-up and sample logging.
@@ -117,6 +119,9 @@ components/
     include/
       imu_service.h
     imu_service.cpp
+  task_config/
+    include/
+      followup_task_config.h
   environment_service/
     include/
       environment_service.h
@@ -220,6 +225,39 @@ held. The shutdown task also waits briefly after release before calling
 time to stop feeding `PWR_EN`. The button callback only notifies the AppShell
 shutdown task for shutdown requests; the task calls the power service so
 latch-release timing does not run inside the button callback.
+
+## Task Mapping
+
+App-owned FreeRTOS tasks use the shared mapping in
+`components/task_config/include/followup_task_config.h`. The app is optimized
+around a simple split:
+
+- CPU0 is the system/network side. ESP-IDF already runs the main task,
+  `esp_timer`, and Wi-Fi driver work there in the current `sdkconfig`, so app
+  Wi-Fi/time coordination stays close to that side.
+- CPU1 is the product hardware/UI side. Display, touch, audio capture, storage
+  work, buzzer feedback, and sleep hardware transitions are kept away from
+  CPU0 as the app scales.
+
+On single-core builds, the shared task config maps the app core back to CPU0.
+
+| Task | Owner | Priority | Core | Responsibility |
+| --- | --- | ---: | --- | --- |
+| `record_capture` | `recording_service` | 5 | CPU1 | Timing-sensitive microphone capture, pre-roll, and clip buffering. |
+| `touch_service` | `touch_service` | 5 | CPU1 | GT911 interrupt servicing and app-facing touch events. |
+| `app_sleep` | `device_sleep_runtime` | 4 | CPU1 | Display sleep, light-sleep entry/exit, and wake recovery actions. |
+| `app_shutdown` | `app_shell` | 4 | CPU1 | Deferred power-latch release after POWER_OK long-press release. |
+| `display_service` | `display_service` | 3 | CPU1 | Queued e-paper demo refreshes. |
+| `sleep_motion` | `device_sleep_runtime` | 3 | CPU1 | 200 ms IMU polling and motion/stillness classification. |
+| `wifi_transition` | `wifi_service` | 3 | CPU0 | Wi-Fi station/AP/stop/disconnect transitions. |
+| `wifi_callbacks` | `wifi_service` | 3 | CPU0 | App-facing Wi-Fi event delivery outside ESP event callbacks. |
+| `storage_service` | `storage_service` | 2 | CPU1 | Long-running SD operations such as format. |
+| `timezone_sync` | `timezone_service` | 2 | CPU0 | SNTP sync, system-time update, and RTC writeback. |
+| `buzzer` | `buzzer_service` | 2 | CPU1 | Non-critical PWM tone and pattern playback. |
+
+The mapping intentionally keeps long-running SD and display work below input
+and audio capture. Future tasks should be added to `task_config` first, with a
+short ownership rationale, rather than using local priority/core literals.
 
 Driver-specific wiring should stay out of `main/`; app startup should call
 service-level APIs instead. Add product-specific sequencing in `app_shell`, not

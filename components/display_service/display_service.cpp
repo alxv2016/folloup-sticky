@@ -9,6 +9,7 @@
 #include "epaper_panel.h"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "followup_task_config.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -31,7 +32,6 @@ constexpr int kDemoCardHeight = 220;
 constexpr int kDemoCardX = (kPortraitWidth - kDemoCardWidth) / 2;
 constexpr int kDemoCardY = (kPortraitHeight - kDemoCardHeight) / 2;
 constexpr uint32_t kDisplayTaskStackWords = 4096;
-constexpr UBaseType_t kDisplayTaskPriority = 4;
 
 struct DisplayCommand {
     DemoSelection selection;
@@ -493,12 +493,14 @@ esp_err_t StartDisplayTask()
         return ESP_OK;
     }
 
-    const BaseType_t created = xTaskCreate(DisplayTask,
-                                          "display_service",
-                                          kDisplayTaskStackWords,
-                                          nullptr,
-                                          kDisplayTaskPriority,
-                                          &s_display_task);
+    const BaseType_t created = xTaskCreatePinnedToCore(
+        DisplayTask,
+        "display_service",
+        kDisplayTaskStackWords,
+        nullptr,
+        followup_task_config::kPriorityDisplay,
+        &s_display_task,
+        followup_task_config::kAppCore);
     if (created != pdPASS) {
         s_display_task = nullptr;
         return ESP_ERR_NO_MEM;

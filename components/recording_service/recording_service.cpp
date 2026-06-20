@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "esp_log.h"
+#include "followup_task_config.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "microphone_service.h"
@@ -23,7 +24,6 @@ constexpr size_t kCaptureChunkSamples = 480;
 constexpr size_t kClipChunkSamples = 4096;
 constexpr uint32_t kReadTimeoutMs = 100;
 constexpr uint32_t kCaptureTaskStackWords = 4096;
-constexpr UBaseType_t kCaptureTaskPriority = 5;
 
 struct WavHeader {
     char riff[4];
@@ -400,9 +400,14 @@ esp_err_t Init()
     }
 
     if (s_capture_task == nullptr) {
-        const BaseType_t created = xTaskCreate(CaptureTask, "record_capture",
-                                              kCaptureTaskStackWords, nullptr,
-                                              kCaptureTaskPriority, &s_capture_task);
+        const BaseType_t created = xTaskCreatePinnedToCore(
+            CaptureTask,
+            "record_capture",
+            kCaptureTaskStackWords,
+            nullptr,
+            followup_task_config::kPriorityRecordCapture,
+            &s_capture_task,
+            followup_task_config::kAppCore);
         if (created != pdPASS) {
             s_capture_task = nullptr;
             std::lock_guard<std::mutex> lock(s_mutex);

@@ -15,6 +15,7 @@
 #include "esp_log.h"
 #include "esp_sleep.h"
 #include "esp_timer.h"
+#include "followup_task_config.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -37,9 +38,7 @@ constexpr float kMotionStartMaxAxisDeltaMg = 25.0f;
 constexpr float kStillSumDeltaMg = 20.0f;
 constexpr float kStillMaxAxisDeltaMg = 8.0f;
 constexpr uint32_t kMotionTaskStackWords = 4096;
-constexpr UBaseType_t kMotionTaskPriority = 3;
 constexpr uint32_t kAutoSleepTaskStackWords = 4096;
-constexpr UBaseType_t kAutoSleepTaskPriority = 4;
 constexpr size_t kAutoSleepEventQueueDepth = 8;
 constexpr TickType_t kPowerButtonReleasePollDelay = pdMS_TO_TICKS(20);
 constexpr uint32_t kPowerButtonReleaseStableSamples = 10;
@@ -476,12 +475,14 @@ esp_err_t StartAutoSleepTask()
         }
     }
 
-    const BaseType_t created = xTaskCreate(AutoSleepTask,
-                                          "app_sleep",
-                                          kAutoSleepTaskStackWords,
-                                          nullptr,
-                                          kAutoSleepTaskPriority,
-                                          &s_auto_sleep_task);
+    const BaseType_t created = xTaskCreatePinnedToCore(
+        AutoSleepTask,
+        "app_sleep",
+        kAutoSleepTaskStackWords,
+        nullptr,
+        followup_task_config::kPriorityAppSleep,
+        &s_auto_sleep_task,
+        followup_task_config::kAppCore);
     if (created != pdPASS) {
         s_auto_sleep_task = nullptr;
         ESP_LOGW(kTag, "Failed to create auto-sleep task");
@@ -664,12 +665,14 @@ esp_err_t StartMotionPolling()
         return ESP_OK;
     }
 
-    const BaseType_t created = xTaskCreate(MotionPollingTask,
-                                          "sleep_motion",
-                                          kMotionTaskStackWords,
-                                          nullptr,
-                                          kMotionTaskPriority,
-                                          &s_motion_task);
+    const BaseType_t created = xTaskCreatePinnedToCore(
+        MotionPollingTask,
+        "sleep_motion",
+        kMotionTaskStackWords,
+        nullptr,
+        followup_task_config::kPrioritySleepMotion,
+        &s_motion_task,
+        followup_task_config::kAppCore);
     if (created != pdPASS) {
         s_motion_task = nullptr;
         ESP_LOGW(kTag, "Failed to create motion polling task");

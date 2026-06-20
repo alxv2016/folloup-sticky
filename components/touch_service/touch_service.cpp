@@ -5,6 +5,7 @@
 #include "driver/gpio.h"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "followup_task_config.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "gt911.h"
@@ -16,7 +17,6 @@ namespace {
 
 constexpr const char* kTag = "TouchService";
 constexpr uint32_t kTouchTaskStackWords = 4096;
-constexpr UBaseType_t kTouchTaskPriority = 5;
 constexpr TickType_t kTouchIdlePollDelay = pdMS_TO_TICKS(1000);
 
 i2c_master_bus_handle_t s_touch_bus = nullptr;
@@ -123,9 +123,14 @@ esp_err_t StartTouchTask()
         return ESP_OK;
     }
 
-    const BaseType_t created = xTaskCreate(TouchTask, "touch_service",
-                                          kTouchTaskStackWords, nullptr,
-                                          kTouchTaskPriority, &s_touch_task);
+    const BaseType_t created = xTaskCreatePinnedToCore(
+        TouchTask,
+        "touch_service",
+        kTouchTaskStackWords,
+        nullptr,
+        followup_task_config::kPriorityTouch,
+        &s_touch_task,
+        followup_task_config::kAppCore);
     if (created != pdPASS) {
         s_touch_task = nullptr;
         return ESP_ERR_NO_MEM;

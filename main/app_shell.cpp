@@ -13,6 +13,7 @@
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
+#include "followup_task_config.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "imu_service.h"
@@ -34,7 +35,6 @@ constexpr uint32_t kAutoSleepDisplaySleepTimeoutSeconds =
 constexpr uint32_t kAutoSleepLightSleepTimeoutSeconds =
     CONFIG_FOLLOWUP_AUTO_SLEEP_LIGHT_SLEEP_TIMEOUT_SECONDS;
 constexpr uint32_t kShutdownTaskStackWords = 3072;
-constexpr UBaseType_t kShutdownTaskPriority = 5;
 constexpr TickType_t kPowerButtonReleaseSettleDelay = pdMS_TO_TICKS(500);
 constexpr TickType_t kTouchContactGap = pdMS_TO_TICKS(300);
 constexpr const char* kMicDemoWavName = "mic_demo.wav";
@@ -345,10 +345,14 @@ void StartShutdownTask()
         return;
     }
 
-    const BaseType_t created = xTaskCreate(ShutdownTask, "app_shutdown",
-                                          kShutdownTaskStackWords, nullptr,
-                                          kShutdownTaskPriority,
-                                          &s_shutdown_task);
+    const BaseType_t created = xTaskCreatePinnedToCore(
+        ShutdownTask,
+        "app_shutdown",
+        kShutdownTaskStackWords,
+        nullptr,
+        followup_task_config::kPriorityAppShutdown,
+        &s_shutdown_task,
+        followup_task_config::kAppCore);
     if (created != pdPASS) {
         s_shutdown_task = nullptr;
         ESP_LOGW(kTag, "Failed to create shutdown task");

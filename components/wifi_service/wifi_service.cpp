@@ -17,6 +17,7 @@
 #include "esp_netif.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
+#include "followup_task_config.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -33,10 +34,8 @@ constexpr const char* kPasswordKey = "password";
 constexpr const char* kApUrl = "http://192.168.4.1";
 constexpr int kConnectTimeoutSec = 60;
 constexpr size_t kMaxPortalPayloadLen = 512;
-constexpr UBaseType_t kTransitionTaskPriority = 4;
 constexpr uint32_t kTransitionTaskStackWords = 8192;
 constexpr UBaseType_t kTransitionQueueDepth = 4;
-constexpr UBaseType_t kCallbackTaskPriority = 3;
 constexpr uint32_t kCallbackTaskStackWords = 6144;
 constexpr size_t kMaxPendingCallbacks = 16;
 constexpr const char* kPortalApiScanUri = "/api/scan";
@@ -1165,14 +1164,24 @@ esp_err_t Init()
         return ESP_ERR_NO_MEM;
     }
 
-    if (xTaskCreate(TransitionWorker, "wifi_transition", kTransitionTaskStackWords, nullptr,
-                    kTransitionTaskPriority, &s_transition_task) != pdPASS) {
+    if (xTaskCreatePinnedToCore(TransitionWorker,
+                                "wifi_transition",
+                                kTransitionTaskStackWords,
+                                nullptr,
+                                followup_task_config::kPriorityWifiTransition,
+                                &s_transition_task,
+                                followup_task_config::kSystemCore) != pdPASS) {
         s_transition_task = nullptr;
         return ESP_ERR_NO_MEM;
     }
 
-    if (xTaskCreate(CallbackTask, "wifi_callbacks", kCallbackTaskStackWords, nullptr,
-                    kCallbackTaskPriority, &s_callback_task) != pdPASS) {
+    if (xTaskCreatePinnedToCore(CallbackTask,
+                                "wifi_callbacks",
+                                kCallbackTaskStackWords,
+                                nullptr,
+                                followup_task_config::kPriorityWifiCallbacks,
+                                &s_callback_task,
+                                followup_task_config::kSystemCore) != pdPASS) {
         s_callback_task = nullptr;
         return ESP_ERR_NO_MEM;
     }
@@ -1296,16 +1305,15 @@ bool StartNetworkScan()
         return false;
     }
 
-    wifi_scan_config_t scan_config = {
-        .ssid = nullptr,
-        .bssid = nullptr,
-        .channel = 0,
-        .show_hidden = false,
-        .scan_type = WIFI_SCAN_TYPE_ACTIVE,
-        .scan_time = {.active = {.min = 30, .max = 80}},
-        .home_chan_dwell_time = 30,
-        .channel_bitmap = 0,
-    };
+    wifi_scan_config_t scan_config = {};
+    scan_config.ssid = nullptr;
+    scan_config.bssid = nullptr;
+    scan_config.channel = 0;
+    scan_config.show_hidden = false;
+    scan_config.scan_type = WIFI_SCAN_TYPE_ACTIVE;
+    scan_config.scan_time.active.min = 30;
+    scan_config.scan_time.active.max = 80;
+    scan_config.home_chan_dwell_time = 30;
     err = esp_wifi_scan_start(&scan_config, false);
     if (err != ESP_OK) {
         {

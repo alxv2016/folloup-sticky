@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "esp_log.h"
+#include "followup_task_config.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -29,7 +30,6 @@ constexpr const char* kVolumeLabel = "FOLLOUP";
 constexpr size_t kAllocationUnitSize = 16 * 1024;
 constexpr size_t kMaxFiles = 5;
 constexpr size_t kMaxLoggedEntries = 5;
-constexpr UBaseType_t kWorkerTaskPriority = 2;
 constexpr uint32_t kWorkerTaskStackWords = 6144;
 constexpr UBaseType_t kQueueDepth = 4;
 
@@ -354,12 +354,14 @@ esp_err_t Init()
     }
 
     if (s_worker_task == nullptr) {
-        const BaseType_t created = xTaskCreate(StorageWorker,
-                                              "storage_service",
-                                              kWorkerTaskStackWords,
-                                              nullptr,
-                                              kWorkerTaskPriority,
-                                              &s_worker_task);
+        const BaseType_t created = xTaskCreatePinnedToCore(
+            StorageWorker,
+            "storage_service",
+            kWorkerTaskStackWords,
+            nullptr,
+            followup_task_config::kPriorityStorage,
+            &s_worker_task,
+            followup_task_config::kAppCore);
         if (created != pdPASS) {
             s_worker_task = nullptr;
             return ESP_ERR_NO_MEM;
