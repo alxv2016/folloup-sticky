@@ -159,7 +159,7 @@ void PlayPatternBlocking(Pattern pattern)
         {196, 180, 0},
     };
     constexpr ToneStep kShutdown[] = {
-        {784, 90, 60},
+        {784, 35, 60},
         {523, 140, 0},
     };
 

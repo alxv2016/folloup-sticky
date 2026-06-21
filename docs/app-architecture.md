@@ -28,8 +28,8 @@ The repository is currently a minimal ESP-IDF application scaffold with:
 - A `design_tokens` component that owns shared product UI constants such as
   spacing, colors, typography roles, and component sizing.
 - An `epaper_ui` component that owns reusable e-paper presentation primitives
-  such as the status bar renderer, lock-screen renderer, and future view
-  widgets being ported from the old app.
+  such as the status bar renderer, lock-screen renderer, shutdown modal,
+  toast overlay, and future view widgets being ported from the old app.
 - A ported `sd_card` component for SDSPI/FATFS MicroSD access.
 - A `storage_service` component that owns app-facing MicroSD mount, format, and
   debug status policy.
@@ -85,6 +85,8 @@ main/
   device_sleep_runtime.cpp
   status_bar_runtime.h
   status_bar_runtime.cpp
+  overlay_runtime.h
+  overlay_runtime.cpp
 components/
   board/
     include/
@@ -116,11 +118,16 @@ components/
         bitmap_font.h
         font_renderer.h
         generated_epaper_fonts.h
+        overlay_geometry.h
+        shutdown_modal.h
         status_bar.h
+        toast.h
     bitmap_font.cpp
     font_renderer.cpp
     generated_epaper_fonts.cpp
+    shutdown_modal.cpp
     status_bar.cpp
+    toast.cpp
   project_assets/
     CMakeLists.txt
     asset_manifest.h
@@ -341,6 +348,8 @@ The current early startup sequence is:
   On this board, when a card is present, storage must initialize before the
   shared-bus display path so the card enters SPI mode first and remains mounted.
 - Initializes `display_service` and clears the e-paper panel to a blank screen.
+- Initializes `overlay_runtime`, which owns global modal/toast overlay state,
+  shutdown-confirm focus, and touch/button overlay routing.
 - Initializes `touch_service` and logs app-facing touch events.
 - Initializes `imu_service` and logs three direct IMU samples for bring-up.
 - Initializes `environment_service` and logs three direct SHT40 samples for
@@ -372,12 +381,19 @@ Current app-level button interactions are:
 - `DOWN` double click triggers the current home-screen action when the lock
   screen is not active.
 - `POWER_OK` double click toggles the lock screen.
-- holding `UP` while pressing `POWER_OK` requests shutdown.
+- holding `UP` while pressing `POWER_OK` opens the shutdown confirmation modal.
+- while the shutdown modal is visible, `UP` single click focuses `Cancel`,
+  `DOWN` single click focuses `Shut down`, and `DOWN` double click activates
+  the currently focused action.
+- while the shutdown modal is visible, touch can directly select `Cancel` or
+  `Shut down`.
 
 Shutdown still runs through the deferred AppShell shutdown task so the
 power-latch release sequence does not execute inside the button callback. The
-task waits briefly before calling `power_service::RequestShutdown()` so the
-analog button/Q2 bootstrap path has time to stop feeding `PWR_EN`.
+shutdown chord now routes through the global overlay runtime first, and only a
+confirmed modal action notifies the task. The task waits briefly before
+calling `power_service::RequestShutdown()` so the analog button/Q2 bootstrap
+path has time to stop feeding `PWR_EN`.
 
 ## Task Mapping
 
@@ -752,7 +768,15 @@ Current app-shell usage on top of those low-level events is:
 - `DOWN` single click: full refresh
 - `DOWN` double click: activate the current home-screen action
 - `POWER_OK` double click: toggle the lock screen
-- `UP` held plus `POWER_OK` press down: request shutdown
+- `UP` held plus `POWER_OK` press down: open the shutdown confirmation modal
+- shutdown modal visible: `UP` single click focuses `Cancel`, `DOWN` single
+  click focuses `Shut down`, `DOWN` double click activates the focused action,
+  and touch can directly hit either modal button
+
+The app-shell does not own the shutdown-modal state machine directly. It hands
+button/touch events to `main/overlay_runtime.cpp`, which traps overlay input,
+keeps the modal above both the home screen and lock screen, and only returns a
+"request shutdown" intent after explicit confirmation.
 
 The auto-sleep runtime preserves `PWR_HOLD` / `GPIO45` and `PWR_LOCK` /
 `GPIO46` as driven-high outputs during ESP light sleep, then arms `POWER_OK` /

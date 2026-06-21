@@ -9,6 +9,8 @@
 #include "design_tokens.h"
 #include "epaper_ui/font_renderer.h"
 #include "epaper_ui/lock_screen.h"
+#include "epaper_ui/shutdown_modal.h"
+#include "epaper_ui/toast.h"
 #include "epaper_panel.h"
 #include "esp_check.h"
 #include "esp_log.h"
@@ -60,6 +62,8 @@ ScreenId s_current_screen = ScreenId::kHome;
 DemoSelection s_current_selection = DemoSelection::kTop;
 epaper_ui::StatusBarState s_status_bar_state = {};
 epaper_ui::LockScreenState s_lock_screen_state = {};
+epaper_ui::ShutdownModalState s_shutdown_modal_state = {};
+epaper_ui::ToastState s_toast_state = {};
 
 class RefreshBusyGuard {
 public:
@@ -296,6 +300,18 @@ esp_err_t ApplyDemoSelection(DemoSelection selection, bool full_refresh)
                              kPortraitWidth,
                              kPortraitHeight,
                              s_status_bar_state);
+    epaper_ui::DrawToast(panel.framebuffer(),
+                         STICKY_EPD_WIDTH,
+                         STICKY_EPD_HEIGHT,
+                         kPortraitWidth,
+                         kPortraitHeight,
+                         s_toast_state);
+    epaper_ui::DrawShutdownModal(panel.framebuffer(),
+                                 STICKY_EPD_WIDTH,
+                                 STICKY_EPD_HEIGHT,
+                                 kPortraitWidth,
+                                 kPortraitHeight,
+                                 s_shutdown_modal_state);
 
     DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
     if (bus_guard.err() != ESP_OK) {
@@ -326,6 +342,18 @@ esp_err_t ApplyLockScreen(bool full_refresh)
                               kPortraitHeight,
                               s_lock_screen_state,
                               s_status_bar_state);
+    epaper_ui::DrawToast(panel.framebuffer(),
+                         STICKY_EPD_WIDTH,
+                         STICKY_EPD_HEIGHT,
+                         kPortraitWidth,
+                         kPortraitHeight,
+                         s_toast_state);
+    epaper_ui::DrawShutdownModal(panel.framebuffer(),
+                                 STICKY_EPD_WIDTH,
+                                 STICKY_EPD_HEIGHT,
+                                 kPortraitWidth,
+                                 kPortraitHeight,
+                                 s_shutdown_modal_state);
 
     DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
     if (bus_guard.err() != ESP_OK) {
@@ -500,6 +528,16 @@ bool IsInitialized()
     return s_initialized;
 }
 
+int PortraitWidth()
+{
+    return kPortraitWidth;
+}
+
+int PortraitHeight()
+{
+    return kPortraitHeight;
+}
+
 ScreenId GetCurrentScreen()
 {
     std::lock_guard<std::mutex> lock(s_panel_mutex);
@@ -525,6 +563,28 @@ esp_err_t SetLockScreenState(const epaper_ui::LockScreenState& state)
 
     std::lock_guard<std::mutex> lock(s_panel_mutex);
     s_lock_screen_state = state;
+    return ESP_OK;
+}
+
+esp_err_t SetShutdownModalState(const epaper_ui::ShutdownModalState& state)
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    std::lock_guard<std::mutex> lock(s_panel_mutex);
+    s_shutdown_modal_state = state;
+    return ESP_OK;
+}
+
+esp_err_t SetToastState(const epaper_ui::ToastState& state)
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    std::lock_guard<std::mutex> lock(s_panel_mutex);
+    s_toast_state = state;
     return ESP_OK;
 }
 
@@ -625,7 +685,7 @@ esp_err_t WakeDisplay()
         return ESP_OK;
     }
 
-    ESP_RETURN_ON_ERROR(ApplyDemoSelection(s_current_selection, true),
+    ESP_RETURN_ON_ERROR(RefreshCurrentSelectionLocked(true),
                         kTag,
                         "display wake refresh failed");
     s_display_sleeping = false;
@@ -640,7 +700,7 @@ esp_err_t RecoverAfterLightSleep()
     }
 
     std::lock_guard<std::mutex> lock(s_panel_mutex);
-    ESP_RETURN_ON_ERROR(ApplyDemoSelection(s_current_selection, true),
+    ESP_RETURN_ON_ERROR(RefreshCurrentSelectionLocked(true),
                         kTag,
                         "display light-sleep recovery refresh failed");
     s_display_sleeping = false;

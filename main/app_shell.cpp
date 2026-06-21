@@ -20,6 +20,7 @@
 #include "gemini_service.h"
 #include "imu_service.h"
 #include "lock_screen_runtime.h"
+#include "overlay_runtime.h"
 #include "power_service.h"
 #include "recording_service.h"
 #include "sdkconfig.h"
@@ -43,13 +44,10 @@ constexpr TickType_t kPowerButtonReleaseSettleDelay = pdMS_TO_TICKS(500);
 constexpr TickType_t kTouchFeedbackContactGap = pdMS_TO_TICKS(300);
 
 TaskHandle_t s_shutdown_task = nullptr;
-std::atomic<bool> s_shutdown_request_in_progress = false;
 std::atomic<bool> s_power_button_display_wake_only_active = false;
 std::atomic<bool> s_startup_complete = false;
 std::atomic<bool> s_gemini_ready = false;
 std::atomic<bool> s_up_button_pressed = false;
-std::atomic<bool> s_power_button_pressed = false;
-std::atomic<bool> s_shutdown_combo_active = false;
 bool s_touch_contact_active = false;
 TickType_t s_last_touch_event_tick = 0;
 
@@ -176,7 +174,7 @@ const char* RecordingStateName(recording_service::State state)
 
 bool IsShutdownPending(void*)
 {
-    return s_shutdown_request_in_progress.load(std::memory_order_relaxed);
+    return overlay_runtime::IsShutdownPending();
 }
 
 void HandleRecordingEvent(const recording_service::Event& event, void*)
@@ -320,23 +318,14 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
         } else if (event.event == button_service::ButtonEvent::kPressUp) {
             s_up_button_pressed.store(false, std::memory_order_relaxed);
         }
-    } else if (event.button == button_service::ButtonId::kPowerOk) {
-        if (event.event == button_service::ButtonEvent::kPressDown) {
-            s_power_button_pressed.store(true, std::memory_order_relaxed);
-        } else if (event.event == button_service::ButtonEvent::kPressUp) {
-            s_power_button_pressed.store(false, std::memory_order_relaxed);
-        }
     }
 
-    if (s_shutdown_combo_active.load(std::memory_order_relaxed) &&
-        (event.button == button_service::ButtonId::kUp ||
-         event.button == button_service::ButtonId::kPowerOk)) {
-        if (!s_up_button_pressed.load(std::memory_order_relaxed) &&
-            !s_power_button_pressed.load(std::memory_order_relaxed)) {
-            s_shutdown_combo_active.store(false, std::memory_order_relaxed);
-        }
-        ESP_LOGI(kTag, "Consumed shutdown chord button=%s event=%s",
-                 ButtonIdName(event.button), ButtonEventName(event.event));
+    const overlay_runtime::InputResult overlay_result =
+        overlay_runtime::HandleButtonEvent(event);
+    if (overlay_result.request_shutdown && s_shutdown_task != nullptr) {
+        xTaskNotifyGive(s_shutdown_task);
+    }
+    if (overlay_result.consumed) {
         return;
     }
 
@@ -382,10 +371,11 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
             return;
         }
 
-        s_shutdown_request_in_progress.store(true, std::memory_order_relaxed);
-        s_shutdown_combo_active.store(true, std::memory_order_relaxed);
         ESP_LOGW(kTag, "Shutdown chord detected: UP held while POWER_OK pressed");
-        xTaskNotifyGive(s_shutdown_task);
+        const esp_err_t err = overlay_runtime::ShowShutdownModal();
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(kTag, "Show shutdown modal failed: %s", esp_err_to_name(err));
+        }
         return;
     }
 
@@ -467,7 +457,8 @@ void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
     if (!s_startup_complete.load(std::memory_order_relaxed)) {
         return;
     }
-    if (storage_service::IsWriteBusy()) {
+    if (event.count == 0) {
+        s_touch_contact_active = false;
         return;
     }
     if (event.count > 0) {
@@ -478,6 +469,17 @@ void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
             now - s_last_touch_event_tick >= kTouchFeedbackContactGap;
         s_touch_contact_active = true;
         s_last_touch_event_tick = now;
+        const overlay_runtime::InputResult overlay_result =
+            overlay_runtime::HandleTouchEvent(event);
+        if (overlay_result.request_shutdown && s_shutdown_task != nullptr) {
+            xTaskNotifyGive(s_shutdown_task);
+        }
+        if (overlay_result.consumed) {
+            return;
+        }
+        if (storage_service::IsWriteBusy()) {
+            return;
+        }
         if (new_contact) {
             if (!lock_screen_runtime::IsActive()) {
                 RequestDemoSelection(display_service::DemoSelection::kTop,
@@ -514,7 +516,7 @@ void ShutdownTask(void*)
         ESP_LOGW(kTag, "Power button release settled; releasing power hold");
         const esp_err_t err = power_service::RequestShutdown();
         if (err != ESP_OK) {
-            s_shutdown_request_in_progress.store(false, std::memory_order_relaxed);
+            overlay_runtime::SetShutdownRequestInProgress(false);
             status_bar_runtime::SetShutdownIndicatorVisible(false);
             const esp_err_t clear_err =
                 status_bar_runtime::UpdateDisplayStateAndRequestRefresh(
@@ -525,7 +527,7 @@ void ShutdownTask(void*)
             }
             ESP_LOGW(kTag, "Shutdown request failed: %s", esp_err_to_name(err));
         } else {
-            s_shutdown_request_in_progress.store(false, std::memory_order_relaxed);
+            overlay_runtime::SetShutdownRequestInProgress(false);
             ESP_LOGW(kTag, "Shutdown request returned; board may still be powered");
         }
     }
@@ -582,6 +584,14 @@ void InitLockScreenRuntime()
     const esp_err_t err = lock_screen_runtime::Init();
     if (err != ESP_OK) {
         ESP_LOGW(kTag, "Lock screen runtime init failed: %s", esp_err_to_name(err));
+    }
+}
+
+void InitOverlayRuntime()
+{
+    const esp_err_t err = overlay_runtime::Init();
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "Overlay runtime init failed: %s", esp_err_to_name(err));
     }
 }
 
@@ -703,6 +713,7 @@ void Run()
     InitStorageService();
     InitDisplayService();
     InitLockScreenRuntime();
+    InitOverlayRuntime();
     PlayFeedback(feedback_service::FeedbackEvent::kStartup);
     InitTouchService();
     InitImuService();

@@ -2,6 +2,7 @@ idf_component_register(SRCS "main.cpp"
                             "app_shell.cpp"
                             "device_sleep_runtime.cpp"
                             "lock_screen_runtime.cpp"
+                            "overlay_runtime.cpp"
                             "status_bar_runtime.cpp"
                        INCLUDE_DIRS "."
                        REQUIRES app_update button_service display_service feedback_service

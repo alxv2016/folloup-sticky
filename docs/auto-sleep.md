@@ -108,8 +108,9 @@ step.
 
 Normal awake-state power-button interactions remain available outside the
 light-sleep wake path. Today that means `POWER_OK` double click toggles the
-lock screen, while shutdown is requested through the `UP` hold plus
-`POWER_OK` press chord.
+lock screen, while shutdown starts with the `UP` hold plus `POWER_OK` press
+chord and then requires explicit confirmation through the global shutdown
+modal.
 
 ## Sleep Blockers
 
@@ -121,7 +122,7 @@ Current blockers:
 - recording active
 - recording armed
 - recording saving or exporting
-- shutdown pending
+- shutdown pending, including the shutdown confirmation modal
 - display refresh active
 - app-declared storage write activity
 - Wi-Fi access-point setup mode
