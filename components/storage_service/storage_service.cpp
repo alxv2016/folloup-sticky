@@ -328,9 +328,23 @@ void CompleteOperation(Operation operation,
 void RefreshMountedSnapshotAndNotifyLocked(SdCard& card, esp_err_t error)
 {
     std::lock_guard<std::mutex> state_lock(s_state_mutex);
+    s_snapshot.mode = card.IsMounted() ? Mode::kAppMounted : Mode::kError;
     RefreshSnapshotStorageLocked(card);
     s_snapshot.last_error = error;
     NotifyLocked();
+}
+
+bool ShouldRetryMountedFilesystemOperation(esp_err_t err, const SdCard& card)
+{
+    if (err == ESP_OK) {
+        return false;
+    }
+
+    if (!card.IsCardInserted()) {
+        return false;
+    }
+
+    return err == ESP_FAIL || err == ESP_ERR_INVALID_STATE || err == ESP_ERR_TIMEOUT;
 }
 
 void HandleFormatRequest()
@@ -447,7 +461,7 @@ esp_err_t Init()
         std::lock_guard<std::mutex> state_lock(s_state_mutex);
         s_initialized = true;
         s_snapshot.initialized = true;
-        s_snapshot.mode = Mode::kAppMounted;
+        s_snapshot.mode = card.IsMounted() ? Mode::kAppMounted : Mode::kError;
         SetOperationLocked(Operation::kNone, OperationPhase::kIdle, s_mount_result);
         RefreshSnapshotStorageLocked(card);
         NotifyLocked();
@@ -542,6 +556,18 @@ esp_err_t RunWithMountedFilesystem(MountedFilesystemHandler handler, void* conte
     esp_err_t err = MountCardLocked(card);
     if (err == ESP_OK) {
         err = handler(card.mount_point().c_str(), context);
+        if (ShouldRetryMountedFilesystemOperation(err, card)) {
+            ESP_LOGW(kTag,
+                     "Mounted filesystem operation failed: %s; remounting SD and retrying once",
+                     esp_err_to_name(err));
+            card.Unmount();
+            err = MountCardLocked(card);
+            if (err == ESP_OK) {
+                err = handler(card.mount_point().c_str(), context);
+            } else {
+                ESP_LOGW(kTag, "SD remount before retry failed: %s", esp_err_to_name(err));
+            }
+        }
     }
 
     RefreshMountedSnapshotAndNotifyLocked(card, err);

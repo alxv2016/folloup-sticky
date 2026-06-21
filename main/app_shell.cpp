@@ -3,6 +3,8 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <mutex>
+#include <string>
 
 #include "button_service.h"
 #include "device_sleep_service.h"
@@ -14,6 +16,7 @@
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
 #include "feedback_service.h"
+#include "footer_runtime.h"
 #include "followup_task_config.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -22,12 +25,15 @@
 #include "lock_screen_runtime.h"
 #include "overlay_runtime.h"
 #include "power_service.h"
+#include "project_assets.h"
+#include "recording_session_service.h"
 #include "recording_service.h"
 #include "sdkconfig.h"
 #include "status_bar_runtime.h"
 #include "storage_service.h"
 #include "timezone_service.h"
 #include "touch_service.h"
+#include "transcription_service.h"
 #include "wifi_service.h"
 
 namespace app_shell {
@@ -48,6 +54,10 @@ std::atomic<bool> s_power_button_display_wake_only_active = false;
 std::atomic<bool> s_startup_complete = false;
 std::atomic<bool> s_gemini_ready = false;
 std::atomic<bool> s_up_button_pressed = false;
+std::mutex s_recording_session_feedback_mutex;
+recording_session_service::Phase s_last_recording_session_feedback_phase =
+    recording_session_service::Phase::kIdle;
+std::string s_last_recording_session_feedback_status = {};
 bool s_touch_contact_active = false;
 TickType_t s_last_touch_event_tick = 0;
 
@@ -78,35 +88,6 @@ void RequestDemoSelection(display_service::DemoSelection selection,
         ESP_LOGW(kTag, "Display demo selection from %s failed: %s",
                  source, esp_err_to_name(err));
         return;
-    }
-}
-
-const char* DemoActionName()
-{
-    return "format_sd";
-}
-
-bool IsStorageActionBlocked()
-{
-    const storage_service::Snapshot snapshot = storage_service::GetSnapshot();
-    return snapshot.mode != storage_service::Mode::kAppMounted ||
-           storage_service::IsWriteBusy();
-}
-
-void ActivateSelectedDemoAction()
-{
-    ESP_LOGI(kTag, "Activating selected demo action: %s", DemoActionName());
-    if (IsStorageActionBlocked()) {
-        const storage_service::Snapshot snapshot = storage_service::GetSnapshot();
-        ESP_LOGW(kTag, "Storage action ignored while mode=%s write_busy=%d",
-                 storage_service::ModeName(snapshot.mode),
-                 storage_service::IsWriteBusy() ? 1 : 0);
-        return;
-    }
-
-    const esp_err_t err = storage_service::RequestFormatSdCard();
-    if (err != ESP_OK) {
-        ESP_LOGW(kTag, "Format SD request failed: %s", esp_err_to_name(err));
     }
 }
 
@@ -172,6 +153,38 @@ const char* RecordingStateName(recording_service::State state)
     }
 }
 
+recording_session_service::Context BuildRecordingSessionContext()
+{
+    recording_session_service::Context context = {};
+    context.lock_screen_active = lock_screen_runtime::IsActive();
+    context.overlay_visible =
+        overlay_runtime::IsShutdownModalVisible() || overlay_runtime::IsSelectModalVisible();
+    return context;
+}
+
+epaper_ui::SelectModalState BuildRecordingTagSelectModalState()
+{
+    epaper_ui::SelectModalState state = {};
+    state.visible = true;
+    state.title_text = "Save recording as";
+    state.selected_index = 0;
+    for (const auto& option : recording_session_service::TagOptions()) {
+        state.items.push_back({
+            .label_text = std::string(option.label_text),
+        });
+    }
+    return state;
+}
+
+epaper_ui::ToastState BuildToast(const char* text, EmbeddedIconId icon)
+{
+    epaper_ui::ToastState state = {};
+    state.visible = true;
+    state.body_text = text != nullptr ? text : "";
+    state.leading_icon = project_assets::GetIcon(icon);
+    return state;
+}
+
 bool IsShutdownPending(void*)
 {
     return overlay_runtime::IsShutdownPending();
@@ -190,6 +203,120 @@ void HandleRecordingEvent(const recording_service::Event& event, void*)
              static_cast<unsigned>(event.ui_state.recorded_samples),
              static_cast<unsigned long>(event.ui_state.duration_ms),
              static_cast<unsigned>(event.ui_state.input_level_percent));
+
+    recording_session_service::HandleRecordingEvent(event);
+
+    const esp_err_t footer_err =
+        s_startup_complete.load(std::memory_order_relaxed)
+            ? footer_runtime::UpdateDisplayStateAndRequestRefresh(
+                  display_service::RefreshMode::kPartial)
+            : footer_runtime::UpdateDisplayState();
+    if (footer_err != ESP_OK && footer_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Footer update after recording event failed: %s",
+                 esp_err_to_name(footer_err));
+    }
+}
+
+void HandleTranscriptionEvent(const transcription_service::Event& event, void*)
+{
+    ESP_LOGI(kTag,
+             "Transcription intent: ready=%d in_flight=%d http=%d status=%s error=%s chars=%u",
+             event.snapshot.provider_ready ? 1 : 0,
+             event.snapshot.request_in_flight ? 1 : 0,
+             event.snapshot.last_http_status,
+             event.snapshot.last_status_message.empty()
+                 ? "<none>"
+                 : event.snapshot.last_status_message.c_str(),
+             event.snapshot.last_error_code.empty()
+                 ? "<none>"
+                 : event.snapshot.last_error_code.c_str(),
+             static_cast<unsigned>(event.snapshot.last_transcript.size()));
+    recording_session_service::HandleTranscriptionEvent(event);
+}
+
+void HandleRecordingSessionEvent(const recording_session_service::Event& event, void*)
+{
+    ESP_LOGI(kTag,
+             "Recording session: phase=%s allowed=%d clip_saved=%d transcript_saved=%d in_flight=%d status=%s error=%s",
+             recording_session_service::PhaseName(event.snapshot.phase),
+             event.snapshot.allowed ? 1 : 0,
+             event.snapshot.clip_saved ? 1 : 0,
+             event.snapshot.transcript_saved ? 1 : 0,
+             event.snapshot.request_in_flight ? 1 : 0,
+             event.snapshot.last_status_message.empty()
+                 ? "<none>"
+                 : event.snapshot.last_status_message.c_str(),
+             event.snapshot.last_error_code.empty()
+                 ? "<none>"
+                 : event.snapshot.last_error_code.c_str());
+
+    bool should_emit_feedback = false;
+    {
+        std::lock_guard<std::mutex> lock(s_recording_session_feedback_mutex);
+        should_emit_feedback =
+            event.snapshot.phase != s_last_recording_session_feedback_phase ||
+            event.snapshot.last_status_message != s_last_recording_session_feedback_status;
+        if (should_emit_feedback) {
+            s_last_recording_session_feedback_phase = event.snapshot.phase;
+            s_last_recording_session_feedback_status = event.snapshot.last_status_message;
+        }
+    }
+    if (!should_emit_feedback) {
+        return;
+    }
+
+    switch (event.snapshot.phase) {
+        case recording_session_service::Phase::kAwaitingTagSelection: {
+            const esp_err_t err =
+                overlay_runtime::ShowSelectModal(BuildRecordingTagSelectModalState());
+            if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+                ESP_LOGW(kTag, "Show recording select modal failed: %s", esp_err_to_name(err));
+            }
+            break;
+        }
+        case recording_session_service::Phase::kTranscribing: {
+            const esp_err_t err = overlay_runtime::ShowToast(
+                BuildToast("Transcribing recording...", EmbeddedIconId::kTranscribe));
+            if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+                ESP_LOGW(kTag, "Show transcription toast failed: %s", esp_err_to_name(err));
+            }
+            break;
+        }
+        case recording_session_service::Phase::kComplete: {
+            epaper_ui::ToastState toast = {};
+            if (event.snapshot.transcript_saved) {
+                toast = BuildToast("Transcript saved to SD", EmbeddedIconId::kFileTranscript);
+            } else if (event.snapshot.clip_saved) {
+                toast = BuildToast("Recording saved to SD", EmbeddedIconId::kCheck);
+            } else {
+                toast = BuildToast(event.snapshot.last_status_message.c_str(), EmbeddedIconId::kClose);
+            }
+            const esp_err_t err = overlay_runtime::ShowToastForDuration(toast, 2500);
+            if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+                ESP_LOGW(kTag, "Show recording completion toast failed: %s",
+                         esp_err_to_name(err));
+            }
+            break;
+        }
+        case recording_session_service::Phase::kFailed: {
+            const char* text = event.snapshot.last_status_message.empty()
+                                   ? "Recording failed"
+                                   : event.snapshot.last_status_message.c_str();
+            const esp_err_t err = overlay_runtime::ShowToastForDuration(
+                BuildToast(text, EmbeddedIconId::kClose), 2500);
+            if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+                ESP_LOGW(kTag, "Show recording failure toast failed: %s",
+                         esp_err_to_name(err));
+            }
+            break;
+        }
+        case recording_session_service::Phase::kIdle:
+        case recording_session_service::Phase::kArmed:
+        case recording_session_service::Phase::kRecording:
+        case recording_session_service::Phase::kSaving:
+        default:
+            break;
+    }
 }
 
 void HandleStorageEvent(const storage_service::Event& event, void*)
@@ -322,6 +449,10 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
 
     const overlay_runtime::InputResult overlay_result =
         overlay_runtime::HandleButtonEvent(event);
+    if (overlay_result.select_modal_submitted) {
+        (void)recording_session_service::SubmitTagSelection(
+            overlay_result.select_modal_selected_index);
+    }
     if (overlay_result.request_shutdown && s_shutdown_task != nullptr) {
         xTaskNotifyGive(s_shutdown_task);
     }
@@ -389,6 +520,28 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
         return;
     }
 
+    if (event.button == button_service::ButtonId::kPowerOk) {
+        const recording_session_service::Context recording_context =
+            BuildRecordingSessionContext();
+        bool handled = false;
+        switch (event.event) {
+            case button_service::ButtonEvent::kPressDown:
+                handled = recording_session_service::HandlePowerPressDown(recording_context);
+                break;
+            case button_service::ButtonEvent::kLongPressStart:
+                handled = recording_session_service::HandlePowerLongPressStart(recording_context);
+                break;
+            case button_service::ButtonEvent::kPressUp:
+                handled = recording_session_service::HandlePowerPressUp(recording_context);
+                break;
+            default:
+                break;
+        }
+        if (handled) {
+            return;
+        }
+    }
+
     switch (event.event) {
         case button_service::ButtonEvent::kSingleClick:
             if (event.button == button_service::ButtonId::kUp) {
@@ -400,10 +553,6 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
                         ESP_LOGW(kTag, "Lock screen partial refresh failed: %s",
                                  esp_err_to_name(err));
                     }
-                } else {
-                    RequestDemoSelection(display_service::DemoSelection::kTop,
-                                         display_service::RefreshMode::kPartial,
-                                         "button_up");
                 }
             } else if (event.button == button_service::ButtonId::kDown) {
                 PlayFeedback(feedback_service::FeedbackEvent::kButtonClick);
@@ -414,10 +563,6 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
                         ESP_LOGW(kTag, "Lock screen full refresh failed: %s",
                                  esp_err_to_name(err));
                     }
-                } else {
-                    RequestDemoSelection(display_service::DemoSelection::kTop,
-                                         display_service::RefreshMode::kFull,
-                                         "button_down");
                 }
             }
             break;
@@ -432,12 +577,8 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
                     PlayFeedback(was_active ? feedback_service::FeedbackEvent::kUnlock
                                             : feedback_service::FeedbackEvent::kLock);
                 }
-            } else {
+            } else if (event.button != button_service::ButtonId::kDown) {
                 PlayFeedback(feedback_service::FeedbackEvent::kButtonDoubleClick);
-                if (!lock_screen_runtime::IsActive() &&
-                    event.button == button_service::ButtonId::kDown) {
-                    ActivateSelectedDemoAction();
-                }
             }
             break;
         case button_service::ButtonEvent::kLongPressStart:
@@ -471,6 +612,10 @@ void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
         s_last_touch_event_tick = now;
         const overlay_runtime::InputResult overlay_result =
             overlay_runtime::HandleTouchEvent(event);
+        if (overlay_result.select_modal_submitted) {
+            (void)recording_session_service::SubmitTagSelection(
+                overlay_result.select_modal_selected_index);
+        }
         if (overlay_result.request_shutdown && s_shutdown_task != nullptr) {
             xTaskNotifyGive(s_shutdown_task);
         }
@@ -481,11 +626,6 @@ void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
             return;
         }
         if (new_contact) {
-            if (!lock_screen_runtime::IsActive()) {
-                RequestDemoSelection(display_service::DemoSelection::kTop,
-                                     display_service::RefreshMode::kPartial,
-                                     "touch");
-            }
             PlayFeedback(feedback_service::FeedbackEvent::kTouchContact);
         }
     }
@@ -647,6 +787,35 @@ void InitRecordingService()
     recording_service::LogDebugStatus();
 }
 
+void InitTranscriptionService()
+{
+    transcription_service::SetEventHandler(HandleTranscriptionEvent, nullptr);
+    const esp_err_t err = transcription_service::Init();
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "Transcription service init failed: %s", esp_err_to_name(err));
+    }
+}
+
+void InitRecordingSessionService()
+{
+    recording_session_service::SetEventHandler(HandleRecordingSessionEvent, nullptr);
+    const esp_err_t err = recording_session_service::Init();
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "Recording session service init failed: %s", esp_err_to_name(err));
+    }
+}
+
+void InitFooterRuntime()
+{
+    epaper_ui::GlobalFooterState base_state = {};
+    base_state.visible = true;
+    footer_runtime::SetBaseState(base_state);
+    const esp_err_t err = footer_runtime::UpdateDisplayState();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Footer runtime init failed: %s", esp_err_to_name(err));
+    }
+}
+
 void InitTouchService()
 {
     touch_service::SetEventHandler(HandleTouchEvent, nullptr);
@@ -723,11 +892,18 @@ void Run()
     InitGeminiService();
     InitWifiService();
     InitRecordingService();
+    InitTranscriptionService();
+    InitRecordingSessionService();
+    InitFooterRuntime();
     StartShutdownTask();
     InitButtonService();
     const esp_err_t status_bar_err = status_bar_runtime::UpdateDisplayState();
     if (status_bar_err != ESP_OK && status_bar_err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(kTag, "Initial status bar update failed: %s", esp_err_to_name(status_bar_err));
+    }
+    const esp_err_t footer_err = footer_runtime::UpdateDisplayState();
+    if (footer_err != ESP_OK && footer_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Initial footer update failed: %s", esp_err_to_name(footer_err));
     }
     RequestDemoSelection(display_service::DemoSelection::kTop,
                          display_service::RefreshMode::kFull,

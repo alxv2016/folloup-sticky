@@ -61,8 +61,10 @@ std::atomic<bool> s_refresh_in_progress = false;
 ScreenId s_current_screen = ScreenId::kHome;
 DemoSelection s_current_selection = DemoSelection::kTop;
 epaper_ui::StatusBarState s_status_bar_state = {};
+epaper_ui::GlobalFooterState s_global_footer_state = {};
 epaper_ui::LockScreenState s_lock_screen_state = {};
 epaper_ui::ShutdownModalState s_shutdown_modal_state = {};
+epaper_ui::SelectModalState s_select_modal_state = {};
 epaper_ui::ToastState s_toast_state = {};
 
 class RefreshBusyGuard {
@@ -300,12 +302,24 @@ esp_err_t ApplyDemoSelection(DemoSelection selection, bool full_refresh)
                              kPortraitWidth,
                              kPortraitHeight,
                              s_status_bar_state);
+    epaper_ui::DrawGlobalFooter(panel.framebuffer(),
+                                STICKY_EPD_WIDTH,
+                                STICKY_EPD_HEIGHT,
+                                kPortraitWidth,
+                                kPortraitHeight,
+                                s_global_footer_state);
     epaper_ui::DrawToast(panel.framebuffer(),
                          STICKY_EPD_WIDTH,
                          STICKY_EPD_HEIGHT,
                          kPortraitWidth,
                          kPortraitHeight,
                          s_toast_state);
+    epaper_ui::DrawSelectModal(panel.framebuffer(),
+                               STICKY_EPD_WIDTH,
+                               STICKY_EPD_HEIGHT,
+                               kPortraitWidth,
+                               kPortraitHeight,
+                               s_select_modal_state);
     epaper_ui::DrawShutdownModal(panel.framebuffer(),
                                  STICKY_EPD_WIDTH,
                                  STICKY_EPD_HEIGHT,
@@ -348,6 +362,12 @@ esp_err_t ApplyLockScreen(bool full_refresh)
                          kPortraitWidth,
                          kPortraitHeight,
                          s_toast_state);
+    epaper_ui::DrawSelectModal(panel.framebuffer(),
+                               STICKY_EPD_WIDTH,
+                               STICKY_EPD_HEIGHT,
+                               kPortraitWidth,
+                               kPortraitHeight,
+                               s_select_modal_state);
     epaper_ui::DrawShutdownModal(panel.framebuffer(),
                                  STICKY_EPD_WIDTH,
                                  STICKY_EPD_HEIGHT,
@@ -555,6 +575,17 @@ esp_err_t SetStatusBarState(const epaper_ui::StatusBarState& state)
     return ESP_OK;
 }
 
+esp_err_t SetGlobalFooterState(const epaper_ui::GlobalFooterState& state)
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    std::lock_guard<std::mutex> lock(s_panel_mutex);
+    s_global_footer_state = state;
+    return ESP_OK;
+}
+
 esp_err_t SetLockScreenState(const epaper_ui::LockScreenState& state)
 {
     if (!s_initialized) {
@@ -574,6 +605,17 @@ esp_err_t SetShutdownModalState(const epaper_ui::ShutdownModalState& state)
 
     std::lock_guard<std::mutex> lock(s_panel_mutex);
     s_shutdown_modal_state = state;
+    return ESP_OK;
+}
+
+esp_err_t SetSelectModalState(const epaper_ui::SelectModalState& state)
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    std::lock_guard<std::mutex> lock(s_panel_mutex);
+    s_select_modal_state = state;
     return ESP_OK;
 }
 

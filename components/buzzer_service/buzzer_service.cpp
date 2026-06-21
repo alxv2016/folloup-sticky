@@ -144,6 +144,14 @@ void PlayPatternBlocking(Pattern pattern)
         {784, 28, 12},
         {1047, 28, 0},
     };
+    constexpr ToneStep kRecordingStart[] = {
+        {1319, 45, 20},
+        {1760, 70, 0},
+    };
+    constexpr ToneStep kModalOpen[] = {
+        {1480, 40, 18},
+        {1661, 52, 0},
+    };
     constexpr ToneStep kClick[] = {
         {1760, 35, 0},
     };
@@ -176,6 +184,12 @@ void PlayPatternBlocking(Pattern pattern)
             break;
         case Pattern::kUnlock:
             PlaySteps(kUnlock, sizeof(kUnlock) / sizeof(kUnlock[0]));
+            break;
+        case Pattern::kRecordingStart:
+            PlaySteps(kRecordingStart, sizeof(kRecordingStart) / sizeof(kRecordingStart[0]));
+            break;
+        case Pattern::kModalOpen:
+            PlaySteps(kModalOpen, sizeof(kModalOpen) / sizeof(kModalOpen[0]));
             break;
         case Pattern::kClick:
             PlaySteps(kClick, sizeof(kClick) / sizeof(kClick[0]));

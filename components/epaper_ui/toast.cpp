@@ -377,13 +377,16 @@ void DrawToast(uint8_t* framebuffer,
     const UiRect close_bounds = ToastCloseButtonBounds(portrait_width, portrait_height, state);
     int text_x = panel.x + design::toast::kHorizontalPadding;
     if (state.leading_icon != nullptr) {
+        const int icon_x = text_x +
+                           std::max(0,
+                                    (design::toast::kIconSize - state.leading_icon->width) / 2);
         const int icon_y = panel.y + std::max(0, (panel.height - design::toast::kIconSize) / 2);
         DrawPortraitMonoAsset(framebuffer,
                               raw_width,
                               raw_height,
                               portrait_width,
                               portrait_height,
-                              text_x,
+                              icon_x,
                               icon_y,
                               state.leading_icon,
                               design::color::kBlack);
@@ -396,7 +399,8 @@ void DrawToast(uint8_t* framebuffer,
     const int text_width = std::max(0, text_right - text_x);
     int line_count = 0;
     const auto lines = WrapLines(state.body_text, text_width, &line_count);
-    int text_y = panel.y + design::toast::kVerticalPadding;
+    int text_y =
+        panel.y + std::max(0, (panel.height - (line_count * LineHeight(kToastRole))) / 2);
     for (int index = 0; index < line_count; ++index) {
         DrawTextLine(framebuffer,
                      raw_width,

@@ -6,6 +6,7 @@
 #include <string_view>
 
 #include "design_tokens.h"
+#include "epaper_ui/button.h"
 #include "epaper_ui/font_renderer.h"
 
 namespace epaper_ui {
@@ -17,8 +18,8 @@ constexpr std::string_view kBodyText =
 constexpr std::string_view kCancelLabel = "Cancel";
 constexpr std::string_view kConfirmLabel = "Shut down";
 constexpr design::TypographyRole kTitleRole = design::TypographyRole::kHeadingH2;
-constexpr design::TypographyRole kBodyRole = design::TypographyRole::kBodyLarge;
-constexpr design::TypographyRole kButtonRole = design::TypographyRole::kLabelMediumBlack;
+constexpr design::TypographyRole kBodyRole = design::TypographyRole::kBody;
+constexpr design::TypographyRole kButtonRole = design::TypographyRole::kLabelSmall;
 
 void DrawRawPixel(uint8_t* framebuffer, int raw_width, int raw_height, int x, int y, bool black)
 {
@@ -273,37 +274,22 @@ void DrawActionButton(uint8_t* framebuffer,
                       std::string_view label,
                       bool selected)
 {
-    const uint8_t fill = selected ? design::color::kBlack : design::color::kWhite;
-    const uint8_t border = design::color::kBlack;
-    const uint8_t text = selected ? design::color::kWhite : design::color::kBlack;
-    FillPortraitRect(framebuffer,
-                     raw_width,
-                     raw_height,
-                     portrait_width,
-                     portrait_height,
-                     bounds,
-                     fill);
-    DrawPortraitBorder(framebuffer,
-                       raw_width,
-                       raw_height,
-                       portrait_width,
-                       portrait_height,
-                       bounds,
-                       design::button::kBorderThickness,
-                       border);
+    ButtonStyle style = {};
+    style.role = kButtonRole;
+    style.width = bounds.width;
+    style.min_width = 0;
+    style.height = bounds.height;
+    style.center_label = true;
 
-    const int text_x = bounds.x + std::max(0, (bounds.width - MeasureText(kButtonRole, label)) / 2);
-    const int text_y = bounds.y + std::max(0, (bounds.height - LineHeight(kButtonRole)) / 2);
-    DrawTextLine(framebuffer,
-                 raw_width,
-                 raw_height,
-                 portrait_width,
-                 portrait_height,
-                 text_x,
-                 text_y,
-                 label,
-                 kButtonRole,
-                 text);
+    DrawButton(framebuffer,
+               raw_width,
+               raw_height,
+               portrait_width,
+               portrait_height,
+               bounds.x,
+               bounds.y,
+               {.label_text = label, .selected = selected},
+               style);
 }
 
 }  // namespace

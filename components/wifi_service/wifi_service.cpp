@@ -1081,6 +1081,8 @@ void HandleWifiEvent(int32_t event_id, void* event_data)
     if (event_id == WIFI_EVENT_STA_DISCONNECTED) {
         auto* event = static_cast<wifi_event_sta_disconnected_t*>(event_data);
         bool suppress = false;
+        bool should_reconnect = false;
+        std::string reconnect_ssid;
         {
             std::lock_guard<std::mutex> lock(s_state_mutex);
             suppress = s_suppress_disconnect_event;
@@ -1088,13 +1090,27 @@ void HandleWifiEvent(int32_t event_id, void* event_data)
                 s_connected = false;
                 s_ip_address.clear();
                 s_rssi = 0;
-                s_reconnecting = false;
+                const Credentials credentials = ResolveStationCredentialsLocked();
+                should_reconnect =
+                    s_wifi_enabled && !s_access_point_mode && credentials.valid() && !s_reconnecting;
+                s_reconnecting = should_reconnect;
+                reconnect_ssid = credentials.ssid;
             }
         }
 
         if (!suppress) {
             Notify(State::kDisconnected,
                    event != nullptr ? DisconnectReasonToString(event->reason) : "DISCONNECTED");
+            if (should_reconnect) {
+                ESP_LOGI(kTag,
+                         "Wi-Fi disconnected; scheduling reconnect to ssid=%s",
+                         reconnect_ssid.empty() ? "<unknown>" : reconnect_ssid.c_str());
+                if (!QueueTransition(TransitionRequest::kStartStation)) {
+                    std::lock_guard<std::mutex> lock(s_state_mutex);
+                    s_reconnecting = false;
+                    ESP_LOGW(kTag, "Wi-Fi reconnect queue request failed");
+                }
+            }
         }
     }
 }
@@ -1339,6 +1355,83 @@ bool StartNetworkScan()
 bool ClearSavedCredentials()
 {
     return ClearCredentialsFromNvs();
+}
+
+void RecoverAfterLightSleep()
+{
+    if (!s_initialized) {
+        return;
+    }
+
+    bool wifi_enabled = false;
+    bool connected = false;
+    bool access_point_mode = false;
+    bool reconnecting = false;
+    bool has_credentials = false;
+    {
+        std::lock_guard<std::mutex> lock(s_state_mutex);
+        wifi_enabled = s_wifi_enabled;
+        connected = s_connected;
+        access_point_mode = s_access_point_mode;
+        reconnecting = s_reconnecting;
+        has_credentials = ResolveStationCredentialsLocked().valid();
+    }
+
+    if (!wifi_enabled) {
+        ESP_LOGI(kTag, "Skipping Wi-Fi recovery after light sleep; Wi-Fi disabled");
+        return;
+    }
+
+    if (access_point_mode) {
+        wifi_mode_t current_mode = WIFI_MODE_NULL;
+        const esp_err_t mode_err = esp_wifi_get_mode(&current_mode);
+        if (mode_err == ESP_OK &&
+            (current_mode == WIFI_MODE_AP || current_mode == WIFI_MODE_APSTA)) {
+            ESP_LOGI(kTag, "Wi-Fi AP mode still active after light sleep");
+            return;
+        }
+
+        ESP_LOGI(kTag, "Recovering Wi-Fi AP mode after light sleep");
+        (void)QueueTransition(TransitionRequest::kEnterAccessPoint);
+        return;
+    }
+
+    bool link_healthy = connected;
+    if (connected) {
+        wifi_ap_record_t ap_info = {};
+        const esp_err_t ap_err = esp_wifi_sta_get_ap_info(&ap_info);
+        link_healthy = ap_err == ESP_OK;
+        if (!link_healthy) {
+            ESP_LOGW(kTag,
+                     "Wi-Fi link check after light sleep failed: %s",
+                     esp_err_to_name(ap_err));
+        }
+    }
+
+    if ((connected && link_healthy) || reconnecting || !has_credentials) {
+        ESP_LOGI(kTag,
+                 "Wi-Fi recovery after light sleep not needed: connected=%d link_healthy=%d reconnecting=%d has_credentials=%d",
+                 connected ? 1 : 0,
+                 link_healthy ? 1 : 0,
+                 reconnecting ? 1 : 0,
+                 has_credentials ? 1 : 0);
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(s_state_mutex);
+        s_connected = false;
+        s_reconnecting = true;
+        s_ip_address.clear();
+        s_rssi = 0;
+    }
+
+    ESP_LOGI(kTag, "Recovering Wi-Fi station after light sleep");
+    if (!QueueTransition(TransitionRequest::kStartStation)) {
+        std::lock_guard<std::mutex> lock(s_state_mutex);
+        s_reconnecting = false;
+        ESP_LOGW(kTag, "Wi-Fi recovery queue request failed after light sleep");
+    }
 }
 
 UiState GetUiState()

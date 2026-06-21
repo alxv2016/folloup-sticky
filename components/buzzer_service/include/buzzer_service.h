@@ -12,6 +12,8 @@ enum class Pattern {
     kGeminiConnected,
     kLock,
     kUnlock,
+    kRecordingStart,
+    kModalOpen,
     kClick,
     kLongClick,
     kDoubleClick,

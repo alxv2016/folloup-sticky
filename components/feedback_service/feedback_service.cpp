@@ -19,6 +19,10 @@ buzzer_service::Pattern PatternForEvent(FeedbackEvent event)
             return buzzer_service::Pattern::kLock;
         case FeedbackEvent::kUnlock:
             return buzzer_service::Pattern::kUnlock;
+        case FeedbackEvent::kRecordingStart:
+            return buzzer_service::Pattern::kRecordingStart;
+        case FeedbackEvent::kModalOpen:
+            return buzzer_service::Pattern::kModalOpen;
         case FeedbackEvent::kButtonClick:
         case FeedbackEvent::kTouchContact:
             return buzzer_service::Pattern::kClick;
@@ -45,6 +49,10 @@ const char* FeedbackEventName(FeedbackEvent event)
             return "lock";
         case FeedbackEvent::kUnlock:
             return "unlock";
+        case FeedbackEvent::kRecordingStart:
+            return "recording_start";
+        case FeedbackEvent::kModalOpen:
+            return "modal_open";
         case FeedbackEvent::kButtonClick:
             return "button_click";
         case FeedbackEvent::kButtonDoubleClick:

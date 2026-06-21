@@ -75,6 +75,7 @@ bool ConnectToNetwork(const std::string& ssid, const std::string& password,
 bool DisconnectFromNetwork(bool clear_saved_credentials = true);
 bool StartNetworkScan();
 bool ClearSavedCredentials();
+void RecoverAfterLightSleep();
 
 UiState GetUiState();
 ScanSnapshot GetScanSnapshot();

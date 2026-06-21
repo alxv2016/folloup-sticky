@@ -10,6 +10,8 @@ enum class FeedbackEvent {
     kGeminiConnected,
     kLock,
     kUnlock,
+    kRecordingStart,
+    kModalOpen,
     kButtonClick,
     kButtonDoubleClick,
     kButtonLongPress,

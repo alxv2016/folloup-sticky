@@ -299,6 +299,10 @@ esp_err_t RestoreAfterLightSleep()
                      esp_err_to_name(touch_err));
         }
     }
+    if (wifi_service::IsBusy() || wifi_service::IsConnected() || wifi_service::HasSavedCredentials() ||
+        wifi_service::IsAccessPointMode()) {
+        wifi_service::RecoverAfterLightSleep();
+    }
     LogLightSleepPins("after restore");
     ESP_LOGI(kTag, "Light-sleep restore done: display_err=%s",
              esp_err_to_name(err));
