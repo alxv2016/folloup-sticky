@@ -240,6 +240,14 @@ const EmbeddedImageAsset* ResolveWifiIcon(WifiStatus status)
     }
 }
 
+const EmbeddedImageAsset* ResolveGeminiIcon(bool visible)
+{
+    if (!visible) {
+        return nullptr;
+    }
+    return project_assets::GetIcon(EmbeddedIconId::kStar);
+}
+
 int CenterY(int container_top, int container_height, int item_height)
 {
     return container_top + std::max(0, (container_height - item_height) / 2);
@@ -320,6 +328,7 @@ void DrawStatusBar(uint8_t* framebuffer,
 
     const EmbeddedImageAsset* battery_icon = ResolveBatteryIcon(state.battery);
     const EmbeddedImageAsset* wifi_icon = ResolveWifiIcon(state.wifi);
+    const EmbeddedImageAsset* gemini_icon = ResolveGeminiIcon(state.show_gemini_icon);
     const EmbeddedImageAsset* sleep_icon =
         state.show_sleep_icon ? project_assets::GetIcon(EmbeddedIconId::kSleep) : nullptr;
     const EmbeddedImageAsset* power_icon =
@@ -363,6 +372,20 @@ void DrawStatusBar(uint8_t* framebuffer,
                  icon_box,
                  wifi_icon,
                  stroke_thickness);
+
+    if (state.show_gemini_icon) {
+        cursor_right -= design::status_bar::kItemGap + icon_box;
+        DrawIconSlot(framebuffer,
+                     raw_width,
+                     raw_height,
+                     portrait_width,
+                     portrait_height,
+                     cursor_right,
+                     icon_top,
+                     icon_box,
+                     gemini_icon,
+                     stroke_thickness);
+    }
 
     if (state.show_sleep_icon) {
         cursor_right -= design::status_bar::kItemGap + icon_box;

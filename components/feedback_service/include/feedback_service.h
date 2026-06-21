@@ -7,6 +7,7 @@ namespace feedback_service {
 
 enum class FeedbackEvent {
     kStartup,
+    kGeminiConnected,
     kButtonClick,
     kButtonDoubleClick,
     kButtonLongPress,

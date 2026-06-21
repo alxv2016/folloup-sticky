@@ -42,6 +42,14 @@ menu "Folloup Settings"
             Default timezone catalog entry used before a runtime timezone
             setting has been saved in NVS.
 
+    config FOLLOWUP_GEMINI_API_KEY
+        string "Built-in Gemini API key"
+        default ""
+        help
+            Optional built-in Gemini API key used for testing. A runtime-saved
+            Gemini API key stored through the backend portal takes precedence
+            when present.
+
     config FOLLOWUP_AUTO_SLEEP_DISPLAY_SLEEP_TIMEOUT_SECONDS
         int "Display sleep timeout"
         range 0 86400

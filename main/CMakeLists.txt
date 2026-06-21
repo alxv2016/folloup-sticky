@@ -5,7 +5,7 @@ idf_component_register(SRCS "main.cpp"
                        INCLUDE_DIRS "."
                        REQUIRES app_update button_service display_service feedback_service
                                 device_sleep_service environment_service epaper_ui esp_driver_gpio
-                                esp_hw_support esp_partition imu_service power_service
+                                esp_hw_support esp_partition gemini_service imu_service power_service
                                 nvs_flash recording_service storage_service task_config timezone_service
                                 touch_service wifi_service)
 

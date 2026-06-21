@@ -16,6 +16,7 @@
 #include "followup_task_config.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "gemini_service.h"
 #include "imu_service.h"
 #include "power_service.h"
 #include "recording_service.h"
@@ -42,6 +43,7 @@ constexpr TickType_t kTouchFeedbackContactGap = pdMS_TO_TICKS(300);
 TaskHandle_t s_shutdown_task = nullptr;
 std::atomic<bool> s_power_button_shutdown_pending = false;
 std::atomic<bool> s_startup_complete = false;
+std::atomic<bool> s_gemini_ready = false;
 bool s_touch_contact_active = false;
 TickType_t s_last_touch_event_tick = 0;
 
@@ -228,6 +230,41 @@ void HandleTimezoneEvent(const timezone_service::Event& event, void*)
 void RegisterWifiBackendRoutes(httpd_handle_t server, void*)
 {
     timezone_service::RegisterPortalRoutes(server);
+    gemini_service::RegisterPortalRoutes(server);
+}
+
+void HandleGeminiEvent(const gemini_service::Event& event, void*)
+{
+    ESP_LOGI(kTag,
+             "Gemini intent: configured=%d source=%s ready=%d auth_checked=%d in_flight=%d http=%d status=%s error=%s",
+             event.snapshot.settings.configured ? 1 : 0,
+             gemini_service::ApiKeySourceName(event.snapshot.settings.api_key_source),
+             event.snapshot.runtime.ready ? 1 : 0,
+             event.snapshot.runtime.auth_checked ? 1 : 0,
+             event.snapshot.runtime.request_in_flight ? 1 : 0,
+             event.snapshot.runtime.last_http_status,
+             event.snapshot.runtime.last_status_message.empty()
+                 ? "<none>"
+                 : event.snapshot.runtime.last_status_message.c_str(),
+             event.snapshot.runtime.last_error_code.empty()
+                 ? "<none>"
+                 : event.snapshot.runtime.last_error_code.c_str());
+
+    const bool ready = event.snapshot.runtime.ready;
+    const bool was_ready = s_gemini_ready.exchange(ready, std::memory_order_relaxed);
+    if (ready && !was_ready) {
+        PlayFeedback(feedback_service::FeedbackEvent::kGeminiConnected);
+    }
+
+    const esp_err_t status_bar_err =
+        s_startup_complete.load(std::memory_order_relaxed)
+            ? status_bar_runtime::UpdateDisplayStateAndRequestRefresh(
+                  display_service::RefreshMode::kPartial)
+            : status_bar_runtime::UpdateDisplayState();
+    if (status_bar_err != ESP_OK && status_bar_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Status bar update after Gemini event failed: %s",
+                 esp_err_to_name(status_bar_err));
+    }
 }
 
 void HandleWifiEvent(const wifi_service::Event& event, void*)
@@ -245,6 +282,8 @@ void HandleWifiEvent(const wifi_service::Event& event, void*)
              event.ui_state.ap_url.empty() ? "<none>" : event.ui_state.ap_url.c_str(),
              event.ui_state.rssi);
     timezone_service::SetNetworkConnected(event.ui_state.connected);
+    gemini_service::SetNetworkState(event.ui_state.connected,
+                                    event.ui_state.access_point_mode);
 
     const esp_err_t status_bar_err =
         s_startup_complete.load(std::memory_order_relaxed)
@@ -461,6 +500,15 @@ void InitTimezoneService()
     }
 }
 
+void InitGeminiService()
+{
+    gemini_service::SetEventHandler(HandleGeminiEvent, nullptr);
+    const esp_err_t err = gemini_service::Init();
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "Gemini service init failed: %s", esp_err_to_name(err));
+    }
+}
+
 void InitWifiService()
 {
     wifi_service::SetEventHandler(HandleWifiEvent, nullptr);
@@ -556,6 +604,7 @@ void Run()
     InitEnvironmentService();
     InitDeviceSleepRuntime();
     InitTimezoneService();
+    InitGeminiService();
     InitWifiService();
     InitRecordingService();
     StartShutdownTask();

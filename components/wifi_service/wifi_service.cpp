@@ -653,7 +653,7 @@ void StartConfigPortal()
     }
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 12;
+    config.max_uri_handlers = 16;
     config.lru_purge_enable = true;
 
     esp_err_t err = httpd_start(&s_portal_server, &config);

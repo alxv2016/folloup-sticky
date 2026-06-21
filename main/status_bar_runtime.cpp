@@ -3,6 +3,7 @@
 #include <mutex>
 
 #include "esp_check.h"
+#include "gemini_service.h"
 #include "power_service.h"
 #include "timezone_service.h"
 #include "wifi_service.h"
@@ -57,6 +58,9 @@ epaper_ui::StatusBarState BuildState()
     epaper_ui::StatusBarState state = {};
     state.wifi = BuildWifiStatus();
     state.time_text = BuildTimeText();
+    state.show_gemini_icon =
+        state.wifi == epaper_ui::WifiStatus::kConnected &&
+        gemini_service::GetSnapshot().runtime.ready;
 
     power_service::Status power_status = {};
     if (power_service::ReadStatus(&power_status) == ESP_OK && power_status.battery.available) {

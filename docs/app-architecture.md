@@ -37,6 +37,8 @@ The repository is currently a minimal ESP-IDF application scaffold with:
 - A `timezone_service` component that owns timezone settings, SNTP sync,
   system-time updates, PCF8563 RTC writeback, and backend HTTP routes for time
   settings/runtime state.
+- A `gemini_service` component that owns Gemini API key settings precedence,
+  backend HTTP routes, and Gemini authentication readiness state.
 - An input-only `pdm_mic` component that owns ESP-IDF I2S PDM RX capture.
 - A `microphone_service` component that owns Sticky microphone pin mapping,
   microphone power/read lifecycle, and input-level calculation.
@@ -134,6 +136,10 @@ components/
     include/
       storage_service.h
     storage_service.cpp
+  gemini_service/
+    include/
+      gemini_service.h
+    gemini_service.cpp
   wifi_service/
     include/
       wifi_service.h
@@ -212,6 +218,7 @@ sdkconfig.defaults
 docs/
   asset-generation.md
   app-architecture.md
+  gemini-service.md
   display-demo-cleanup.md
   reTerminal_Sticky_Hardware_Spec_Software_Porting-en.md
 scripts/

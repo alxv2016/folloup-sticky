@@ -22,6 +22,7 @@ struct StatusBarState {
     BatteryStatus battery = {};
     WifiStatus wifi = WifiStatus::kDisabled;
     std::string time_text = {};
+    bool show_gemini_icon = false;
     bool show_power_icon = false;
     bool show_sleep_icon = false;
 };

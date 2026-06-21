@@ -9,6 +9,7 @@ namespace buzzer_service {
 
 enum class Pattern {
     kStartup,
+    kGeminiConnected,
     kClick,
     kLongClick,
     kDoubleClick,

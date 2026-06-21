@@ -23,6 +23,7 @@ inline constexpr UBaseType_t kPriorityWifiTransition = 3;
 inline constexpr UBaseType_t kPriorityWifiCallbacks = 3;
 inline constexpr UBaseType_t kPriorityStorage = 2;
 inline constexpr UBaseType_t kPriorityTimezoneSync = 2;
+inline constexpr UBaseType_t kPriorityGemini = 2;
 inline constexpr UBaseType_t kPriorityBuzzer = 2;
 
 }  // namespace followup_task_config
