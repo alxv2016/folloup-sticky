@@ -78,8 +78,9 @@ The Sticky power path needs two board-specific protections during light sleep:
 - `POWER_OK` / `GPIO4` is both the active-low light-sleep wake source and the
   normal app power button. The runtime arms wake-only suppression before calling
   `esp_light_sleep_start()` so the wake-causing press cannot leak into
-  `app_shell` as a normal long-press shutdown request. The suppression is
-  cleared by the matching release/click event after wake.
+  `app_shell` as a normal power-button interaction such as a lock-screen toggle
+  gesture. The suppression is cleared by the matching release/click event after
+  wake.
 
 The light-sleep sequence is:
 
@@ -105,8 +106,10 @@ controller can remain unresponsive after the ESP32-S3 wakes unless
 handler. This is part of the light-sleep wake path, not an optional diagnostic
 step.
 
-Normal power-button long-press shutdown behavior remains available while the
-device is awake.
+Normal awake-state power-button interactions remain available outside the
+light-sleep wake path. Today that means `POWER_OK` double click toggles the
+lock screen, while shutdown is requested through the `UP` hold plus
+`POWER_OK` press chord.
 
 ## Sleep Blockers
 

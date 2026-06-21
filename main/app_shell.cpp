@@ -43,10 +43,13 @@ constexpr TickType_t kPowerButtonReleaseSettleDelay = pdMS_TO_TICKS(500);
 constexpr TickType_t kTouchFeedbackContactGap = pdMS_TO_TICKS(300);
 
 TaskHandle_t s_shutdown_task = nullptr;
-std::atomic<bool> s_power_button_shutdown_pending = false;
+std::atomic<bool> s_shutdown_request_in_progress = false;
 std::atomic<bool> s_power_button_display_wake_only_active = false;
 std::atomic<bool> s_startup_complete = false;
 std::atomic<bool> s_gemini_ready = false;
+std::atomic<bool> s_up_button_pressed = false;
+std::atomic<bool> s_power_button_pressed = false;
+std::atomic<bool> s_shutdown_combo_active = false;
 bool s_touch_contact_active = false;
 TickType_t s_last_touch_event_tick = 0;
 
@@ -173,7 +176,7 @@ const char* RecordingStateName(recording_service::State state)
 
 bool IsShutdownPending(void*)
 {
-    return s_power_button_shutdown_pending.load(std::memory_order_relaxed);
+    return s_shutdown_request_in_progress.load(std::memory_order_relaxed);
 }
 
 void HandleRecordingEvent(const recording_service::Event& event, void*)
@@ -310,6 +313,33 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
     ESP_LOGI(kTag, "Button intent: button=%s event=%s pressed_ms=%lu",
              ButtonIdName(event.button), ButtonEventName(event.event),
              static_cast<unsigned long>(event.pressed_ms));
+
+    if (event.button == button_service::ButtonId::kUp) {
+        if (event.event == button_service::ButtonEvent::kPressDown) {
+            s_up_button_pressed.store(true, std::memory_order_relaxed);
+        } else if (event.event == button_service::ButtonEvent::kPressUp) {
+            s_up_button_pressed.store(false, std::memory_order_relaxed);
+        }
+    } else if (event.button == button_service::ButtonId::kPowerOk) {
+        if (event.event == button_service::ButtonEvent::kPressDown) {
+            s_power_button_pressed.store(true, std::memory_order_relaxed);
+        } else if (event.event == button_service::ButtonEvent::kPressUp) {
+            s_power_button_pressed.store(false, std::memory_order_relaxed);
+        }
+    }
+
+    if (s_shutdown_combo_active.load(std::memory_order_relaxed) &&
+        (event.button == button_service::ButtonId::kUp ||
+         event.button == button_service::ButtonId::kPowerOk)) {
+        if (!s_up_button_pressed.load(std::memory_order_relaxed) &&
+            !s_power_button_pressed.load(std::memory_order_relaxed)) {
+            s_shutdown_combo_active.store(false, std::memory_order_relaxed);
+        }
+        ESP_LOGI(kTag, "Consumed shutdown chord button=%s event=%s",
+                 ButtonIdName(event.button), ButtonEventName(event.event));
+        return;
+    }
+
     if (device_sleep_runtime::ConsumeWakeOnlyPowerButtonEvent(event)) {
         return;
     }
@@ -339,6 +369,26 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
         return;
     }
 
+    if (event.button == button_service::ButtonId::kPowerOk &&
+        event.event == button_service::ButtonEvent::kPressDown &&
+        s_up_button_pressed.load(std::memory_order_relaxed)) {
+        if constexpr (!kEnablePowerButtonShutdown) {
+            ESP_LOGW(kTag, "Shutdown chord detected but shutdown is disabled");
+            return;
+        }
+
+        if (s_shutdown_task == nullptr) {
+            ESP_LOGW(kTag, "Shutdown chord detected but shutdown task unavailable");
+            return;
+        }
+
+        s_shutdown_request_in_progress.store(true, std::memory_order_relaxed);
+        s_shutdown_combo_active.store(true, std::memory_order_relaxed);
+        ESP_LOGW(kTag, "Shutdown chord detected: UP held while POWER_OK pressed");
+        xTaskNotifyGive(s_shutdown_task);
+        return;
+    }
+
     const device_sleep_service::Stage stage_before =
         device_sleep_service::GetSnapshot().runtime.stage;
     device_sleep_runtime::NotifyUserActivity();
@@ -351,17 +401,7 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
 
     switch (event.event) {
         case button_service::ButtonEvent::kSingleClick:
-            if (event.button == button_service::ButtonId::kPowerOk) {
-                const bool was_active = lock_screen_runtime::IsActive();
-                const esp_err_t err = lock_screen_runtime::Toggle();
-                if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-                    ESP_LOGW(kTag, "Power button lock toggle failed: %s",
-                             esp_err_to_name(err));
-                } else {
-                    PlayFeedback(was_active ? feedback_service::FeedbackEvent::kUnlock
-                                            : feedback_service::FeedbackEvent::kLock);
-                }
-            } else if (event.button == button_service::ButtonId::kUp) {
+            if (event.button == button_service::ButtonId::kUp) {
                 PlayFeedback(feedback_service::FeedbackEvent::kButtonClick);
                 if (lock_screen_runtime::IsActive()) {
                     const esp_err_t err = display_service::RequestRefreshCurrentScreen(
@@ -392,48 +432,33 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
             }
             break;
         case button_service::ButtonEvent::kDoubleClick:
-            PlayFeedback(feedback_service::FeedbackEvent::kButtonDoubleClick);
-            if (!lock_screen_runtime::IsActive() &&
-                event.button == button_service::ButtonId::kDown) {
-                ActivateSelectedDemoAction();
+            if (event.button == button_service::ButtonId::kPowerOk) {
+                const bool was_active = lock_screen_runtime::IsActive();
+                const esp_err_t err = lock_screen_runtime::Toggle();
+                if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+                    ESP_LOGW(kTag, "Power button lock toggle failed: %s",
+                             esp_err_to_name(err));
+                } else {
+                    PlayFeedback(was_active ? feedback_service::FeedbackEvent::kUnlock
+                                            : feedback_service::FeedbackEvent::kLock);
+                }
+            } else {
+                PlayFeedback(feedback_service::FeedbackEvent::kButtonDoubleClick);
+                if (!lock_screen_runtime::IsActive() &&
+                    event.button == button_service::ButtonId::kDown) {
+                    ActivateSelectedDemoAction();
+                }
             }
             break;
         case button_service::ButtonEvent::kLongPressStart:
-            PlayFeedback(feedback_service::FeedbackEvent::kButtonLongPress);
+            if (event.button != button_service::ButtonId::kPowerOk) {
+                PlayFeedback(feedback_service::FeedbackEvent::kButtonLongPress);
+            }
             break;
         default:
             break;
     }
 
-    if (event.button != button_service::ButtonId::kPowerOk) {
-        return;
-    }
-
-    if (event.event == button_service::ButtonEvent::kLongPressStart) {
-        s_power_button_shutdown_pending.store(true, std::memory_order_relaxed);
-        ESP_LOGW(kTag, "Power button long press detected; release to shutdown");
-        return;
-    }
-
-    if (event.event != button_service::ButtonEvent::kLongPressUp ||
-        !s_power_button_shutdown_pending.load(std::memory_order_relaxed)) {
-        return;
-    }
-
-    s_power_button_shutdown_pending.store(false, std::memory_order_relaxed);
-
-    if constexpr (!kEnablePowerButtonShutdown) {
-        ESP_LOGW(kTag, "Power button released after long press; shutdown is disabled");
-        return;
-    }
-
-    if (s_shutdown_task == nullptr) {
-        ESP_LOGW(kTag, "Power button released after long press; shutdown task unavailable");
-        return;
-    }
-
-    ESP_LOGW(kTag, "Power button released after long press; requesting shutdown");
-    xTaskNotifyGive(s_shutdown_task);
 }
 
 void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
@@ -489,6 +514,7 @@ void ShutdownTask(void*)
         ESP_LOGW(kTag, "Power button release settled; releasing power hold");
         const esp_err_t err = power_service::RequestShutdown();
         if (err != ESP_OK) {
+            s_shutdown_request_in_progress.store(false, std::memory_order_relaxed);
             status_bar_runtime::SetShutdownIndicatorVisible(false);
             const esp_err_t clear_err =
                 status_bar_runtime::UpdateDisplayStateAndRequestRefresh(
@@ -499,6 +525,7 @@ void ShutdownTask(void*)
             }
             ESP_LOGW(kTag, "Shutdown request failed: %s", esp_err_to_name(err));
         } else {
+            s_shutdown_request_in_progress.store(false, std::memory_order_relaxed);
             ESP_LOGW(kTag, "Shutdown request returned; board may still be powered");
         }
     }

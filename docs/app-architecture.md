@@ -358,20 +358,26 @@ The current early startup sequence is:
 - Initializes `button_service`.
 - Subscribes to button and touch events, forwards user activity into
   auto-sleep, forwards interaction feedback into `feedback_service`, and handles
-  power-button shutdown intents.
+  button-driven lock-screen, refresh, and shutdown intents.
 - Subscribes to Wi-Fi events and forwards connection state into
   `timezone_service` so network time sync starts after station connectivity is
   available.
 - Runs a small shutdown task so button callbacks can request shutdown without
   directly executing the power-latch release sequence.
 
-Power-button long press start arms shutdown, and long-press release requests it.
-This avoids releasing the latch while the physical power button is still being
-held. The shutdown task also waits briefly after release before calling
-`power_service::RequestShutdown()` so the analog button/Q2 bootstrap path has
-time to stop feeding `PWR_EN`. The button callback only notifies the AppShell
-shutdown task for shutdown requests; the task calls the power service so
-latch-release timing does not run inside the button callback.
+Current app-level button interactions are:
+
+- `UP` single click requests a partial refresh of the active screen.
+- `DOWN` single click requests a full refresh of the active screen.
+- `DOWN` double click triggers the current home-screen action when the lock
+  screen is not active.
+- `POWER_OK` double click toggles the lock screen.
+- holding `UP` while pressing `POWER_OK` requests shutdown.
+
+Shutdown still runs through the deferred AppShell shutdown task so the
+power-latch release sequence does not execute inside the button callback. The
+task waits briefly before calling `power_service::RequestShutdown()` so the
+analog button/Q2 bootstrap path has time to stop feeding `PWR_EN`.
 
 ## Task Mapping
 
@@ -740,6 +746,14 @@ Current scope:
 - exposes a typed event callback API for app-level policy routing in
   `app_shell`
 
+Current app-shell usage on top of those low-level events is:
+
+- `UP` single click: partial refresh
+- `DOWN` single click: full refresh
+- `DOWN` double click: activate the current home-screen action
+- `POWER_OK` double click: toggle the lock screen
+- `UP` held plus `POWER_OK` press down: request shutdown
+
 The auto-sleep runtime preserves `PWR_HOLD` / `GPIO45` and `PWR_LOCK` /
 `GPIO46` as driven-high outputs during ESP light sleep, then arms `POWER_OK` /
 `GPIO4` through EXT1 as the wake source. The managed button component still owns
@@ -762,7 +776,8 @@ Current scope:
 - 10-bit duty resolution
 - asynchronous command queue and worker task
 - `PlayTone(...)`, `PlayPattern(...)`, and `Stop()`
-- named startup, click, long-click, double-click, error, and shutdown patterns
+- named startup, lock, unlock, click, long-click, double-click, error, and
+  shutdown patterns
 
 The service drives tones at a 50 percent PWM duty cycle, which is the loudest
 useful square-wave drive for this passive PWM buzzer. A 100 percent duty cycle
@@ -780,14 +795,15 @@ events onto buzzer patterns without exposing buzzer hardware details to
 Current scope:
 
 - initializes `buzzer_service`
-- maps startup, button click, button double-click, button long-press, touch
-  contact, shutdown, and error feedback onto buzzer patterns
+- maps startup, lock, unlock, button click, button double-click,
+  button long-press, touch contact, shutdown, and error feedback onto buzzer
+  patterns
 - keeps app-level feedback names separate from low-level tone/pattern names
 
-AppShell requests feedback events for button single-click, double-click,
-long-press-start, touch contact, startup, and shutdown. It should not know about
-LEDC timer numbers, PWM duty values, GPIO setup, or exact buzzer pattern
-composition.
+AppShell requests feedback events for button single-click, button double-click,
+non-power long-press-start, lock, unlock, touch contact, startup, and shutdown.
+It should not know about LEDC timer numbers, PWM duty values, GPIO setup, or
+exact buzzer pattern composition.
 
 ### `components/sd_card`
 
