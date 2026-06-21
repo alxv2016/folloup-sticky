@@ -1,6 +1,7 @@
 #include "display_service.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstring>
 #include <mutex>
@@ -42,6 +43,7 @@ constexpr auto kDemoValueRole = design::TypographyRole::kDisplay;
 enum class DisplayCommandType {
     kSelectSelection,
     kSetScreen,
+    kRefreshOverlay,
     kRefreshCurrent,
 };
 
@@ -50,6 +52,7 @@ struct DisplayCommand {
     ScreenId screen = ScreenId::kHome;
     DemoSelection selection = DemoSelection::kTop;
     RefreshMode refresh_mode = RefreshMode::kPartial;
+    OverlayRefreshPolicy overlay_refresh_policy = OverlayRefreshPolicy::kRebuildUnderlay;
 };
 
 bool s_initialized = false;
@@ -66,6 +69,8 @@ epaper_ui::LockScreenState s_lock_screen_state = {};
 epaper_ui::ShutdownModalState s_shutdown_modal_state = {};
 epaper_ui::SelectModalState s_select_modal_state = {};
 epaper_ui::ToastState s_toast_state = {};
+std::array<uint8_t, STICKY_EPD_BUFFER_LEN> s_underlay_snapshot = {};
+bool s_underlay_snapshot_valid = false;
 
 class RefreshBusyGuard {
 public:
@@ -268,6 +273,71 @@ void DrawSplashScreen(uint8_t* framebuffer)
     DrawPortraitMonoAsset(framebuffer, alxv_x, alxv_y, alxv_logo);
 }
 
+void DrawCurrentOverlays(uint8_t* framebuffer)
+{
+    epaper_ui::DrawToast(framebuffer,
+                         STICKY_EPD_WIDTH,
+                         STICKY_EPD_HEIGHT,
+                         kPortraitWidth,
+                         kPortraitHeight,
+                         s_toast_state);
+    epaper_ui::DrawSelectModal(framebuffer,
+                               STICKY_EPD_WIDTH,
+                               STICKY_EPD_HEIGHT,
+                               kPortraitWidth,
+                               kPortraitHeight,
+                               s_select_modal_state);
+    epaper_ui::DrawShutdownModal(framebuffer,
+                                 STICKY_EPD_WIDTH,
+                                 STICKY_EPD_HEIGHT,
+                                 kPortraitWidth,
+                                 kPortraitHeight,
+                                 s_shutdown_modal_state);
+}
+
+void CaptureUnderlaySnapshot(const uint8_t* framebuffer)
+{
+    if (framebuffer == nullptr) {
+        s_underlay_snapshot_valid = false;
+        return;
+    }
+
+    std::memcpy(s_underlay_snapshot.data(), framebuffer, s_underlay_snapshot.size());
+    s_underlay_snapshot_valid = true;
+}
+
+void DrawHomeUnderlay(uint8_t* framebuffer, DemoSelection selection)
+{
+    EpaperPanel& panel = Panel();
+    panel.Clear(true);
+    DrawDemoFrame(framebuffer, selection);
+    epaper_ui::DrawStatusBar(framebuffer,
+                             STICKY_EPD_WIDTH,
+                             STICKY_EPD_HEIGHT,
+                             kPortraitWidth,
+                             kPortraitHeight,
+                             s_status_bar_state);
+    epaper_ui::DrawGlobalFooter(framebuffer,
+                                STICKY_EPD_WIDTH,
+                                STICKY_EPD_HEIGHT,
+                                kPortraitWidth,
+                                kPortraitHeight,
+                                s_global_footer_state);
+}
+
+void DrawLockScreenUnderlay(uint8_t* framebuffer)
+{
+    EpaperPanel& panel = Panel();
+    panel.Clear(true);
+    epaper_ui::DrawLockScreen(framebuffer,
+                              STICKY_EPD_WIDTH,
+                              STICKY_EPD_HEIGHT,
+                              kPortraitWidth,
+                              kPortraitHeight,
+                              s_lock_screen_state,
+                              s_status_bar_state);
+}
+
 void LogMetrics(const EpaperPanelMetrics& metrics)
 {
     ESP_LOGI(kTag,
@@ -291,41 +361,24 @@ const char* RefreshModeName(RefreshMode refresh_mode)
     }
 }
 
+const char* OverlayRefreshPolicyName(OverlayRefreshPolicy policy)
+{
+    switch (policy) {
+        case OverlayRefreshPolicy::kRebuildUnderlay:
+            return "rebuild_underlay";
+        case OverlayRefreshPolicy::kReuseUnderlaySnapshot:
+            return "reuse_underlay_snapshot";
+        default:
+            return "unknown";
+    }
+}
+
 esp_err_t ApplyDemoSelection(DemoSelection selection, bool full_refresh)
 {
     EpaperPanel& panel = Panel();
-    panel.Clear(true);
-    DrawDemoFrame(panel.framebuffer(), selection);
-    epaper_ui::DrawStatusBar(panel.framebuffer(),
-                             STICKY_EPD_WIDTH,
-                             STICKY_EPD_HEIGHT,
-                             kPortraitWidth,
-                             kPortraitHeight,
-                             s_status_bar_state);
-    epaper_ui::DrawGlobalFooter(panel.framebuffer(),
-                                STICKY_EPD_WIDTH,
-                                STICKY_EPD_HEIGHT,
-                                kPortraitWidth,
-                                kPortraitHeight,
-                                s_global_footer_state);
-    epaper_ui::DrawToast(panel.framebuffer(),
-                         STICKY_EPD_WIDTH,
-                         STICKY_EPD_HEIGHT,
-                         kPortraitWidth,
-                         kPortraitHeight,
-                         s_toast_state);
-    epaper_ui::DrawSelectModal(panel.framebuffer(),
-                               STICKY_EPD_WIDTH,
-                               STICKY_EPD_HEIGHT,
-                               kPortraitWidth,
-                               kPortraitHeight,
-                               s_select_modal_state);
-    epaper_ui::DrawShutdownModal(panel.framebuffer(),
-                                 STICKY_EPD_WIDTH,
-                                 STICKY_EPD_HEIGHT,
-                                 kPortraitWidth,
-                                 kPortraitHeight,
-                                 s_shutdown_modal_state);
+    DrawHomeUnderlay(panel.framebuffer(), selection);
+    CaptureUnderlaySnapshot(panel.framebuffer());
+    DrawCurrentOverlays(panel.framebuffer());
 
     DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
     if (bus_guard.err() != ESP_OK) {
@@ -348,32 +401,9 @@ esp_err_t ApplyDemoSelection(DemoSelection selection, bool full_refresh)
 esp_err_t ApplyLockScreen(bool full_refresh)
 {
     EpaperPanel& panel = Panel();
-    panel.Clear(true);
-    epaper_ui::DrawLockScreen(panel.framebuffer(),
-                              STICKY_EPD_WIDTH,
-                              STICKY_EPD_HEIGHT,
-                              kPortraitWidth,
-                              kPortraitHeight,
-                              s_lock_screen_state,
-                              s_status_bar_state);
-    epaper_ui::DrawToast(panel.framebuffer(),
-                         STICKY_EPD_WIDTH,
-                         STICKY_EPD_HEIGHT,
-                         kPortraitWidth,
-                         kPortraitHeight,
-                         s_toast_state);
-    epaper_ui::DrawSelectModal(panel.framebuffer(),
-                               STICKY_EPD_WIDTH,
-                               STICKY_EPD_HEIGHT,
-                               kPortraitWidth,
-                               kPortraitHeight,
-                               s_select_modal_state);
-    epaper_ui::DrawShutdownModal(panel.framebuffer(),
-                                 STICKY_EPD_WIDTH,
-                                 STICKY_EPD_HEIGHT,
-                                 kPortraitWidth,
-                                 kPortraitHeight,
-                                 s_shutdown_modal_state);
+    DrawLockScreenUnderlay(panel.framebuffer());
+    CaptureUnderlaySnapshot(panel.framebuffer());
+    DrawCurrentOverlays(panel.framebuffer());
 
     DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
     if (bus_guard.err() != ESP_OK) {
@@ -422,6 +452,39 @@ esp_err_t RefreshCurrentSelectionLocked(bool full_refresh)
         default:
             return ApplyDemoSelection(s_current_selection, full_refresh);
     }
+}
+
+esp_err_t RefreshOverlayStateLocked(OverlayRefreshPolicy policy)
+{
+    if (policy == OverlayRefreshPolicy::kRebuildUnderlay || !s_underlay_snapshot_valid) {
+        ESP_LOGI(kTag,
+                 "Overlay refresh path: policy=%s snapshot_valid=%d",
+                 OverlayRefreshPolicyName(policy),
+                 s_underlay_snapshot_valid ? 1 : 0);
+        return RefreshCurrentSelectionLocked(false);
+    }
+
+    EpaperPanel& panel = Panel();
+    ESP_LOGI(kTag,
+             "Overlay refresh path: policy=%s snapshot_valid=%d",
+             OverlayRefreshPolicyName(policy),
+             s_underlay_snapshot_valid ? 1 : 0);
+    std::memcpy(panel.framebuffer(), s_underlay_snapshot.data(), s_underlay_snapshot.size());
+    DrawCurrentOverlays(panel.framebuffer());
+
+    DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
+    if (bus_guard.err() != ESP_OK) {
+        return bus_guard.err();
+    }
+
+    RefreshBusyGuard refresh_busy;
+    const esp_err_t err = panel.RefreshPartialFullScreen();
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    LogMetrics(panel.metrics());
+    return ESP_OK;
 }
 
 esp_err_t SleepPanelLocked(const char* reason)
@@ -474,6 +537,8 @@ void DisplayTask(void*)
                       ? ApplyLockScreen(command.refresh_mode == RefreshMode::kFull)
                       : ApplyDemoSelection(s_current_selection,
                                            command.refresh_mode == RefreshMode::kFull);
+        } else if (command.type == DisplayCommandType::kRefreshOverlay) {
+            err = RefreshOverlayStateLocked(command.overlay_refresh_policy);
         } else {
             err = RefreshCurrentSelectionLocked(command.refresh_mode == RefreshMode::kFull);
         }
@@ -655,6 +720,20 @@ esp_err_t SelectDemoSelection(DemoSelection selection, RefreshMode refresh_mode)
     command.screen = ScreenId::kHome;
     command.selection = selection;
     command.refresh_mode = refresh_mode;
+    return xQueueOverwrite(s_command_queue, &command) == pdPASS ? ESP_OK : ESP_FAIL;
+}
+
+esp_err_t RequestOverlayRefresh(OverlayRefreshPolicy policy)
+{
+    if (!s_initialized || s_command_queue == nullptr) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    DisplayCommand command = {};
+    command.type = DisplayCommandType::kRefreshOverlay;
+    command.screen = s_current_screen;
+    command.selection = s_current_selection;
+    command.overlay_refresh_policy = policy;
     return xQueueOverwrite(s_command_queue, &command) == pdPASS ? ESP_OK : ESP_FAIL;
 }
 

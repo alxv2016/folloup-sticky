@@ -22,6 +22,7 @@
 #include "freertos/task.h"
 #include "gemini_service.h"
 #include "imu_service.h"
+#include "input_focus_runtime.h"
 #include "lock_screen_runtime.h"
 #include "overlay_runtime.h"
 #include "power_service.h"
@@ -34,6 +35,7 @@
 #include "timezone_service.h"
 #include "touch_service.h"
 #include "transcription_service.h"
+#include "ui_refresh_runtime.h"
 #include "wifi_service.h"
 
 namespace app_shell {
@@ -448,7 +450,7 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
     }
 
     const overlay_runtime::InputResult overlay_result =
-        overlay_runtime::HandleButtonEvent(event);
+        input_focus_runtime::HandleButtonEvent(event);
     if (overlay_result.select_modal_submitted) {
         (void)recording_session_service::SubmitTagSelection(
             overlay_result.select_modal_selected_index);
@@ -547,8 +549,8 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
             if (event.button == button_service::ButtonId::kUp) {
                 PlayFeedback(feedback_service::FeedbackEvent::kButtonClick);
                 if (lock_screen_runtime::IsActive()) {
-                    const esp_err_t err = display_service::RequestRefreshCurrentScreen(
-                        display_service::RefreshMode::kPartial);
+                    const esp_err_t err =
+                        lock_screen_runtime::RequestRefresh(display_service::RefreshMode::kPartial);
                     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
                         ESP_LOGW(kTag, "Lock screen partial refresh failed: %s",
                                  esp_err_to_name(err));
@@ -557,8 +559,8 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
             } else if (event.button == button_service::ButtonId::kDown) {
                 PlayFeedback(feedback_service::FeedbackEvent::kButtonClick);
                 if (lock_screen_runtime::IsActive()) {
-                    const esp_err_t err = display_service::RequestRefreshCurrentScreen(
-                        display_service::RefreshMode::kFull);
+                    const esp_err_t err =
+                        lock_screen_runtime::RequestRefresh(display_service::RefreshMode::kFull);
                     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
                         ESP_LOGW(kTag, "Lock screen full refresh failed: %s",
                                  esp_err_to_name(err));
@@ -719,6 +721,14 @@ void InitDisplayService()
     }
 }
 
+void InitUiRefreshRuntime()
+{
+    const esp_err_t err = ui_refresh_runtime::Init();
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "UI refresh runtime init failed: %s", esp_err_to_name(err));
+    }
+}
+
 void InitLockScreenRuntime()
 {
     const esp_err_t err = lock_screen_runtime::Init();
@@ -807,9 +817,11 @@ void InitRecordingSessionService()
 
 void InitFooterRuntime()
 {
-    epaper_ui::GlobalFooterState base_state = {};
-    base_state.visible = true;
-    footer_runtime::SetBaseState(base_state);
+    footer_runtime::LayoutState layout_state = {};
+    layout_state.visible = true;
+    layout_state.show_mic = true;
+    footer_runtime::SetLayoutState(layout_state);
+    footer_runtime::SetProjectionState({});
     const esp_err_t err = footer_runtime::UpdateDisplayState();
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(kTag, "Footer runtime init failed: %s", esp_err_to_name(err));
@@ -881,6 +893,7 @@ void Run()
     // the shared-bus display path is brought up.
     InitStorageService();
     InitDisplayService();
+    InitUiRefreshRuntime();
     InitLockScreenRuntime();
     InitOverlayRuntime();
     PlayFeedback(feedback_service::FeedbackEvent::kStartup);

@@ -15,6 +15,7 @@ inline constexpr BaseType_t kAppCore = 1;
 
 inline constexpr UBaseType_t kPriorityRecordCapture = 5;
 inline constexpr UBaseType_t kPriorityTouch = 5;
+inline constexpr UBaseType_t kPriorityUiRefresh = 4;
 inline constexpr UBaseType_t kPriorityAppSleep = 4;
 inline constexpr UBaseType_t kPriorityAppShutdown = 4;
 inline constexpr UBaseType_t kPriorityDisplay = 3;

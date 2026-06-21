@@ -1,6 +1,7 @@
 #ifndef FOOTER_RUNTIME_H_
 #define FOOTER_RUNTIME_H_
 
+#include <cstdint>
 #include <mutex>
 
 #include "display_service.h"
@@ -9,7 +10,36 @@
 
 namespace footer_runtime {
 
-void SetBaseState(const epaper_ui::GlobalFooterState& state);
+enum class FooterFocusItem : uint8_t {
+    kNone = 0,
+    kHome,
+    kSettings,
+    kWifi,
+    kTime,
+    kFolder,
+    kMic,
+};
+
+struct LayoutState {
+    bool visible = true;
+    bool show_home = false;
+    bool show_settings = false;
+    bool show_wifi = false;
+    bool show_time = false;
+    bool show_folder = false;
+    bool show_mic = true;
+};
+
+// Future page ports should project shared page focus into this state instead of
+// letting the footer own a standalone navigation index.
+struct ProjectionState {
+    FooterFocusItem focused_item = FooterFocusItem::kNone;
+};
+
+void SetLayoutState(const LayoutState& state);
+void SetProjectionState(const ProjectionState& state);
+LayoutState GetLayoutState();
+ProjectionState GetProjectionState();
 epaper_ui::GlobalFooterState BuildState();
 esp_err_t UpdateDisplayState();
 esp_err_t UpdateDisplayStateAndRequestRefresh(

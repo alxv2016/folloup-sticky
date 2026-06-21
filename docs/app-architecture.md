@@ -83,10 +83,18 @@ main/
   app_shell.cpp
   device_sleep_runtime.h
   device_sleep_runtime.cpp
+  footer_runtime.h
+  footer_runtime.cpp
+  input_focus_runtime.h
+  input_focus_runtime.cpp
+  lock_screen_runtime.h
+  lock_screen_runtime.cpp
   status_bar_runtime.h
   status_bar_runtime.cpp
   overlay_runtime.h
   overlay_runtime.cpp
+  ui_refresh_runtime.h
+  ui_refresh_runtime.cpp
 components/
   board/
     include/
@@ -183,6 +191,11 @@ components/
   task_config/
     include/
       followup_task_config.h
+  page_navigation/
+    include/
+      page_navigation/
+        roving_focus.h
+    roving_focus.cpp
   environment_service/
     include/
       environment_service.h
@@ -307,9 +320,12 @@ The e-paper UI stack is now intentionally split across three layers:
 - app-owned runtime helpers in `main/` compose service state into UI contracts.
   Today that includes `status_bar_runtime`, which translates
   `power_service`, `wifi_service`, `timezone_service`, and sleep/shutdown state
-  into a neutral `epaper_ui::StatusBarState`, and `lock_screen_runtime`, which
-  composes time plus status indicators into `epaper_ui::LockScreenState` and
-  lock-screen visibility.
+  into a neutral `epaper_ui::StatusBarState`, `footer_runtime`, which projects
+  footer layout plus shared-focus projection into
+  `epaper_ui::GlobalFooterState`, `overlay_runtime`, which owns retained
+  modal/toast UI contracts, and `lock_screen_runtime`, which composes time plus
+  status indicators into `epaper_ui::LockScreenState` and lock-screen
+  visibility.
 
 `display_service` remains the owner of the physical panel, framebuffer, refresh
 mode decisions, and sleep/wake transitions. It may consume `epaper_ui`
@@ -336,6 +352,19 @@ pattern. It is not a reusable component and does not own hardware or rendering.
 Its job is to compose product state into UI-facing data contracts that
 `display_service` can render through `epaper_ui`.
 
+The current app-runtime helpers under `main/` are:
+
+- `status_bar_runtime`: compose Wi-Fi, Gemini, battery, sleep, and shutdown
+  state into `epaper_ui::StatusBarState`
+- `footer_runtime`: project footer layout and future shared page focus into
+  `epaper_ui::GlobalFooterState`
+- `overlay_runtime`: own retained shutdown/select/toast overlay state, hit
+  testing, and overlay presentation hooks
+- `input_focus_runtime`: own overlay-first button routing for roving focus
+  movement
+- `lock_screen_runtime`: own lock-screen visibility and clock-state composition
+- `ui_refresh_runtime`: own the keyed latest-wins UI presentation worker
+
 The current early startup sequence is:
 
 - Detects whether the running image is `ESP_OTA_IMG_PENDING_VERIFY`.
@@ -348,8 +377,10 @@ The current early startup sequence is:
   On this board, when a card is present, storage must initialize before the
   shared-bus display path so the card enters SPI mode first and remains mounted.
 - Initializes `display_service` and clears the e-paper panel to a blank screen.
+- Initializes `ui_refresh_runtime`, which owns the shared latest-wins UI
+  presentation worker.
 - Initializes `overlay_runtime`, which owns global modal/toast overlay state,
-  shutdown-confirm focus, and touch/button overlay routing.
+  shutdown-confirm focus, and overlay presentation hooks.
 - Initializes `touch_service` and logs app-facing touch events.
 - Initializes `imu_service` and logs three direct IMU samples for bring-up.
 - Initializes `environment_service` and logs three direct SHT40 samples for
@@ -364,6 +395,10 @@ The current early startup sequence is:
   sdkconfig credentials, starts station mode when credentials exist, or starts
   AP setup mode when no credentials are available.
 - Initializes `recording_service` and logs recording status.
+- Initializes `recording_session_service`, which owns the press/hold recording
+  flow, tag selection, and transcription/save orchestration.
+- Initializes `footer_runtime`, which seeds the current one-icon footer layout
+  and footer focus projection model.
 - Initializes `button_service`.
 - Subscribes to button and touch events, forwards user activity into
   auto-sleep, forwards interaction feedback into `feedback_service`, and handles
@@ -378,22 +413,45 @@ Current app-level button interactions are:
 
 - `UP` single click requests a partial refresh of the active screen.
 - `DOWN` single click requests a full refresh of the active screen.
-- `DOWN` double click triggers the current home-screen action when the lock
-  screen is not active.
 - `POWER_OK` double click toggles the lock screen.
+- pressing and holding `POWER_OK` arms then starts the recording-session flow;
+  releasing the button stops recording and opens the select modal when a clip is
+  ready.
 - holding `UP` while pressing `POWER_OK` opens the shutdown confirmation modal.
-- while the shutdown modal is visible, `UP` single click focuses `Cancel`,
-  `DOWN` single click focuses `Shut down`, and `DOWN` double click activates
-  the currently focused action.
-- while the shutdown modal is visible, touch can directly select `Cancel` or
-  `Shut down`.
+- while the select modal is visible, `UP` and `DOWN` single click move roving
+  focus with wraparound, `POWER_OK` submits the focused item, `DOWN` double
+  click also submits the focused item, and touch updates focus to the touched
+  item before submitting.
+- while the shutdown modal is visible, `UP` and `DOWN` single click move roving
+  focus with wraparound, `DOWN` double click activates the focused action, and
+  touch can directly select `Cancel` or `Shut down`.
 
 Shutdown still runs through the deferred AppShell shutdown task so the
 power-latch release sequence does not execute inside the button callback. The
-shutdown chord now routes through the global overlay runtime first, and only a
-confirmed modal action notifies the task. The task waits briefly before
+shutdown chord now routes through the app-owned input/overlay path first, and
+only a confirmed modal action notifies the task. The task waits briefly before
 calling `power_service::RequestShutdown()` so the analog button/Q2 bootstrap
 path has time to stop feeding `PWR_EN`.
+
+Current input precedence and focus ownership are:
+
+- select modal roving focus first
+- shutdown modal roving focus second
+- future overlay focusables after those modal traps
+- future page focus only when no overlay is capturing input
+
+Ownership is intentionally split as:
+
+- `components/page_navigation/roving_focus`: reusable wraparound index
+  primitive with no modal, display, or app-shell ownership baked in
+- `main/input_focus_runtime.cpp`: app-owned button routing and overlay-first
+  focus precedence
+- `main/overlay_runtime.cpp`: retained overlay state, focus-sync, submit, and
+  dismiss behavior for shutdown/select/toast overlays
+- `main/footer_runtime.cpp`: presentation-only projection of footer layout and
+  eventual shared page focus into the e-paper footer contract
+- `main/app_shell.cpp`: orchestration only; wires button/touch events into the
+  focused runtime helpers and composes higher-level product policy
 
 ## Task Mapping
 
@@ -766,17 +824,22 @@ Current app-shell usage on top of those low-level events is:
 
 - `UP` single click: partial refresh
 - `DOWN` single click: full refresh
-- `DOWN` double click: activate the current home-screen action
 - `POWER_OK` double click: toggle the lock screen
+- hold `POWER_OK`: arm/start/finish the recording-session flow
 - `UP` held plus `POWER_OK` press down: open the shutdown confirmation modal
-- shutdown modal visible: `UP` single click focuses `Cancel`, `DOWN` single
-  click focuses `Shut down`, `DOWN` double click activates the focused action,
-  and touch can directly hit either modal button
+- select modal visible: `UP` and `DOWN` single click move shared roving focus,
+  `POWER_OK` submits, `DOWN` double click submits, and touch updates focus then
+  submits
+- shutdown modal visible: `UP` and `DOWN` single click move shared roving
+  focus, `DOWN` double click activates the focused action, and touch can
+  directly hit either modal button
 
-The app-shell does not own the shutdown-modal state machine directly. It hands
-button/touch events to `main/overlay_runtime.cpp`, which traps overlay input,
-keeps the modal above both the home screen and lock screen, and only returns a
-"request shutdown" intent after explicit confirmation.
+The app shell does not own modal focus routing directly. It hands button events
+to `main/input_focus_runtime.cpp`, which gives overlay focus traps first chance
+to consume navigation movement, then defers submit/dismiss work to
+`main/overlay_runtime.cpp`. `overlay_runtime` keeps the modal above both the
+home screen and lock screen and only returns a `request_shutdown` intent after
+explicit confirmation.
 
 The auto-sleep runtime preserves `PWR_HOLD` / `GPIO45` and `PWR_LOCK` /
 `GPIO46` as driven-high outputs during ESP light sleep, then arms `POWER_OK` /
@@ -1020,11 +1083,34 @@ Current UI state:
 - `display_service` now owns a minimal screen model with the temporary home
   demo/bridge surface plus a real lock screen
 - the status bar is now rendered through `epaper_ui`
+- the global footer is rendered through `epaper_ui` and fed by
+  `main/footer_runtime.cpp`
 - the lock screen uses its own `epaper_ui` renderer and a dedicated runtime
   helper in `main/lock_screen_runtime.cpp`
+- overlay presentation now has two app-facing refresh paths:
+  - show/hide or footprint changes rebuild the underlay before redrawing the
+    overlay
+  - same-visibility overlay churn such as roving-focus updates may reuse the
+    cached underlay snapshot
 - sleep and shutdown indicators are driven through `status_bar_runtime`
   immediately before display sleep, light sleep, and deep-sleep shutdown
   transitions
+
+Current decoupled refresh rule:
+
+- mutate runtime state first in the owning runtime helper
+- schedule keyed UI presentation work through `main/ui_refresh_runtime.cpp`
+- let `ui_refresh_runtime` coalesce stale intermediate updates and keep the
+  latest state for each keyed surface while the panel is busy
+- keep `display_service` as the sole owner of framebuffer mutation and panel
+  refresh execution
+
+The current keyed surfaces are:
+
+- overlay
+- lock screen
+- status bar
+- footer
 
 The long-term direction is to replace the remaining demo bridge with real view
 renderers and rename the display API away from `DemoSelection` toward a
@@ -1038,6 +1124,16 @@ boot on this board.
 `display_service` owns app-facing display policy. Driver-specific wiring and
 SSD1677 commands must stay out of `main`. Raw board pin ownership stays in
 `board`, and low-level SSD1677 command sequencing stays in `epaper_panel`.
+
+Port validation notes still pending on hardware:
+
+- rapid select-modal roving should continue to log
+  `policy=reuse_underlay_snapshot` and must not leave stale highlight pixels
+- modal and toast show/hide transitions should rebuild cleanly without ghosting
+- the footer mic icon should stay active through recording, saving, and
+  transcribing states
+- overlay behavior should remain correct across display sleep and light-sleep
+  wake
 
 ### `components/gt911`
 

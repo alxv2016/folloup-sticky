@@ -27,6 +27,7 @@ esp_err_t ShowShutdownModal();
 esp_err_t DismissShutdownModal();
 esp_err_t ShowSelectModal(const epaper_ui::SelectModalState& state);
 esp_err_t DismissSelectModal();
+bool MoveFocus(int delta);
 void SetShutdownRequestInProgress(bool in_progress);
 
 InputResult HandleButtonEvent(const button_service::ButtonEventInfo& event);

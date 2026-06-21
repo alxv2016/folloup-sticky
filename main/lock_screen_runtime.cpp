@@ -12,6 +12,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "status_bar_runtime.h"
+#include "ui_refresh_runtime.h"
 
 namespace lock_screen_runtime {
 namespace {
@@ -87,6 +88,20 @@ bool RebuildClockStateLocked(bool force)
     return true;
 }
 
+esp_err_t UpdateDisplayState()
+{
+    epaper_ui::LockScreenState state = {};
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        if (!s_initialized) {
+            return ESP_ERR_INVALID_STATE;
+        }
+        state = s_state;
+    }
+
+    return display_service::SetLockScreenState(state);
+}
+
 esp_err_t PushState(epaper_ui::LockScreenState state,
                     bool active,
                     bool request_refresh_if_active)
@@ -95,7 +110,9 @@ esp_err_t PushState(epaper_ui::LockScreenState state,
                         kTag,
                         "set lock screen state failed");
     if (active && request_refresh_if_active) {
-        return display_service::RequestRefreshCurrentScreen(display_service::RefreshMode::kPartial);
+        return ui_refresh_runtime::Schedule(ui_refresh_runtime::SurfaceKey::kLockScreen,
+                                            &UpdateDisplayState,
+                                            display_service::RefreshMode::kPartial);
     }
     return ESP_OK;
 }
@@ -209,6 +226,12 @@ esp_err_t Hide()
 esp_err_t Toggle()
 {
     return IsActive() ? Hide() : Show();
+}
+
+esp_err_t RequestRefresh(display_service::RefreshMode refresh_mode)
+{
+    return ui_refresh_runtime::RequestRefresh(ui_refresh_runtime::SurfaceKey::kLockScreen,
+                                              refresh_mode);
 }
 
 esp_err_t SyncClockState(bool request_refresh_if_active)

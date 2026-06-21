@@ -25,6 +25,11 @@ enum class RefreshMode {
     kFull,
 };
 
+enum class OverlayRefreshPolicy {
+    kRebuildUnderlay,
+    kReuseUnderlaySnapshot,
+};
+
 esp_err_t Init();
 bool IsInitialized();
 int PortraitWidth();
@@ -40,6 +45,8 @@ esp_err_t SetCurrentScreen(ScreenId screen,
                            RefreshMode refresh_mode = RefreshMode::kPartial);
 esp_err_t SelectDemoSelection(DemoSelection selection,
                               RefreshMode refresh_mode = RefreshMode::kPartial);
+esp_err_t RequestOverlayRefresh(
+    OverlayRefreshPolicy policy = OverlayRefreshPolicy::kRebuildUnderlay);
 esp_err_t RequestRefreshCurrentScreen(RefreshMode refresh_mode = RefreshMode::kPartial);
 esp_err_t RefreshCurrentScreen(RefreshMode refresh_mode = RefreshMode::kPartial);
 esp_err_t EnterDisplaySleep();

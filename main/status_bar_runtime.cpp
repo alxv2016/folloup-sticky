@@ -6,6 +6,7 @@
 #include "gemini_service.h"
 #include "power_service.h"
 #include "timezone_service.h"
+#include "ui_refresh_runtime.h"
 #include "wifi_service.h"
 
 namespace status_bar_runtime {
@@ -86,8 +87,8 @@ esp_err_t UpdateDisplayState()
 
 esp_err_t UpdateDisplayStateAndRequestRefresh(display_service::RefreshMode refresh_mode)
 {
-    ESP_RETURN_ON_ERROR(UpdateDisplayState(), "StatusBarRuntime", "set status bar state failed");
-    return display_service::RequestRefreshCurrentScreen(refresh_mode);
+    return ui_refresh_runtime::Schedule(
+        ui_refresh_runtime::SurfaceKey::kStatusBar, &UpdateDisplayState, refresh_mode);
 }
 
 esp_err_t UpdateDisplayStateAndRefreshNow(display_service::RefreshMode refresh_mode)
