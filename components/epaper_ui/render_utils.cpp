@@ -37,7 +37,7 @@ bool AssetPixelSet(const EmbeddedImageAsset& asset, int x, int y)
 
 bool RoundedRectContains(int width, int height, int radius, int x, int y)
 {
-    if (width <= 0 || height <= 0) {
+    if (width <= 0 || height <= 0 || x < 0 || y < 0 || x >= width || y >= height) {
         return false;
     }
 
