@@ -111,30 +111,30 @@ before moving behavior into runtime code.
 
 Requirements:
 
-- [ ] Document the app-wide touch lifecycle:
+- [x] Document the app-wide touch lifecycle:
       - touch-down focuses
       - touch-move may retarget focus
       - touch-up activates only on the armed target
       - touch-up off-target cancels activation
-- [ ] Define an app-specific interactive target descriptor for all app-owned
+- [x] Define an app-specific interactive target descriptor for all app-owned
       focusable elements
-- [ ] Confirm the target model can represent:
+- [x] Confirm the target model can represent:
       - select modal items
       - shutdown modal actions
       - toast close action
       - footer items
       - future page actions
       - future page list rows/composites
-- [ ] Keep the target descriptor out of `epaper_ui`
-- [ ] Document which runtime owns focus truth for each current surface
-- [ ] Update this checklist when the shared interaction contract is settled
+- [x] Keep the target descriptor out of `epaper_ui`
+- [x] Document which runtime owns focus truth for each current surface
+- [x] Update this checklist when the shared interaction contract is settled
 
 Phase 1 completion:
 
-- [ ] Phase 1 requirements complete
-- [ ] User ran a build
-- [ ] User confirmed build is clean
-- [ ] Phase 1 marked complete
+- [x] Phase 1 requirements complete
+- [x] User ran a build
+- [x] User confirmed build is clean
+- [x] Phase 1 marked complete
 
 ## Phase 2: Touch Event Lifecycle Delivery
 
@@ -144,23 +144,23 @@ interaction runtime can separate focus from activation.
 
 Requirements:
 
-- [ ] Ensure app-level touch handling receives enough signal to distinguish:
+- [x] Ensure app-level touch handling receives enough signal to distinguish:
       - new contact
       - continued contact
       - release/no contact
-- [ ] Stop treating touch as a contact-only signal for interactive elements
-- [ ] Preserve current auto-sleep user-activity signaling
-- [ ] Preserve current touch feedback behavior where it still makes sense
-- [ ] Keep this lifecycle work app-owned rather than burying policy inside the
+- [x] Stop treating touch as a contact-only signal for interactive elements
+- [x] Preserve current auto-sleep user-activity signaling
+- [x] Preserve current touch feedback behavior where it still makes sense
+- [x] Keep this lifecycle work app-owned rather than burying policy inside the
       generic GT911 driver
-- [ ] Update this checklist when release-aware touch delivery is in place
+- [x] Update this checklist when release-aware touch delivery is in place
 
 Phase 2 completion:
 
-- [ ] Phase 2 requirements complete
-- [ ] User ran a build
-- [ ] User confirmed build is clean
-- [ ] Phase 2 marked complete
+- [x] Phase 2 requirements complete
+- [x] User ran a build
+- [x] User confirmed build is clean
+- [x] Phase 2 marked complete
 
 ## Phase 3: Shared App Interaction Runtime
 
@@ -171,28 +171,28 @@ surfaces.
 
 Requirements:
 
-- [ ] Add a shared app-owned interaction runtime under `main/`
-- [ ] Keep `app_shell` limited to forwarding button/touch events into that
+- [x] Add a shared app-owned interaction runtime under `main/`
+- [x] Keep `app_shell` limited to forwarding button/touch events into that
       runtime
-- [ ] Make the runtime own retained touch contact state such as:
+- [x] Make the runtime own retained touch contact state such as:
       - contact active
       - armed target
       - latest focused target
-- [ ] Define app-wide input precedence for touch target resolution:
+- [x] Define app-wide input precedence for touch target resolution:
       - overlays first
       - footer/page targets after overlays
       - future page composites under the same contract
-- [ ] Keep target resolution separate from target activation
-- [ ] Keep this runtime as the home for app-specific input policy rather than
+- [x] Keep target resolution separate from target activation
+- [x] Keep this runtime as the home for app-specific input policy rather than
       putting it into `overlay_runtime`
-- [ ] Update this checklist when the shared interaction runtime exists
+- [x] Update this checklist when the shared interaction runtime exists
 
 Phase 3 completion:
 
-- [ ] Phase 3 requirements complete
-- [ ] User ran a build
-- [ ] User confirmed build is clean
-- [ ] Phase 3 marked complete
+- [x] Phase 3 requirements complete
+- [x] User ran a build
+- [x] User confirmed build is clean
+- [x] Phase 3 marked complete
 
 ## Phase 4: Overlay Focus-Then-Activate Migration
 
@@ -203,26 +203,26 @@ contact.
 
 Requirements:
 
-- [ ] Refactor select modal touch handling to:
+- [x] Refactor select modal touch handling to:
       - focus the touched item immediately
       - keep roving focus as the single source of truth
       - submit only on valid release/activation
-- [ ] Refactor shutdown modal touch handling to:
+- [x] Refactor shutdown modal touch handling to:
       - focus the touched button immediately
       - activate only on valid release/activation
-- [ ] Keep overlay retained state ownership inside `overlay_runtime`
-- [ ] Preserve overlay-first input capture precedence
-- [ ] Keep button activation behavior aligned with touch activation behavior
-- [ ] Rework any touch cooldown logic so it guards repeated activation rather
+- [x] Keep overlay retained state ownership inside `overlay_runtime`
+- [x] Preserve overlay-first input capture precedence
+- [x] Keep button activation behavior aligned with touch activation behavior
+- [x] Rework any touch cooldown logic so it guards repeated activation rather
       than blocking normal focus updates during contact
-- [ ] Update this checklist when overlays follow the shared touch contract
+- [x] Update this checklist when overlays follow the shared touch contract
 
 Phase 4 completion:
 
-- [ ] Phase 4 requirements complete
-- [ ] User ran a build
-- [ ] User confirmed build is clean
-- [ ] Phase 4 marked complete
+- [x] Phase 4 requirements complete
+- [x] User ran a build
+- [x] User confirmed build is clean
+- [x] Phase 4 marked complete
 
 ## Phase 5: Footer Integration
 
@@ -232,22 +232,22 @@ without introducing a second independent interaction system.
 
 Requirements:
 
-- [ ] Add footer interactive target resolution under the shared interaction
+- [x] Add footer interactive target resolution under the shared interaction
       runtime
-- [ ] Keep footer selection as a projection of shared focus truth rather than a
+- [x] Keep footer selection as a projection of shared focus truth rather than a
       separate standalone footer touch state
-- [ ] Ensure tapping a footer item focuses it immediately
-- [ ] Ensure footer activation follows the same release-on-armed-target rule
-- [ ] Preserve the current mic active visual behavior while adding focus-on-tap
-- [ ] Update this checklist when the footer participates in the shared touch
+- [x] Ensure tapping a footer item focuses it immediately
+- [x] Ensure footer activation follows the same release-on-armed-target rule
+- [x] Preserve the current mic active visual behavior while adding focus-on-tap
+- [x] Update this checklist when the footer participates in the shared touch
       contract
 
 Phase 5 completion:
 
-- [ ] Phase 5 requirements complete
-- [ ] User ran a build
-- [ ] User confirmed build is clean
-- [ ] Phase 5 marked complete
+- [x] Phase 5 requirements complete
+- [x] User ran a build
+- [x] User confirmed build is clean
+- [x] Phase 5 marked complete
 
 ## Phase 6: Page Integration Groundwork
 
@@ -257,24 +257,24 @@ same focus/activate contract instead of building page-specific tap models.
 
 Requirements:
 
-- [ ] Define the contract future page runtimes/coordinators will implement for:
+- [x] Define the contract future page runtimes/coordinators will implement for:
       - resolve touched target
       - focus touched target
       - activate focused target
-- [ ] Ensure page-local selected indexes remain projections of page-owned focus
+- [x] Ensure page-local selected indexes remain projections of page-owned focus
       truth rather than separate touch-only state
-- [ ] Ensure composite page controls can participate later without redesigning
+- [x] Ensure composite page controls can participate later without redesigning
       the shared interaction runtime
-- [ ] Document how footer selection and page-body selection can still derive
+- [x] Document how footer selection and page-body selection can still derive
       from shared focus truth where applicable
-- [ ] Update this checklist when the page integration contract is documented
+- [x] Update this checklist when the page integration contract is documented
 
 Phase 6 completion:
 
-- [ ] Phase 6 requirements complete
-- [ ] User ran a build
-- [ ] User confirmed build is clean
-- [ ] Phase 6 marked complete
+- [x] Phase 6 requirements complete
+- [x] User ran a build
+- [x] User confirmed build is clean
+- [x] Phase 6 marked complete
 
 ## Phase 7: Refresh, Logging, And Validation
 
@@ -284,36 +284,36 @@ notes so future interaction work reuses the same contract.
 
 Requirements:
 
-- [ ] Ensure focus mutation still happens before display refresh
-- [ ] Route focus and activation presentation through `ui_refresh_runtime`
-- [ ] Ensure stale intermediate touch-focus states are discarded while the
+- [x] Ensure focus mutation still happens before display refresh
+- [x] Route focus and activation presentation through `ui_refresh_runtime`
+- [x] Ensure stale intermediate touch-focus states are discarded while the
       panel is busy
-- [ ] Add focused logs for:
+- [x] Add focused logs for:
       - target resolved
       - focus changed
       - activation committed
       - activation canceled
       - precedence path selected
-- [ ] Document remaining hardware validation for:
+- [x] Document remaining hardware validation for:
       - touch-down focus visibility
       - release-based activation behavior
       - overlay/footer precedence
       - behavior across display sleep/light-sleep wake
-- [ ] Update architecture-facing docs after implementation settles
-- [ ] Update this checklist to reflect final completion state
+- [x] Update architecture-facing docs after implementation settles
+- [x] Update this checklist to reflect final completion state
 
 Phase 7 completion:
 
-- [ ] Phase 7 requirements complete
-- [ ] User ran a build
-- [ ] User confirmed build is clean
-- [ ] Phase 7 marked complete
+- [x] Phase 7 requirements complete
+- [x] User ran a build
+- [x] User confirmed build is clean
+- [x] Phase 7 marked complete
 
 ## Final Completion Gate
 
 We consider this port complete only when:
 
-- [ ] All phase checklists are complete
-- [ ] All phase build gates have been satisfied
-- [ ] The user confirms the final build is clean
-- [ ] Any remaining known gaps are documented explicitly
+- [x] All phase checklists are complete
+- [x] All phase build gates have been satisfied
+- [x] The user confirms the final build is clean
+- [x] Any remaining known gaps are documented explicitly

@@ -16,8 +16,6 @@ namespace overlay_runtime {
 namespace {
 
 constexpr const char* kTag = "OverlayRuntime";
-constexpr uint64_t kTouchActionCooldownMs = 350;
-constexpr uint64_t kTouchFeedbackCooldownMs = 250;
 
 std::mutex s_state_mutex;
 bool s_initialized = false;
@@ -27,15 +25,9 @@ epaper_ui::ToastState s_toast_state = {};
 page_navigation::RovingFocus s_shutdown_modal_focus = {};
 page_navigation::RovingFocus s_select_modal_focus = {};
 bool s_shutdown_request_in_progress = false;
-uint64_t s_touch_action_cooldown_until_ms = 0;
-uint64_t s_touch_feedback_cooldown_until_ms = 0;
 esp_timer_handle_t s_toast_timer = nullptr;
 uint32_t s_toast_generation = 0;
-
-uint64_t MonotonicMs()
-{
-    return static_cast<uint64_t>(esp_timer_get_time() / 1000ULL);
-}
+int32_t s_overlay_interaction_generation = 1;
 
 int NormalizeSelectModalIndex(int selected_index, int item_count)
 {
@@ -51,6 +43,46 @@ epaper_ui::ShutdownModalAction ShutdownActionForIndex(int index)
 {
     return index == 1 ? epaper_ui::ShutdownModalAction::kConfirm
                       : epaper_ui::ShutdownModalAction::kCancel;
+}
+
+void AdvanceOverlayInteractionGenerationLocked()
+{
+    if (s_overlay_interaction_generation == INT32_MAX) {
+        s_overlay_interaction_generation = 1;
+        return;
+    }
+    ++s_overlay_interaction_generation;
+}
+
+app_interaction::InteractiveTarget MakeSelectModalItemTarget(int index, int32_t generation)
+{
+    return {
+        .owner = app_interaction::Owner::kOverlay,
+        .kind = app_interaction::Kind::kOverlaySelectModalItem,
+        .primary_index = index,
+        .secondary_index = generation,
+    };
+}
+
+app_interaction::InteractiveTarget MakeShutdownActionTarget(epaper_ui::ShutdownModalAction action,
+                                                            int32_t generation)
+{
+    return {
+        .owner = app_interaction::Owner::kOverlay,
+        .kind = app_interaction::Kind::kOverlayShutdownAction,
+        .primary_index = ShutdownActionIndex(action),
+        .secondary_index = generation,
+    };
+}
+
+app_interaction::InteractiveTarget MakeToastCloseTarget(int32_t generation)
+{
+    return {
+        .owner = app_interaction::Owner::kOverlay,
+        .kind = app_interaction::Kind::kOverlayToastCloseAction,
+        .primary_index = 0,
+        .secondary_index = generation,
+    };
 }
 
 void SyncShutdownModalStateFromFocusLocked()
@@ -253,6 +285,16 @@ bool HitSelectModalItemAnyOrientation(int portrait_width,
     return false;
 }
 
+bool IsOverlayTarget(const app_interaction::InteractiveTarget& target)
+{
+    return target.owner == app_interaction::Owner::kOverlay && target.IsValid();
+}
+
+bool IsCurrentOverlayTargetLocked(const app_interaction::InteractiveTarget& target)
+{
+    return IsOverlayTarget(target) && target.secondary_index == s_overlay_interaction_generation;
+}
+
 esp_err_t ApplyOverlayState(const epaper_ui::ShutdownModalState& shutdown_modal_state,
                             const epaper_ui::SelectModalState& select_modal_state,
                             const epaper_ui::ToastState& toast_state)
@@ -309,6 +351,7 @@ void ToastTimerCallback(void*)
         const OverlayRefreshSnapshot before = CaptureOverlayRefreshSnapshotLocked();
         s_toast_state = {};
         ++s_toast_generation;
+        AdvanceOverlayInteractionGenerationLocked();
         refresh_policy =
             DetermineOverlayRefreshPolicy(before, CaptureOverlayRefreshSnapshotLocked());
         changed = true;
@@ -336,6 +379,7 @@ esp_err_t Init()
         s_shutdown_modal_state = {};
         s_select_modal_state = {};
         s_toast_state = {};
+        s_overlay_interaction_generation = 1;
         s_shutdown_modal_focus.Configure(0);
         s_select_modal_focus.Configure(0);
         s_shutdown_request_in_progress = false;
@@ -374,13 +418,277 @@ bool IsInputCaptured()
 {
     std::lock_guard<std::mutex> lock(s_state_mutex);
     return s_shutdown_modal_state.visible || s_shutdown_request_in_progress ||
-           s_select_modal_state.visible;
+           s_select_modal_state.visible ||
+           (s_toast_state.visible && s_toast_state.show_close_button);
 }
 
 bool IsSelectModalVisible()
 {
     std::lock_guard<std::mutex> lock(s_state_mutex);
     return s_select_modal_state.visible;
+}
+
+bool ResolveTouchTarget(int x, int y, app_interaction::InteractiveTarget* target)
+{
+    if (target != nullptr) {
+        *target = {};
+    }
+
+    epaper_ui::SelectModalState select_modal_state = {};
+    epaper_ui::ToastState toast_state = {};
+    bool shutdown_visible = false;
+    bool select_visible = false;
+    bool toast_visible = false;
+    int32_t generation = 0;
+    {
+        std::lock_guard<std::mutex> lock(s_state_mutex);
+        if (!s_initialized || s_shutdown_request_in_progress) {
+            return false;
+        }
+        shutdown_visible = s_shutdown_modal_state.visible;
+        select_visible = s_select_modal_state.visible && !s_shutdown_modal_state.visible;
+        toast_visible = s_toast_state.visible;
+        select_modal_state = s_select_modal_state;
+        toast_state = s_toast_state;
+        generation = s_overlay_interaction_generation;
+    }
+
+    const int portrait_width = display_service::PortraitWidth();
+    const int portrait_height = display_service::PortraitHeight();
+
+    if (select_visible) {
+        int selected_index = -1;
+        if (HitSelectModalItemAnyOrientation(
+                portrait_width, portrait_height, select_modal_state, x, y, &selected_index)) {
+            if (target != nullptr) {
+                *target = MakeSelectModalItemTarget(selected_index, generation);
+            }
+            return true;
+        }
+        return false;
+    }
+
+    if (shutdown_visible) {
+        epaper_ui::ShutdownModalAction action = epaper_ui::ShutdownModalAction::kCancel;
+        if (HitShutdownActionAnyOrientation(portrait_width, portrait_height, x, y, &action)) {
+            if (target != nullptr) {
+                *target = MakeShutdownActionTarget(action, generation);
+            }
+            return true;
+        }
+        return false;
+    }
+
+    if (toast_visible && toast_state.show_close_button &&
+        epaper_ui::HitTestToastCloseButton(portrait_width, portrait_height, toast_state, x, y)) {
+        if (target != nullptr) {
+            *target = MakeToastCloseTarget(generation);
+        }
+        return true;
+    }
+
+    return false;
+}
+
+bool FocusTouchTarget(const app_interaction::InteractiveTarget& target)
+{
+    if (!IsOverlayTarget(target)) {
+        return false;
+    }
+
+    bool changed = false;
+    display_service::OverlayRefreshPolicy refresh_policy =
+        display_service::OverlayRefreshPolicy::kRebuildUnderlay;
+    {
+        std::lock_guard<std::mutex> lock(s_state_mutex);
+        if (!s_initialized || s_shutdown_request_in_progress) {
+            return false;
+        }
+        if (!IsCurrentOverlayTargetLocked(target)) {
+            ESP_LOGW(kTag,
+                     "Ignoring stale overlay focus target: kind=%d primary=%ld target_gen=%ld current_gen=%ld",
+                     static_cast<int>(target.kind),
+                     static_cast<long>(target.primary_index),
+                     static_cast<long>(target.secondary_index),
+                     static_cast<long>(s_overlay_interaction_generation));
+            return false;
+        }
+
+        const OverlayRefreshSnapshot before = CaptureOverlayRefreshSnapshotLocked();
+        switch (target.kind) {
+            case app_interaction::Kind::kOverlaySelectModalItem:
+                if (!s_select_modal_state.visible || s_shutdown_modal_state.visible ||
+                    target.primary_index < 0 ||
+                    target.primary_index >= static_cast<int>(s_select_modal_state.items.size())) {
+                    return false;
+                }
+                if (CurrentSelectModalIndexLocked() != target.primary_index) {
+                    s_select_modal_focus.SetIndex(target.primary_index);
+                    SyncSelectModalStateFromFocusLocked();
+                    changed = true;
+                }
+                break;
+            case app_interaction::Kind::kOverlayShutdownAction: {
+                if (!s_shutdown_modal_state.visible ||
+                    (target.primary_index != 0 && target.primary_index != 1)) {
+                    return false;
+                }
+                const epaper_ui::ShutdownModalAction action =
+                    ShutdownActionForIndex(target.primary_index);
+                if (s_shutdown_modal_state.selected_action != action) {
+                    s_shutdown_modal_focus.SetIndex(target.primary_index);
+                    SyncShutdownModalStateFromFocusLocked();
+                    changed = true;
+                }
+                break;
+            }
+            case app_interaction::Kind::kOverlayToastCloseAction:
+                if (!s_toast_state.visible || !s_toast_state.show_close_button ||
+                    target.primary_index != 0 ||
+                    s_toast_state.close_button_focused) {
+                    return false;
+                }
+                s_toast_state.close_button_focused = true;
+                changed = true;
+                break;
+            case app_interaction::Kind::kNone:
+            case app_interaction::Kind::kFooterItem:
+            case app_interaction::Kind::kPageAction:
+            case app_interaction::Kind::kPageComposite:
+            case app_interaction::Kind::kPageListRow:
+            default:
+                return false;
+        }
+
+        if (changed) {
+            refresh_policy =
+                DetermineOverlayRefreshPolicy(before, CaptureOverlayRefreshSnapshotLocked());
+        }
+    }
+
+    if (!changed) {
+        return false;
+    }
+
+    const esp_err_t err = SyncOverlayState(true, refresh_policy);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Overlay refresh after touch focus failed: %s", esp_err_to_name(err));
+    }
+    return true;
+}
+
+app_interaction::InputResult ActivateTouchTarget(const app_interaction::InteractiveTarget& target)
+{
+    app_interaction::InputResult result = {};
+    if (!IsOverlayTarget(target)) {
+        return result;
+    }
+
+    bool request_refresh = false;
+    display_service::OverlayRefreshPolicy refresh_policy =
+        display_service::OverlayRefreshPolicy::kRebuildUnderlay;
+
+    {
+        std::lock_guard<std::mutex> lock(s_state_mutex);
+        if (!s_initialized || s_shutdown_request_in_progress) {
+            return result;
+        }
+        if (!IsCurrentOverlayTargetLocked(target)) {
+            ESP_LOGW(kTag,
+                     "Ignoring stale overlay activate target: kind=%d primary=%ld target_gen=%ld current_gen=%ld",
+                     static_cast<int>(target.kind),
+                     static_cast<long>(target.primary_index),
+                     static_cast<long>(target.secondary_index),
+                     static_cast<long>(s_overlay_interaction_generation));
+            return result;
+        }
+
+        const OverlayRefreshSnapshot before = CaptureOverlayRefreshSnapshotLocked();
+        switch (target.kind) {
+            case app_interaction::Kind::kOverlaySelectModalItem:
+                if (!s_select_modal_state.visible || s_shutdown_modal_state.visible ||
+                    target.primary_index < 0 ||
+                    target.primary_index >= static_cast<int>(s_select_modal_state.items.size())) {
+                    return result;
+                }
+                s_select_modal_focus.SetIndex(target.primary_index);
+                SyncSelectModalStateFromFocusLocked();
+                result.consumed = true;
+                result.select_modal_submitted = true;
+                result.select_modal_selected_index = CurrentSelectModalIndexLocked();
+                s_select_modal_state = {};
+                s_select_modal_focus.Configure(0);
+                AdvanceOverlayInteractionGenerationLocked();
+                request_refresh = true;
+                break;
+            case app_interaction::Kind::kOverlayShutdownAction: {
+                if (!s_shutdown_modal_state.visible ||
+                    (target.primary_index != 0 && target.primary_index != 1)) {
+                    return result;
+                }
+                const epaper_ui::ShutdownModalAction action =
+                    ShutdownActionForIndex(target.primary_index);
+                s_shutdown_modal_focus.SetIndex(target.primary_index);
+                SyncShutdownModalStateFromFocusLocked();
+                s_shutdown_modal_state.selected_action = action;
+                s_shutdown_modal_state.visible = false;
+                s_shutdown_modal_focus.Configure(0);
+                AdvanceOverlayInteractionGenerationLocked();
+                result.consumed = true;
+                if (action == epaper_ui::ShutdownModalAction::kConfirm) {
+                    s_shutdown_request_in_progress = true;
+                    result.request_shutdown = true;
+                }
+                request_refresh = true;
+                break;
+            }
+            case app_interaction::Kind::kOverlayToastCloseAction:
+                if (!s_toast_state.visible || !s_toast_state.show_close_button ||
+                    target.primary_index != 0) {
+                    return result;
+                }
+                if (s_toast_timer != nullptr) {
+                    esp_timer_stop(s_toast_timer);
+                }
+                s_toast_state = {};
+                ++s_toast_generation;
+                AdvanceOverlayInteractionGenerationLocked();
+                result.consumed = true;
+                request_refresh = true;
+                break;
+            case app_interaction::Kind::kNone:
+            case app_interaction::Kind::kFooterItem:
+            case app_interaction::Kind::kPageAction:
+            case app_interaction::Kind::kPageComposite:
+            case app_interaction::Kind::kPageListRow:
+            default:
+                return result;
+        }
+
+        refresh_policy =
+            DetermineOverlayRefreshPolicy(before, CaptureOverlayRefreshSnapshotLocked());
+    }
+
+    if (result.select_modal_submitted) {
+        ESP_LOGI(kTag, "Select modal touch activate index=%d", result.select_modal_selected_index);
+    } else if (result.consumed &&
+               target.kind == app_interaction::Kind::kOverlayShutdownAction) {
+        ESP_LOGI(kTag,
+                 "Shutdown modal touch activate action=%s",
+                 result.request_shutdown ? "confirm" : "cancel");
+    } else if (result.consumed &&
+               target.kind == app_interaction::Kind::kOverlayToastCloseAction) {
+        ESP_LOGI(kTag, "Toast close activated by touch");
+    }
+
+    if (request_refresh) {
+        const esp_err_t err = SyncOverlayState(true, refresh_policy);
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(kTag, "Overlay refresh after touch activate failed: %s",
+                     esp_err_to_name(err));
+        }
+    }
+    return result;
 }
 
 esp_err_t ShowShutdownModal()
@@ -400,6 +708,7 @@ esp_err_t ShowShutdownModal()
             s_shutdown_modal_focus.Configure(
                 2, ShutdownActionIndex(epaper_ui::ShutdownModalAction::kCancel));
             SyncShutdownModalStateFromFocusLocked();
+            AdvanceOverlayInteractionGenerationLocked();
             refresh_policy =
                 DetermineOverlayRefreshPolicy(before, CaptureOverlayRefreshSnapshotLocked());
             changed = true;
@@ -430,6 +739,7 @@ esp_err_t DismissShutdownModal()
             s_shutdown_modal_state.visible = false;
             s_shutdown_modal_state.selected_action = epaper_ui::ShutdownModalAction::kCancel;
             s_shutdown_modal_focus.Configure(0);
+            AdvanceOverlayInteractionGenerationLocked();
             refresh_policy =
                 DetermineOverlayRefreshPolicy(before, CaptureOverlayRefreshSnapshotLocked());
             changed = true;
@@ -462,6 +772,7 @@ esp_err_t ShowSelectModal(const epaper_ui::SelectModalState& state)
                                        NormalizeSelectModalIndex(s_select_modal_state.selected_index,
                                                                  item_count));
         SyncSelectModalStateFromFocusLocked();
+        AdvanceOverlayInteractionGenerationLocked();
         refresh_policy =
             DetermineOverlayRefreshPolicy(before, CaptureOverlayRefreshSnapshotLocked());
         changed = true;
@@ -490,6 +801,7 @@ esp_err_t DismissSelectModal()
         if (s_select_modal_state.visible) {
             s_select_modal_state = {};
             s_select_modal_focus.Configure(0);
+            AdvanceOverlayInteractionGenerationLocked();
             refresh_policy =
                 DetermineOverlayRefreshPolicy(before, CaptureOverlayRefreshSnapshotLocked());
             changed = true;
@@ -555,12 +867,15 @@ bool MoveFocus(int delta)
 void SetShutdownRequestInProgress(bool in_progress)
 {
     std::lock_guard<std::mutex> lock(s_state_mutex);
-    s_shutdown_request_in_progress = in_progress;
+    if (s_shutdown_request_in_progress != in_progress) {
+        s_shutdown_request_in_progress = in_progress;
+        AdvanceOverlayInteractionGenerationLocked();
+    }
 }
 
-InputResult HandleButtonEvent(const button_service::ButtonEventInfo& event)
+app_interaction::InputResult HandleButtonEvent(const button_service::ButtonEventInfo& event)
 {
-    InputResult result = {};
+    app_interaction::InputResult result = {};
     bool request_refresh = false;
     bool play_click = false;
     bool dismiss_modal = false;
@@ -591,6 +906,7 @@ InputResult HandleButtonEvent(const button_service::ButtonEventInfo& event)
                         result.select_modal_selected_index = CurrentSelectModalIndexLocked();
                         s_select_modal_state = {};
                         s_select_modal_focus.Configure(0);
+                        AdvanceOverlayInteractionGenerationLocked();
                         request_refresh = true;
                         play_click = true;
                         dismiss_select_modal = true;
@@ -605,6 +921,7 @@ InputResult HandleButtonEvent(const button_service::ButtonEventInfo& event)
                         result.select_modal_selected_index = CurrentSelectModalIndexLocked();
                         s_select_modal_state = {};
                         s_select_modal_focus.Configure(0);
+                        AdvanceOverlayInteractionGenerationLocked();
                         request_refresh = true;
                         play_click = true;
                         dismiss_select_modal = true;
@@ -635,6 +952,7 @@ InputResult HandleButtonEvent(const button_service::ButtonEventInfo& event)
                     s_shutdown_modal_state.selected_action =
                         epaper_ui::ShutdownModalAction::kCancel;
                     s_shutdown_modal_focus.Configure(0);
+                    AdvanceOverlayInteractionGenerationLocked();
                     request_refresh = true;
                     dismiss_modal = true;
                     refresh_policy = DetermineOverlayRefreshPolicy(
@@ -672,151 +990,6 @@ done_locked:
     return result;
 }
 
-InputResult HandleTouchEvent(const touch_service::TouchEventInfo& event)
-{
-    InputResult result = {};
-    bool request_refresh = false;
-    bool play_touch_feedback = false;
-    bool action_cooldown_active = false;
-    uint64_t now_ms = MonotonicMs();
-    display_service::OverlayRefreshPolicy refresh_policy =
-        display_service::OverlayRefreshPolicy::kRebuildUnderlay;
-
-    int portrait_width = 0;
-    int portrait_height = 0;
-    epaper_ui::SelectModalState select_modal_state = {};
-    bool select_modal_visible = false;
-    {
-        std::lock_guard<std::mutex> lock(s_state_mutex);
-        if (!s_initialized) {
-            return result;
-        }
-        if (s_shutdown_request_in_progress) {
-            result.consumed = true;
-            return result;
-        }
-        if (event.count > 0 && now_ms >= s_touch_feedback_cooldown_until_ms) {
-            s_touch_feedback_cooldown_until_ms = now_ms + kTouchFeedbackCooldownMs;
-            play_touch_feedback = true;
-        }
-        if (now_ms < s_touch_action_cooldown_until_ms) {
-            result.consumed = true;
-            action_cooldown_active = true;
-        }
-        if (action_cooldown_active) {
-            // Keep consuming samples briefly after a modal touch so one press
-            // doesn't re-trigger as the controller continues to report contact.
-            if (play_touch_feedback) {
-                (void)feedback_service::Play(feedback_service::FeedbackEvent::kTouchContact);
-            }
-            return result;
-        }
-        if (!s_shutdown_modal_state.visible && !s_select_modal_state.visible) {
-            return result;
-        }
-        if (event.count == 0) {
-            return result;
-        }
-
-        result.consumed = true;
-        select_modal_state = s_select_modal_state;
-        select_modal_visible = s_select_modal_state.visible && !s_shutdown_modal_state.visible;
-    }
-
-    portrait_width = display_service::PortraitWidth();
-    portrait_height = display_service::PortraitHeight();
-
-    const int touch_x = static_cast<int>(event.points[0].x);
-    const int touch_y = static_cast<int>(event.points[0].y);
-    if (select_modal_visible) {
-        int selected_index = -1;
-        if (!HitSelectModalItemAnyOrientation(
-                portrait_width, portrait_height, select_modal_state, touch_x, touch_y, &selected_index)) {
-            ESP_LOGI(kTag, "Select modal touch miss: x=%d y=%d", touch_x, touch_y);
-            return result;
-        }
-        {
-            std::lock_guard<std::mutex> lock(s_state_mutex);
-            if (!s_select_modal_state.visible) {
-                return result;
-            }
-            const OverlayRefreshSnapshot before = CaptureOverlayRefreshSnapshotLocked();
-            s_select_modal_focus.SetIndex(selected_index);
-            SyncSelectModalStateFromFocusLocked();
-            result.select_modal_submitted = true;
-            result.select_modal_selected_index = CurrentSelectModalIndexLocked();
-            s_select_modal_state = {};
-            s_select_modal_focus.Configure(0);
-            s_touch_action_cooldown_until_ms = now_ms + kTouchActionCooldownMs;
-            request_refresh = true;
-            refresh_policy =
-                DetermineOverlayRefreshPolicy(before, CaptureOverlayRefreshSnapshotLocked());
-        }
-        if (play_touch_feedback) {
-            (void)feedback_service::Play(feedback_service::FeedbackEvent::kTouchContact);
-        }
-        if (request_refresh) {
-            ESP_LOGI(kTag, "Select modal touch submit index=%d x=%d y=%d",
-                     result.select_modal_selected_index, touch_x, touch_y);
-            const esp_err_t err = SyncOverlayState(true, refresh_policy);
-            if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-                ESP_LOGW(kTag, "Overlay refresh after select touch failed: %s",
-                         esp_err_to_name(err));
-            }
-        }
-        return result;
-    }
-
-    epaper_ui::ShutdownModalAction action = epaper_ui::ShutdownModalAction::kCancel;
-    if (!HitShutdownActionAnyOrientation(portrait_width,
-                                         portrait_height,
-                                         touch_x,
-                                         touch_y,
-                                         &action)) {
-        ESP_LOGI(kTag, "Shutdown modal touch miss: x=%d y=%d", touch_x, touch_y);
-        return result;
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(s_state_mutex);
-        if (!s_shutdown_modal_state.visible) {
-            return result;
-        }
-        const OverlayRefreshSnapshot before = CaptureOverlayRefreshSnapshotLocked();
-        s_shutdown_modal_focus.SetIndex(ShutdownActionIndex(action));
-        SyncShutdownModalStateFromFocusLocked();
-        s_shutdown_modal_state.selected_action = action;
-        s_shutdown_modal_state.visible = false;
-        s_shutdown_modal_focus.Configure(0);
-        s_touch_action_cooldown_until_ms = now_ms + kTouchActionCooldownMs;
-        if (action == epaper_ui::ShutdownModalAction::kConfirm) {
-            s_shutdown_request_in_progress = true;
-            result.request_shutdown = true;
-        }
-        request_refresh = true;
-        refresh_policy =
-            DetermineOverlayRefreshPolicy(before, CaptureOverlayRefreshSnapshotLocked());
-    }
-
-    if (play_touch_feedback) {
-        (void)feedback_service::Play(feedback_service::FeedbackEvent::kTouchContact);
-    }
-    if (request_refresh) {
-        ESP_LOGI(kTag,
-                 "Shutdown modal touch action=%s x=%d y=%d",
-                 result.request_shutdown ? "confirm" : "cancel",
-                 touch_x,
-                 touch_y);
-    }
-    if (request_refresh) {
-        const esp_err_t err = SyncOverlayState(true, refresh_policy);
-        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-            ESP_LOGW(kTag, "Overlay refresh after touch failed: %s", esp_err_to_name(err));
-        }
-    }
-    return result;
-}
-
 esp_err_t ShowToast(const epaper_ui::ToastState& state)
 {
     bool play_modal_feedback = false;
@@ -833,6 +1006,7 @@ esp_err_t ShowToast(const epaper_ui::ToastState& state)
         }
         s_toast_state = state;
         ++s_toast_generation;
+        AdvanceOverlayInteractionGenerationLocked();
         play_modal_feedback = s_toast_state.visible;
         refresh_policy =
             DetermineOverlayRefreshPolicy(before, CaptureOverlayRefreshSnapshotLocked());
@@ -859,6 +1033,7 @@ esp_err_t ShowToastForDuration(const epaper_ui::ToastState& state, uint32_t dura
         }
         s_toast_state = state;
         ++s_toast_generation;
+        AdvanceOverlayInteractionGenerationLocked();
         play_modal_feedback = s_toast_state.visible;
         refresh_policy =
             DetermineOverlayRefreshPolicy(before, CaptureOverlayRefreshSnapshotLocked());
@@ -889,6 +1064,7 @@ esp_err_t ClearToast()
         }
         s_toast_state = {};
         ++s_toast_generation;
+        AdvanceOverlayInteractionGenerationLocked();
         refresh_policy =
             DetermineOverlayRefreshPolicy(before, CaptureOverlayRefreshSnapshotLocked());
     }

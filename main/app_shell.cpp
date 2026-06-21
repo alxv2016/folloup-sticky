@@ -49,7 +49,6 @@ constexpr uint32_t kAutoSleepLightSleepTimeoutSeconds =
     CONFIG_FOLLOWUP_AUTO_SLEEP_LIGHT_SLEEP_TIMEOUT_SECONDS;
 constexpr uint32_t kShutdownTaskStackWords = 3072;
 constexpr TickType_t kPowerButtonReleaseSettleDelay = pdMS_TO_TICKS(500);
-constexpr TickType_t kTouchFeedbackContactGap = pdMS_TO_TICKS(300);
 
 TaskHandle_t s_shutdown_task = nullptr;
 std::atomic<bool> s_power_button_display_wake_only_active = false;
@@ -60,8 +59,6 @@ std::mutex s_recording_session_feedback_mutex;
 recording_session_service::Phase s_last_recording_session_feedback_phase =
     recording_session_service::Phase::kIdle;
 std::string s_last_recording_session_feedback_status = {};
-bool s_touch_contact_active = false;
-TickType_t s_last_touch_event_tick = 0;
 
 void PlayFeedback(feedback_service::FeedbackEvent event)
 {
@@ -136,6 +133,21 @@ const char* ButtonEventName(button_service::ButtonEvent event)
             return "LONG_PRESS_UP";
         default:
             return "UNKNOWN";
+    }
+}
+
+const char* TouchPhaseName(touch_service::TouchPhase phase)
+{
+    switch (phase) {
+        case touch_service::TouchPhase::kBegin:
+            return "BEGIN";
+        case touch_service::TouchPhase::kMove:
+            return "MOVE";
+        case touch_service::TouchPhase::kEnd:
+            return "END";
+        case touch_service::TouchPhase::kNone:
+        default:
+            return "NONE";
     }
 }
 
@@ -449,7 +461,7 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
         }
     }
 
-    const overlay_runtime::InputResult overlay_result =
+    const app_interaction::InputResult overlay_result =
         input_focus_runtime::HandleButtonEvent(event);
     if (overlay_result.select_modal_submitted) {
         (void)recording_session_service::SubmitTagSelection(
@@ -596,40 +608,36 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
 
 void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
 {
-    ESP_LOGD(kTag, "Touch intent: count=%u", static_cast<unsigned>(event.count));
+    ESP_LOGD(kTag,
+             "Touch intent: phase=%s count=%u",
+             TouchPhaseName(event.phase),
+             static_cast<unsigned>(event.count));
     if (!s_startup_complete.load(std::memory_order_relaxed)) {
         return;
     }
-    if (event.count == 0) {
-        s_touch_contact_active = false;
+    if (event.phase == touch_service::TouchPhase::kBegin ||
+        event.phase == touch_service::TouchPhase::kMove) {
+        device_sleep_runtime::NotifyUserActivity();
+    }
+
+    const app_interaction::InputResult touch_result = input_focus_runtime::HandleTouchEvent(event);
+    if (touch_result.select_modal_submitted) {
+        (void)recording_session_service::SubmitTagSelection(
+            touch_result.select_modal_selected_index);
+    }
+    if (touch_result.request_shutdown && s_shutdown_task != nullptr) {
+        xTaskNotifyGive(s_shutdown_task);
+    }
+    if (touch_result.consumed) {
         return;
     }
-    if (event.count > 0) {
-        device_sleep_runtime::NotifyUserActivity();
-        const TickType_t now = xTaskGetTickCount();
-        const bool new_contact =
-            !s_touch_contact_active ||
-            now - s_last_touch_event_tick >= kTouchFeedbackContactGap;
-        s_touch_contact_active = true;
-        s_last_touch_event_tick = now;
-        const overlay_runtime::InputResult overlay_result =
-            overlay_runtime::HandleTouchEvent(event);
-        if (overlay_result.select_modal_submitted) {
-            (void)recording_session_service::SubmitTagSelection(
-                overlay_result.select_modal_selected_index);
-        }
-        if (overlay_result.request_shutdown && s_shutdown_task != nullptr) {
-            xTaskNotifyGive(s_shutdown_task);
-        }
-        if (overlay_result.consumed) {
-            return;
-        }
-        if (storage_service::IsWriteBusy()) {
-            return;
-        }
-        if (new_contact) {
-            PlayFeedback(feedback_service::FeedbackEvent::kTouchContact);
-        }
+
+    if (storage_service::IsWriteBusy()) {
+        return;
+    }
+
+    if (event.phase == touch_service::TouchPhase::kBegin) {
+        PlayFeedback(feedback_service::FeedbackEvent::kTouchContact);
     }
 
     for (uint8_t i = 0; i < event.count; ++i) {

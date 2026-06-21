@@ -9,6 +9,13 @@ namespace touch_service {
 
 static constexpr uint8_t kMaxTouchPoints = 5;
 
+enum class TouchPhase : uint8_t {
+    kNone = 0,
+    kBegin,
+    kMove,
+    kEnd,
+};
+
 struct TouchPoint {
     uint16_t x = 0;
     uint16_t y = 0;
@@ -17,6 +24,7 @@ struct TouchPoint {
 };
 
 struct TouchEventInfo {
+    TouchPhase phase = TouchPhase::kNone;
     uint8_t count = 0;
     TouchPoint points[kMaxTouchPoints] = {};
 };

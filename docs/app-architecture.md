@@ -93,8 +93,12 @@ main/
   status_bar_runtime.cpp
   overlay_runtime.h
   overlay_runtime.cpp
+  page_interaction_runtime.h
+  page_interaction_runtime.cpp
   ui_refresh_runtime.h
   ui_refresh_runtime.cpp
+  app_interaction_result.h
+  app_interaction_target.h
 components/
   board/
     include/
@@ -361,7 +365,10 @@ The current app-runtime helpers under `main/` are:
 - `overlay_runtime`: own retained shutdown/select/toast overlay state, hit
   testing, and overlay presentation hooks
 - `input_focus_runtime`: own overlay-first button routing for roving focus
-  movement
+  movement plus app-wide touch contact precedence
+- `page_interaction_runtime`: own the registration contract future page
+  runtimes/coordinators use to plug page targets into the shared touch
+  interaction path
 - `lock_screen_runtime`: own lock-screen visibility and clock-state composition
 - `ui_refresh_runtime`: own the keyed latest-wins UI presentation worker
 
@@ -420,11 +427,15 @@ Current app-level button interactions are:
 - holding `UP` while pressing `POWER_OK` opens the shutdown confirmation modal.
 - while the select modal is visible, `UP` and `DOWN` single click move roving
   focus with wraparound, `POWER_OK` submits the focused item, `DOWN` double
-  click also submits the focused item, and touch updates focus to the touched
-  item before submitting.
+  click also submits the focused item, and touch focuses the touched item on
+  contact before submitting on release.
 - while the shutdown modal is visible, `UP` and `DOWN` single click move roving
   focus with wraparound, `DOWN` double click activates the focused action, and
-  touch can directly select `Cancel` or `Shut down`.
+  touch focuses `Cancel` or `Shut down` on contact before activating on
+  release.
+- when no overlay captures input, footer targets participate in the same touch
+  model: touch-down focuses the footer item immediately and touch-up activates
+  the armed footer target.
 
 Shutdown still runs through the deferred AppShell shutdown task so the
 power-latch release sequence does not execute inside the button callback. The
@@ -437,21 +448,46 @@ Current input precedence and focus ownership are:
 
 - select modal roving focus first
 - shutdown modal roving focus second
-- future overlay focusables after those modal traps
-- future page focus only when no overlay is capturing input
+- toast close action and future overlay focusables after those modal traps
+- footer targets when no overlay captures input
+- registered page targets after footer under the shared page-touch contract
 
 Ownership is intentionally split as:
 
 - `components/page_navigation/roving_focus`: reusable wraparound index
   primitive with no modal, display, or app-shell ownership baked in
-- `main/input_focus_runtime.cpp`: app-owned button routing and overlay-first
-  focus precedence
+- `main/input_focus_runtime.cpp`: app-owned button routing, touch contact
+  state, and app-wide precedence for overlay, footer, and page targets
+- `main/page_interaction_runtime.cpp`: registration point for future page
+  runtimes/coordinators to provide `resolve -> focus -> activate` touch hooks
 - `main/overlay_runtime.cpp`: retained overlay state, focus-sync, submit, and
   dismiss behavior for shutdown/select/toast overlays
 - `main/footer_runtime.cpp`: presentation-only projection of footer layout and
-  eventual shared page focus into the e-paper footer contract
+  eventual shared page focus into the e-paper footer contract, plus footer
+  touch resolve/focus/activate hooks
 - `main/app_shell.cpp`: orchestration only; wires button/touch events into the
   focused runtime helpers and composes higher-level product policy
+
+The current shared page-touch contract for future page ports is:
+
+- `resolve_touch_target(x, y, target)`: identify whether a page-owned
+  interactive target was touched
+- `focus_touch_target(target)`: update page-owned focus truth immediately
+- `activate_touch_target(target)`: perform page-owned activation on touch
+  release
+
+Future pages should keep page-local selected indexes as render projections of
+page-owned focus truth rather than inventing separate touch-only selection
+state. Composite page controls should plug into this same contract instead of
+adding a second touch interaction path.
+
+The current app-wide touch lifecycle is:
+
+- touch-down resolves the highest-precedence target and focuses it immediately
+- touch-move may retarget focus while the contact stays active
+- touch-up activates only the armed target from that contact
+- touch-up with no armed target cancels activation without inventing a second
+  selection state
 
 ## Task Mapping
 
@@ -1134,6 +1170,10 @@ Port validation notes still pending on hardware:
   transcribing states
 - overlay behavior should remain correct across display sleep and light-sleep
   wake
+- touch-down focus should be visible before release-based activation for select
+  modal rows, shutdown buttons, and footer items
+- overlay, footer, and future page precedence logs should match the touched
+  surface during on-device validation
 
 ### `components/gt911`
 

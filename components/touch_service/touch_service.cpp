@@ -26,6 +26,8 @@ bool s_initialized = false;
 bool s_gpio_isr_service_ready = false;
 EventHandler s_event_handler = nullptr;
 void* s_event_handler_context = nullptr;
+bool s_contact_active = false;
+bool s_loop_dispatched_points = false;
 
 GT911& TouchController()
 {
@@ -40,6 +42,7 @@ void DispatchTouchPoints(int8_t count, const GTPoint* points)
     }
 
     TouchEventInfo event = {};
+    event.phase = s_contact_active ? TouchPhase::kMove : TouchPhase::kBegin;
     event.count = static_cast<uint8_t>(count > kMaxTouchPoints ? kMaxTouchPoints : count);
     for (uint8_t i = 0; i < event.count; ++i) {
         event.points[i].x = points[i].x;
@@ -53,9 +56,25 @@ void DispatchTouchPoints(int8_t count, const GTPoint* points)
                  static_cast<unsigned>(event.points[i].id));
     }
 
+    s_contact_active = event.count > 0;
+    s_loop_dispatched_points = s_contact_active;
     if (s_event_handler != nullptr) {
         s_event_handler(event, s_event_handler_context);
     }
+}
+
+void DispatchTouchRelease()
+{
+    if (!s_contact_active) {
+        return;
+    }
+
+    TouchEventInfo event = {};
+    event.phase = TouchPhase::kEnd;
+    if (s_event_handler != nullptr) {
+        s_event_handler(event, s_event_handler_context);
+    }
+    s_contact_active = false;
 }
 
 void IRAM_ATTR TouchInterruptIsr(void*)
@@ -113,7 +132,11 @@ void TouchTask(void*)
         ESP_LOGD(kTag, "Servicing touch controller: notifications=%lu int_level=%d",
                  static_cast<unsigned long>(notifications), int_level);
         std::lock_guard<std::mutex> lock(s_touch_controller_mutex);
+        s_loop_dispatched_points = false;
         TouchController().loop();
+        if (!s_loop_dispatched_points) {
+            DispatchTouchRelease();
+        }
     }
 }
 
@@ -211,6 +234,8 @@ esp_err_t Init()
 
     {
         std::lock_guard<std::mutex> lock(s_touch_controller_mutex);
+        s_contact_active = false;
+        s_loop_dispatched_points = false;
         ESP_RETURN_ON_ERROR(ConfigureTouchControllerLocked("init"),
                             kTag,
                             "touch controller init failed");
@@ -251,6 +276,8 @@ esp_err_t RecoverAfterLightSleep()
 
     {
         std::lock_guard<std::mutex> lock(s_touch_controller_mutex);
+        s_contact_active = false;
+        s_loop_dispatched_points = false;
         ESP_RETURN_ON_ERROR(ConfigureTouchControllerLocked("light sleep recovery"),
                             kTag,
                             "touch controller light-sleep recovery failed");

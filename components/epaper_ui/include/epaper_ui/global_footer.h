@@ -9,6 +9,16 @@ struct EmbeddedImageAsset;
 
 namespace epaper_ui {
 
+enum class GlobalFooterItemId : uint8_t {
+    kNone = 0,
+    kHome,
+    kSettings,
+    kWifi,
+    kTime,
+    kFolder,
+    kMic,
+};
+
 struct FooterButtonState {
     bool visible = false;
     bool selected = false;
@@ -34,6 +44,16 @@ struct GlobalFooterState {
 };
 
 UiRect GlobalFooterBounds(int portrait_width, int portrait_height, const GlobalFooterState& state);
+UiRect GlobalFooterItemBounds(int portrait_width,
+                              int portrait_height,
+                              const GlobalFooterState& state,
+                              GlobalFooterItemId item);
+bool HitTestGlobalFooterItem(int portrait_width,
+                             int portrait_height,
+                             const GlobalFooterState& state,
+                             int x,
+                             int y,
+                             GlobalFooterItemId* item);
 void DrawGlobalFooter(uint8_t* framebuffer,
                       int raw_width,
                       int raw_height,

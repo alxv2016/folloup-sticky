@@ -14,6 +14,11 @@ namespace {
 constexpr int kColumnGap = design::spacing::k16;
 constexpr int kButtonGap = design::spacing::k8;
 
+struct VisibleFooterButton {
+    GlobalFooterItemId item = GlobalFooterItemId::kNone;
+    const FooterButtonState* state = nullptr;
+};
+
 const EmbeddedImageAsset* ResolveButtonIcon(const FooterButtonState& button)
 {
     return button.icon;
@@ -35,17 +40,43 @@ std::array<const FooterButtonState*, 5> VisibleButtons(const GlobalFooterState& 
                                                        int* count_out)
 {
     std::array<const FooterButtonState*, 5> buttons = {};
+    std::array<VisibleFooterButton, 5> mapped = {{
+        {.item = GlobalFooterItemId::kSettings, .state = &state.settings},
+        {.item = GlobalFooterItemId::kWifi, .state = &state.wifi},
+        {.item = GlobalFooterItemId::kTime, .state = &state.time},
+        {.item = GlobalFooterItemId::kFolder, .state = &state.folder},
+        {.item = GlobalFooterItemId::kHome, .state = &state.home},
+    }};
     int count = 0;
-    const FooterButtonState* candidates[] = {
-        &state.settings,
-        &state.wifi,
-        &state.time,
-        &state.folder,
-        &state.home,
+    for (const VisibleFooterButton& button : mapped) {
+        if (button.state != nullptr && button.state->visible &&
+            ResolveButtonIcon(*button.state) != nullptr) {
+            buttons[static_cast<size_t>(count++)] = button.state;
+        }
+    }
+
+    if (count_out != nullptr) {
+        *count_out = count;
+    }
+    return buttons;
+}
+
+std::array<VisibleFooterButton, 5> VisibleFooterButtons(const GlobalFooterState& state,
+                                                        int* count_out)
+{
+    std::array<VisibleFooterButton, 5> buttons = {};
+    int count = 0;
+    const VisibleFooterButton candidates[] = {
+        {.item = GlobalFooterItemId::kSettings, .state = &state.settings},
+        {.item = GlobalFooterItemId::kWifi, .state = &state.wifi},
+        {.item = GlobalFooterItemId::kTime, .state = &state.time},
+        {.item = GlobalFooterItemId::kFolder, .state = &state.folder},
+        {.item = GlobalFooterItemId::kHome, .state = &state.home},
     };
 
-    for (const FooterButtonState* button : candidates) {
-        if (button != nullptr && button->visible && ResolveButtonIcon(*button) != nullptr) {
+    for (const VisibleFooterButton& button : candidates) {
+        if (button.state != nullptr && button.state->visible &&
+            ResolveButtonIcon(*button.state) != nullptr) {
             buttons[static_cast<size_t>(count++)] = button;
         }
     }
@@ -118,6 +149,41 @@ UiRect MicBounds(int portrait_width, int portrait_height, const GlobalFooterStat
             measured.height};
 }
 
+UiRect FooterButtonBounds(int portrait_width,
+                          int portrait_height,
+                          const GlobalFooterState& state,
+                          GlobalFooterItemId item)
+{
+    if (item == GlobalFooterItemId::kNone || item == GlobalFooterItemId::kMic) {
+        return {};
+    }
+
+    const LayoutGrid grid = BuildGrid(portrait_width, portrait_height);
+    const UiRect button_cell = grid.CellBounds(portrait_width, 0, 0);
+    const ButtonIconStyle button_style = BuildFooterButtonStyle();
+
+    int button_count = 0;
+    const std::array<VisibleFooterButton, 5> buttons = VisibleFooterButtons(state, &button_count);
+    int cursor_x = button_cell.x;
+    for (int index = 0; index < button_count; ++index) {
+        const VisibleFooterButton& button = buttons[static_cast<size_t>(index)];
+        if (button.state == nullptr) {
+            continue;
+        }
+
+        const UiRect bounds = ButtonIconBounds(
+            cursor_x,
+            button_cell.y + std::max(0, (button_cell.height - button_style.size) / 2),
+            button_style);
+        if (button.item == item) {
+            return bounds;
+        }
+        cursor_x += design::global_footer::kButtonSize + kButtonGap;
+    }
+
+    return {};
+}
+
 }  // namespace
 
 UiRect GlobalFooterBounds(int portrait_width, int portrait_height, const GlobalFooterState& state)
@@ -127,6 +193,58 @@ UiRect GlobalFooterBounds(int portrait_width, int portrait_height, const GlobalF
     }
 
     return BuildGrid(portrait_width, portrait_height).Measure(portrait_width);
+}
+
+UiRect GlobalFooterItemBounds(int portrait_width,
+                              int portrait_height,
+                              const GlobalFooterState& state,
+                              GlobalFooterItemId item)
+{
+    if (!state.visible) {
+        return {};
+    }
+
+    if (item == GlobalFooterItemId::kMic) {
+        return state.mic.visible ? MicBounds(portrait_width, portrait_height, state) : UiRect{};
+    }
+
+    return FooterButtonBounds(portrait_width, portrait_height, state, item);
+}
+
+bool HitTestGlobalFooterItem(int portrait_width,
+                             int portrait_height,
+                             const GlobalFooterState& state,
+                             int x,
+                             int y,
+                             GlobalFooterItemId* item)
+{
+    if (item != nullptr) {
+        *item = GlobalFooterItemId::kNone;
+    }
+    if (!state.visible) {
+        return false;
+    }
+
+    constexpr GlobalFooterItemId kItems[] = {
+        GlobalFooterItemId::kSettings,
+        GlobalFooterItemId::kWifi,
+        GlobalFooterItemId::kTime,
+        GlobalFooterItemId::kFolder,
+        GlobalFooterItemId::kHome,
+        GlobalFooterItemId::kMic,
+    };
+
+    for (GlobalFooterItemId candidate : kItems) {
+        const UiRect bounds = GlobalFooterItemBounds(portrait_width, portrait_height, state, candidate);
+        if (!bounds.IsEmpty() && bounds.Contains(x, y)) {
+            if (item != nullptr) {
+                *item = candidate;
+            }
+            return true;
+        }
+    }
+
+    return false;
 }
 
 void DrawGlobalFooter(uint8_t* framebuffer,
