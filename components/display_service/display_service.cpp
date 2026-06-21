@@ -6,6 +6,7 @@
 #include <mutex>
 #include <string_view>
 
+#include "design_tokens.h"
 #include "epaper_panel.h"
 #include "esp_check.h"
 #include "esp_log.h"
@@ -13,6 +14,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "project_assets.h"
 #include "shared_bus_service.h"
 #include "sticky_board.h"
 #include "sticky_board_config.h"
@@ -28,6 +30,7 @@ constexpr int kGlyphWidth = 5;
 constexpr int kGlyphHeight = 7;
 constexpr int kGlyphAdvance = 6;
 constexpr int kLineGap = 12;
+constexpr int kSplashLogoGap = design::spacing::k16;
 constexpr int kDemoCardWidth = 360;
 constexpr int kDemoCardHeight = 220;
 constexpr int kDemoCardX = (kPortraitWidth - kDemoCardWidth) / 2;
@@ -104,6 +107,18 @@ EpaperPanel& Panel()
 {
     static EpaperPanel panel(STICKY_EPD_WIDTH, STICKY_EPD_HEIGHT, BuildPanelConfig());
     return panel;
+}
+
+bool AssetPixelSet(const EmbeddedImageAsset& asset, int x, int y)
+{
+    if (asset.data == nullptr || x < 0 || y < 0 || x >= asset.width || y >= asset.height) {
+        return false;
+    }
+
+    const size_t byte_index =
+        static_cast<size_t>(y) * asset.stride_bytes + static_cast<size_t>(x / 8);
+    const uint8_t bit_mask = static_cast<uint8_t>(0x80U >> (x & 0x07));
+    return (asset.data[byte_index] & bit_mask) != 0;
 }
 
 const uint8_t* GlyphFor(char c)
@@ -362,6 +377,21 @@ void FillPortraitRect(uint8_t* framebuffer, int x, int y, int width, int height,
     }
 }
 
+void DrawPortraitMonoAsset(uint8_t* framebuffer, int x, int y, const EmbeddedImageAsset* asset)
+{
+    if (framebuffer == nullptr || asset == nullptr || asset->format != ImageFormat::kMono1) {
+        return;
+    }
+
+    for (int row = 0; row < asset->height; ++row) {
+        for (int col = 0; col < asset->width; ++col) {
+            if (AssetPixelSet(*asset, col, row)) {
+                DrawPortraitPixel(framebuffer, x + col, y + row, true);
+            }
+        }
+    }
+}
+
 void DrawText(uint8_t* framebuffer, int x, int y, std::string_view text, bool black)
 {
     int cursor_x = x;
@@ -434,6 +464,31 @@ void DrawTwoLineMessage(uint8_t* framebuffer, std::string_view first, std::strin
     DrawCenteredLine(framebuffer, center_y + kLineDistance / 2, second, true);
 }
 
+void DrawSplashScreen(uint8_t* framebuffer)
+{
+    const EmbeddedImageAsset* followup_logo =
+        project_assets::GetLogo(EmbeddedLogoId::kFollowupLogo);
+    const EmbeddedImageAsset* alxv_logo =
+        project_assets::GetLogo(EmbeddedLogoId::kAlxvLabsLogo);
+    if (framebuffer == nullptr || followup_logo == nullptr || alxv_logo == nullptr) {
+        return;
+    }
+
+    const int content_width = std::max<int>(followup_logo->width, alxv_logo->width);
+    const int content_height = static_cast<int>(followup_logo->height) + kSplashLogoGap +
+                               static_cast<int>(alxv_logo->height);
+    const int content_x = (kPortraitWidth - content_width) / 2;
+    const int content_y = (kPortraitHeight - content_height) / 2;
+
+    const int followup_x = content_x + (content_width - followup_logo->width) / 2;
+    const int followup_y = content_y;
+    DrawPortraitMonoAsset(framebuffer, followup_x, followup_y, followup_logo);
+
+    const int alxv_x = content_x + (content_width - alxv_logo->width) / 2;
+    const int alxv_y = followup_y + followup_logo->height + kSplashLogoGap;
+    DrawPortraitMonoAsset(framebuffer, alxv_x, alxv_y, alxv_logo);
+}
+
 void LogMetrics(const EpaperPanelMetrics& metrics)
 {
     ESP_LOGI(kTag,
@@ -477,6 +532,27 @@ esp_err_t ApplyDemoSelection(DemoSelection selection, bool full_refresh)
 
     LogMetrics(panel.metrics());
     s_current_selection = selection;
+    return ESP_OK;
+}
+
+esp_err_t ApplyStartupSplash()
+{
+    EpaperPanel& panel = Panel();
+    panel.Clear(true);
+    DrawSplashScreen(panel.framebuffer());
+
+    DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
+    if (bus_guard.err() != ESP_OK) {
+        return bus_guard.err();
+    }
+
+    RefreshBusyGuard refresh_busy;
+    const esp_err_t err = panel.RefreshFullBase();
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    LogMetrics(panel.metrics());
     return ESP_OK;
 }
 
@@ -573,14 +649,14 @@ esp_err_t Init()
     ESP_RETURN_ON_ERROR(panel.Initialize(), kTag, "panel initialize failed");
     {
         std::lock_guard<std::mutex> lock(s_panel_mutex);
-        ESP_RETURN_ON_ERROR(ApplyDemoSelection(DemoSelection::kTop, true),
+        ESP_RETURN_ON_ERROR(ApplyStartupSplash(),
                             kTag,
-                            "panel base refresh failed");
+                            "panel startup splash refresh failed");
     }
     ESP_RETURN_ON_ERROR(StartDisplayTask(), kTag, "display task init failed");
 
     s_initialized = true;
-    ESP_LOGI(kTag, "Display initialized with portrait partial refresh demo");
+    ESP_LOGI(kTag, "Display initialized with startup splash");
     return ESP_OK;
 }
 

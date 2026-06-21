@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstring>
 
 #include "button_service.h"
 #include "device_sleep_runtime.h"
@@ -39,6 +40,7 @@ constexpr TickType_t kTouchFeedbackContactGap = pdMS_TO_TICKS(300);
 
 TaskHandle_t s_shutdown_task = nullptr;
 std::atomic<bool> s_power_button_shutdown_pending = false;
+std::atomic<bool> s_startup_complete = false;
 bool s_touch_contact_active = false;
 TickType_t s_last_touch_event_tick = 0;
 
@@ -51,6 +53,13 @@ void RequestDemoSelection(display_service::DemoSelection selection,
                           display_service::RefreshMode refresh_mode,
                           const char* source)
 {
+    const bool startup_complete = s_startup_complete.load(std::memory_order_relaxed);
+    const bool startup_handoff = source != nullptr &&
+                                 std::strcmp(source, "startup_complete") == 0;
+    if (!startup_complete && !startup_handoff) {
+        return;
+    }
+
     const esp_err_t err = display_service::SelectDemoSelection(selection, refresh_mode);
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(kTag, "Display demo selection from %s failed: %s",
@@ -297,6 +306,9 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
 void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
 {
     ESP_LOGD(kTag, "Touch intent: count=%u", static_cast<unsigned>(event.count));
+    if (!s_startup_complete.load(std::memory_order_relaxed)) {
+        return;
+    }
     if (storage_service::IsWriteBusy()) {
         return;
     }
@@ -378,8 +390,6 @@ void InitFeedbackService()
         ESP_LOGW(kTag, "Feedback service init failed: %s", esp_err_to_name(err));
         return;
     }
-
-    PlayFeedback(feedback_service::FeedbackEvent::kStartup);
 }
 
 void InitDisplayService()
@@ -498,6 +508,7 @@ void Run()
     // the shared-bus display path is brought up.
     InitStorageService();
     InitDisplayService();
+    PlayFeedback(feedback_service::FeedbackEvent::kStartup);
     InitTouchService();
     InitImuService();
     InitEnvironmentService();
@@ -507,6 +518,10 @@ void Run()
     InitRecordingService();
     StartShutdownTask();
     InitButtonService();
+    RequestDemoSelection(display_service::DemoSelection::kTop,
+                         display_service::RefreshMode::kFull,
+                         "startup_complete");
+    s_startup_complete.store(true, std::memory_order_relaxed);
 }
 
 }  // namespace app_shell
