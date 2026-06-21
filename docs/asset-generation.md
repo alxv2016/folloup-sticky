@@ -1,8 +1,7 @@
 # Asset Generation
 
 The e-paper UI asset generation pipeline is staged in this repo so the app UI
-can use generated monochrome image and bitmap-font assets when the real
-interface is built.
+can use generated monochrome image and bitmap-font assets.
 
 ## Source Roots
 
@@ -48,6 +47,19 @@ That command regenerates:
 sources, including the empty icon/footer generated files. Adding future icons
 should not require changing CMake.
 
+## Embedded Bitmap Fonts
+
+Bitmap font generation is now compiled through `components/epaper_ui/`:
+
+- `components/epaper_ui/generated_epaper_fonts.cpp`
+- `components/epaper_ui/include/epaper_ui/generated_epaper_fonts.h`
+
+The current renderer uses the same Inter font sizes and weights expected by the
+ported `followup` design-token roles.
+
+Regenerate the font source with `scripts/generate_epaper_fonts.py`, then keep
+the small public header in sync if new symbols are added.
+
 ## Embedded Logo Assets
 
 Logo assets are currently embedded through `components/project_assets/`:
@@ -76,8 +88,33 @@ To add a new icon:
 2. Add an entry to the `icons` array in `assets/epaper_assets.json`.
 3. Run `python3 scripts/generate_epaper_project_assets.py`.
 
-Generated font source/header files should be added later when the app UI has a
-stable text rendering path.
+Example:
+
+```bash
+python3 scripts/generate_epaper_fonts.py \
+  --output components/epaper_ui/generated_epaper_fonts.cpp \
+  fonts/Inter_18pt-SemiBold.ttf:kInter22SemiBold:22 \
+  fonts/Inter_18pt-Bold.ttf:kInter22Bold:22 \
+  fonts/Inter_18pt-Black.ttf:kInter22Black:22 \
+  fonts/Inter_18pt-SemiBold.ttf:kInter26SemiBold:26 \
+  fonts/Inter_18pt-Bold.ttf:kInter26Bold:26 \
+  fonts/Inter_18pt-Black.ttf:kInter26Black:26 \
+  fonts/Inter_24pt-SemiBold.ttf:kInter32SemiBold:32 \
+  fonts/Inter_24pt-Bold.ttf:kInter32Bold:32 \
+  fonts/Inter_24pt-Black.ttf:kInter32Black:32 \
+  fonts/Inter_24pt-SemiBold.ttf:kInter38SemiBold:38 \
+  fonts/Inter_24pt-Bold.ttf:kInter38Bold:38 \
+  fonts/Inter_24pt-Black.ttf:kInter38Black:38 \
+  fonts/Inter_24pt-SemiBold.ttf:kInter46SemiBold:46 \
+  fonts/Inter_24pt-Bold.ttf:kInter46Bold:46 \
+  fonts/Inter_24pt-Black.ttf:kInter46Black:46 \
+  fonts/Inter_28pt-SemiBold.ttf:kInter55SemiBold:55 \
+  fonts/Inter_28pt-Bold.ttf:kInter55Bold:55 \
+  fonts/Inter_28pt-Black.ttf:kInter55Black:55 \
+  fonts/Inter_28pt-SemiBold.ttf:kInter165SemiBold:165 \
+  fonts/Inter_28pt-Bold.ttf:kInter165Bold:165 \
+  fonts/Inter_28pt-Black.ttf:kInter165Black:165
+```
 
 ## Policy
 

@@ -136,35 +136,42 @@ inline constexpr int k64 = 64;
 
 namespace color {
 
-inline constexpr uint8_t kWhite = 0xFF;
-inline constexpr uint8_t kGrayLight = 0xDD;
-inline constexpr uint8_t kGrayMid = 0xAA;
-inline constexpr uint8_t kGrayDark = 0x66;
 inline constexpr uint8_t kBlack = 0x00;
+inline constexpr uint8_t kGrayDark = 0x55;
+inline constexpr uint8_t kGrayLight = 0xAA;
+inline constexpr uint8_t kWhite = 0xFF;
+
+// Canonical four-step e-paper grayscale ramp used by UI components.
+inline constexpr uint8_t kGray1 = kBlack;
+inline constexpr uint8_t kGray2 = kGrayDark;
+inline constexpr uint8_t kGray3 = kGrayLight;
+inline constexpr uint8_t kGray4 = kWhite;
+
+inline constexpr uint8_t kGrayMid = kGray3;
 
 inline constexpr uint8_t kSurfaceBase = kWhite;
-inline constexpr uint8_t kSurfaceRaised = kGrayLight;
-inline constexpr uint8_t kSurfaceEmphasis = kGrayMid;
+inline constexpr uint8_t kSurfaceRaised = kGray3;
+inline constexpr uint8_t kSurfaceEmphasis = kGray2;
 inline constexpr uint8_t kSurfaceInverse = kBlack;
 
 inline constexpr uint8_t kTextPrimary = kBlack;
-inline constexpr uint8_t kTextSecondary = kGrayDark;
+inline constexpr uint8_t kTextSecondary = kGray2;
 inline constexpr uint8_t kTextInverse = kWhite;
 
-inline constexpr uint8_t kBorderSubtle = kGrayLight;
+inline constexpr uint8_t kBorderSubtle = kGray3;
 inline constexpr uint8_t kBorderStrong = kBlack;
 
 inline constexpr uint8_t kFocusRingInactive = kBlack;
-inline constexpr uint8_t kFocusRingActive = kGrayDark;
+inline constexpr uint8_t kFocusRingActive = kGray2;
 inline constexpr uint8_t kFocusGap = kWhite;
 inline constexpr uint8_t kOutlineKnockout = kWhite;
 
 inline constexpr uint8_t kScrollbarTrack = kWhite;
-inline constexpr uint8_t kScrollbarThumb = kGrayLight;
-inline constexpr uint8_t kScrollbarThumbDisabled = kGrayDark;
+inline constexpr uint8_t kScrollbarThumb = kGray3;
+inline constexpr uint8_t kScrollbarThumbDisabled = kGray2;
 inline constexpr uint8_t kScrollbarThumbActive = kBlack;
 
-inline constexpr uint8_t kShadow = kGrayLight;
+inline constexpr uint8_t kShadow = kGray3;
 
 }  // namespace color
 

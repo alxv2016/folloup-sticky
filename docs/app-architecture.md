@@ -27,6 +27,8 @@ The repository is currently a minimal ESP-IDF application scaffold with:
   policy and maps app events onto buzzer patterns.
 - A `design_tokens` component that owns shared product UI constants such as
   spacing, colors, typography roles, and component sizing.
+- An `epaper_ui` component that owns reusable e-paper presentation primitives
+  such as the status bar renderer being ported from the old app.
 - A ported `sd_card` component for SDSPI/FATFS MicroSD access.
 - A `storage_service` component that owns app-facing MicroSD mount, format, and
   debug status policy.
@@ -76,6 +78,10 @@ main/
   main.cpp
   app_shell.h
   app_shell.cpp
+  device_sleep_runtime.h
+  device_sleep_runtime.cpp
+  status_bar_runtime.h
+  status_bar_runtime.cpp
 components/
   board/
     include/
@@ -101,6 +107,17 @@ components/
   design_tokens/
     include/
       design_tokens.h
+  epaper_ui/
+    include/
+      epaper_ui/
+        bitmap_font.h
+        font_renderer.h
+        generated_epaper_fonts.h
+        status_bar.h
+    bitmap_font.cpp
+    font_renderer.cpp
+    generated_epaper_fonts.cpp
+    status_bar.cpp
   project_assets/
     CMakeLists.txt
     asset_manifest.h
@@ -195,6 +212,7 @@ sdkconfig.defaults
 docs/
   asset-generation.md
   app-architecture.md
+  display-demo-cleanup.md
   reTerminal_Sticky_Hardware_Spec_Software_Porting-en.md
 scripts/
   generate_epaper_assets_common.py
@@ -235,13 +253,50 @@ the Folloup UI language rather than the SSD1677 display driver.
 Current scope:
 
 - spacing scale
-- grayscale color roles
+- a canonical four-step e-paper grayscale ramp (`gray1` through `gray4`) plus
+  semantic grayscale color roles
 - typography roles, sizes, and weights
 - common component sizing constants used by the e-paper UI being ported
 
 Use this component as the first dependency when porting small pieces from the
 old `epaper_lib`. Keep UI tokens independent from display hardware and
 framebuffer mechanics.
+
+### `components/epaper_ui`
+
+This component owns reusable e-paper UI primitives that render into the app's
+portrait framebuffer. It depends on `design_tokens` for visual constants and
+`project_assets` for embedded icons/logos, but it does not depend on app
+services or startup/runtime policy.
+
+Current scope:
+
+- generated Inter bitmap fonts used by e-paper UI typography roles
+- a small role-aware bitmap font renderer
+- the app status-bar state contract and renderer
+
+App-owned runtime helpers in `main/` may compose service state into these UI
+contracts, but the drawing primitives themselves should stay reusable and
+service-agnostic.
+
+### UI Layering
+
+The e-paper UI stack is now intentionally split across three layers:
+
+- `design_tokens` owns product-wide spacing, grayscale, typography, and
+  component metrics.
+- `epaper_ui` owns reusable presentation primitives such as bitmap fonts,
+  role-aware text rendering, the status bar renderer, and future view widgets
+  ported from `followup`.
+- app-owned runtime helpers in `main/` compose service state into UI contracts.
+  Today that includes `status_bar_runtime`, which translates
+  `power_service`, `wifi_service`, `timezone_service`, and sleep/shutdown state
+  into a neutral `epaper_ui::StatusBarState`.
+
+`display_service` remains the owner of the physical panel, framebuffer, refresh
+mode decisions, and sleep/wake transitions. It may consume `epaper_ui`
+renderers, but it should not become the home for product state composition or a
+grab bag of reusable widgets.
 
 ### `main`
 
@@ -257,6 +312,11 @@ fatal, but it should not contain hardware driver logic, protocol logic, button
 debouncing, battery math, display drawing, networking workflows, or long-running
 feature loops. Put those behaviors in services/components and call them from the
 app shell.
+
+`main/status_bar_runtime.cpp` is an example of the intended app-runtime helper
+pattern. It is not a reusable component and does not own hardware or rendering.
+Its job is to compose product state into UI-facing data contracts that
+`display_service` can render through `epaper_ui`.
 
 The current early startup sequence is:
 
@@ -894,13 +954,27 @@ Current scope:
 - initialize the shared SPI bus through `sticky_board::EnsureSharedSpiBus()`
 - enable e-paper panel power through `sticky_board::EnableEpaperPower()`
 - initialize the raw SSD1677 panel driver
-- clear the physical panel to a blank white screen with `RefreshFullBase()`
-- keep display sleep and light-sleep preparation blank instead of rendering
-  transitional text
-- restore the blank app surface with a forced full refresh after display wake or
+- render the startup splash with `RefreshFullBase()`
+- own the current portrait framebuffer surface and its refresh policy
+- render the current bridge screen together with the shared status bar
+- enter panel sleep without a special transitional text screen
+- restore the current screen with a forced full refresh after display wake or
   light-sleep recovery
 - log panel refresh metrics and expose refresh-in-progress state for
   auto-sleep blocking
+
+Current UI state:
+
+- `display_service` still uses a temporary demo/bridge screen for the main
+  content area while real views are ported from `followup`
+- the status bar is now rendered through `epaper_ui`
+- sleep and shutdown indicators are driven through `status_bar_runtime`
+  immediately before display sleep, light sleep, and deep-sleep shutdown
+  transitions
+
+The long-term direction is to replace the remaining demo bridge with real view
+renderers and rename the display API away from `DemoSelection` toward a
+view-oriented model. Track that work in `docs/display-demo-cleanup.md`.
 
 Because the SSD1677 path shares `SPI2_HOST` with MicroSD, `display_service`
 depends on `storage_service` having already performed SD bring-up when a card is

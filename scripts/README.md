@@ -46,8 +46,8 @@ python3 scripts/generate_epaper_logos.py \
   assets/logos/folloup-logo.png:kFollowupLogo
 
 python3 scripts/generate_epaper_fonts.py \
-  --output components/project_assets/generated_epaper_fonts.cpp \
-  fonts/Inter_24pt-SemiBold.ttf:kInter24SemiBold:24
+  --output components/epaper_ui/generated_epaper_fonts.cpp \
+  fonts/Inter_18pt-SemiBold.ttf:kInter22SemiBold:22
 ```
 
 Do not hand-edit generated asset files once they are added. Update the source

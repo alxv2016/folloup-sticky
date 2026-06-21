@@ -20,6 +20,7 @@
 #include "power_service.h"
 #include "recording_service.h"
 #include "sdkconfig.h"
+#include "status_bar_runtime.h"
 #include "storage_service.h"
 #include "timezone_service.h"
 #include "touch_service.h"
@@ -58,6 +59,12 @@ void RequestDemoSelection(display_service::DemoSelection selection,
                                  std::strcmp(source, "startup_complete") == 0;
     if (!startup_complete && !startup_handoff) {
         return;
+    }
+
+    const esp_err_t status_bar_err = status_bar_runtime::UpdateDisplayState();
+    if (status_bar_err != ESP_OK && status_bar_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Status bar update before display refresh from %s failed: %s",
+                 source, esp_err_to_name(status_bar_err));
     }
 
     const esp_err_t err = display_service::SelectDemoSelection(selection, refresh_mode);
@@ -206,6 +213,16 @@ void HandleTimezoneEvent(const timezone_service::Event& event, void*)
              event.snapshot.runtime.current_time.empty()
                  ? "--:--"
                  : event.snapshot.runtime.current_time.c_str());
+
+    const esp_err_t status_bar_err =
+        s_startup_complete.load(std::memory_order_relaxed)
+            ? status_bar_runtime::UpdateDisplayStateAndRequestRefresh(
+                  display_service::RefreshMode::kPartial)
+            : status_bar_runtime::UpdateDisplayState();
+    if (status_bar_err != ESP_OK && status_bar_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Status bar update after time event failed: %s",
+                 esp_err_to_name(status_bar_err));
+    }
 }
 
 void RegisterWifiBackendRoutes(httpd_handle_t server, void*)
@@ -228,6 +245,16 @@ void HandleWifiEvent(const wifi_service::Event& event, void*)
              event.ui_state.ap_url.empty() ? "<none>" : event.ui_state.ap_url.c_str(),
              event.ui_state.rssi);
     timezone_service::SetNetworkConnected(event.ui_state.connected);
+
+    const esp_err_t status_bar_err =
+        s_startup_complete.load(std::memory_order_relaxed)
+            ? status_bar_runtime::UpdateDisplayStateAndRequestRefresh(
+                  display_service::RefreshMode::kPartial)
+            : status_bar_runtime::UpdateDisplayState();
+    if (status_bar_err != ESP_OK && status_bar_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Status bar update after Wi-Fi event failed: %s",
+                 esp_err_to_name(status_bar_err));
+    }
 }
 
 void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
@@ -344,9 +371,24 @@ void ShutdownTask(void*)
         ESP_LOGW(kTag, "Shutdown request accepted; waiting for power button release settle");
         PlayFeedback(feedback_service::FeedbackEvent::kShutdown);
         vTaskDelay(kPowerButtonReleaseSettleDelay);
+        status_bar_runtime::SetShutdownIndicatorVisible(true);
+        const esp_err_t status_bar_err = status_bar_runtime::UpdateDisplayStateAndRefreshNow(
+            display_service::RefreshMode::kPartial);
+        if (status_bar_err != ESP_OK && status_bar_err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(kTag, "Shutdown indicator refresh failed: %s",
+                     esp_err_to_name(status_bar_err));
+        }
         ESP_LOGW(kTag, "Power button release settled; releasing power hold");
         const esp_err_t err = power_service::RequestShutdown();
         if (err != ESP_OK) {
+            status_bar_runtime::SetShutdownIndicatorVisible(false);
+            const esp_err_t clear_err =
+                status_bar_runtime::UpdateDisplayStateAndRequestRefresh(
+                    display_service::RefreshMode::kPartial);
+            if (clear_err != ESP_OK && clear_err != ESP_ERR_INVALID_STATE) {
+                ESP_LOGW(kTag, "Shutdown indicator clear failed: %s",
+                         esp_err_to_name(clear_err));
+            }
             ESP_LOGW(kTag, "Shutdown request failed: %s", esp_err_to_name(err));
         } else {
             ESP_LOGW(kTag, "Shutdown request returned; board may still be powered");
@@ -518,6 +560,10 @@ void Run()
     InitRecordingService();
     StartShutdownTask();
     InitButtonService();
+    const esp_err_t status_bar_err = status_bar_runtime::UpdateDisplayState();
+    if (status_bar_err != ESP_OK && status_bar_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Initial status bar update failed: %s", esp_err_to_name(status_bar_err));
+    }
     RequestDemoSelection(display_service::DemoSelection::kTop,
                          display_service::RefreshMode::kFull,
                          "startup_complete");

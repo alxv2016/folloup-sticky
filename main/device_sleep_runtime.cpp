@@ -21,6 +21,7 @@
 #include "freertos/task.h"
 #include "imu_service.h"
 #include "recording_service.h"
+#include "status_bar_runtime.h"
 #include "sticky_board_config.h"
 #include "storage_service.h"
 #include "timezone_service.h"
@@ -310,6 +311,12 @@ esp_err_t AbortLightSleepEntry(esp_err_t err, const char* reason)
              reason, esp_err_to_name(err));
     esp_sleep_disable_ext1_wakeup_io(kPowerButtonWakeMask);
     s_power_button_wake_only_active.store(false, std::memory_order_relaxed);
+    status_bar_runtime::SetSleepIndicatorVisible(false);
+    const esp_err_t status_bar_err = status_bar_runtime::UpdateDisplayState();
+    if (status_bar_err != ESP_OK) {
+        ESP_LOGW(kTag, "Status bar reset after light-sleep abort failed: %s",
+                 esp_err_to_name(status_bar_err));
+    }
 
     const bool wake_committed =
         device_sleep_service::NotifyLightSleepWake(device_sleep_service::TransitionReason::kNone);
@@ -355,9 +362,15 @@ esp_err_t EnterLightSleep()
              static_cast<unsigned long long>(kPowerButtonWakeMask));
 
     ESP_LOGI(kTag, "Light-sleep display preparation begin");
+    status_bar_runtime::SetSleepIndicatorVisible(true);
+    err = status_bar_runtime::UpdateDisplayStateAndRefreshNow(display_service::RefreshMode::kPartial);
+    if (err != ESP_OK) {
+        status_bar_runtime::SetSleepIndicatorVisible(false);
+        return AbortLightSleepEntry(err, "render status bar light-sleep indicator failed");
+    }
     err = display_service::EnterLightSleep();
     if (err != ESP_OK) {
-        return AbortLightSleepEntry(err, "display light sleep message failed");
+        return AbortLightSleepEntry(err, "display light sleep transition failed");
     }
     ESP_LOGI(kTag, "Light-sleep display preparation done");
     LogLightSleepPins("after display preparation");
@@ -405,6 +418,13 @@ esp_err_t EnterLightSleep()
         ESP_LOGI(kTag, "Wake-only POWER_OK suppression cleared; wake was not POWER_OK");
     }
 
+    status_bar_runtime::SetSleepIndicatorVisible(false);
+    const esp_err_t status_bar_err = status_bar_runtime::UpdateDisplayState();
+    if (status_bar_err != ESP_OK) {
+        ESP_LOGW(kTag, "Status bar clear after light sleep failed: %s",
+                 esp_err_to_name(status_bar_err));
+    }
+
     const bool wake_committed =
         device_sleep_service::NotifyLightSleepWake(device_sleep_service::TransitionReason::kInteraction);
     if (!wake_committed) {
@@ -428,15 +448,26 @@ void ProcessAutoSleepEvent(const device_sleep_service::Event& event)
     esp_err_t err = ESP_OK;
     switch (event.action) {
         case device_sleep_service::Action::kEnterDisplaySleep:
+            status_bar_runtime::SetSleepIndicatorVisible(true);
+            err = status_bar_runtime::UpdateDisplayStateAndRefreshNow(
+                display_service::RefreshMode::kPartial);
+            if (err != ESP_OK) {
+                status_bar_runtime::SetSleepIndicatorVisible(false);
+                break;
+            }
             err = display_service::EnterDisplaySleep();
             break;
         case device_sleep_service::Action::kWakeDisplay:
+            status_bar_runtime::SetSleepIndicatorVisible(false);
+            (void)status_bar_runtime::UpdateDisplayState();
             err = display_service::WakeDisplay();
             break;
         case device_sleep_service::Action::kEnterLightSleep:
             err = EnterLightSleep();
             break;
         case device_sleep_service::Action::kWakeFromLightSleep:
+            status_bar_runtime::SetSleepIndicatorVisible(false);
+            (void)status_bar_runtime::UpdateDisplayState();
             err = RestoreAfterLightSleep();
             break;
         case device_sleep_service::Action::kNone:
