@@ -13,6 +13,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "shared_bus_service.h"
 #include "sticky_board.h"
 #include "sticky_board_config.h"
 
@@ -35,6 +36,7 @@ constexpr uint32_t kDisplayTaskStackWords = 4096;
 
 struct DisplayCommand {
     DemoSelection selection;
+    RefreshMode refresh_mode = RefreshMode::kPartial;
 };
 
 bool s_initialized = false;
@@ -59,6 +61,23 @@ public:
 
     RefreshBusyGuard(const RefreshBusyGuard&) = delete;
     RefreshBusyGuard& operator=(const RefreshBusyGuard&) = delete;
+};
+
+class DisplayBusGuard {
+public:
+    explicit DisplayBusGuard(esp_err_t err) : err_(err) {}
+
+    ~DisplayBusGuard()
+    {
+        if (err_ == ESP_OK) {
+            shared_bus_service::ReleaseDisplay();
+        }
+    }
+
+    esp_err_t err() const { return err_; }
+
+private:
+    esp_err_t err_ = ESP_FAIL;
 };
 
 EpaperPanelConfig BuildPanelConfig()
@@ -426,11 +445,28 @@ void LogMetrics(const EpaperPanelMetrics& metrics)
              static_cast<long long>(metrics.init_ready_us));
 }
 
+const char* RefreshModeName(RefreshMode refresh_mode)
+{
+    switch (refresh_mode) {
+        case RefreshMode::kPartial:
+            return "partial";
+        case RefreshMode::kFull:
+            return "full";
+        default:
+            return "unknown";
+    }
+}
+
 esp_err_t ApplyDemoSelection(DemoSelection selection, bool full_refresh)
 {
     EpaperPanel& panel = Panel();
     panel.Clear(true);
     DrawDemoFrame(panel.framebuffer(), selection);
+
+    DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
+    if (bus_guard.err() != ESP_OK) {
+        return bus_guard.err();
+    }
 
     RefreshBusyGuard refresh_busy;
     const esp_err_t err = full_refresh ? panel.RefreshFullBase()
@@ -450,6 +486,11 @@ esp_err_t ApplyPanelSleepMessage(std::string_view first, std::string_view second
     panel.Clear(true);
     DrawTwoLineMessage(panel.framebuffer(), first, second);
 
+    DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
+    if (bus_guard.err() != ESP_OK) {
+        return bus_guard.err();
+    }
+
     RefreshBusyGuard refresh_busy;
     ESP_RETURN_ON_ERROR(panel.RefreshFullBase(), kTag, "sleep message refresh failed");
     LogMetrics(panel.metrics());
@@ -460,13 +501,14 @@ esp_err_t ApplyPanelSleepMessage(std::string_view first, std::string_view second
 
 void DisplayTask(void*)
 {
-    DisplayCommand command{DemoSelection::kTop};
+    DisplayCommand command{DemoSelection::kTop, RefreshMode::kPartial};
     while (true) {
         if (xQueueReceive(s_command_queue, &command, portMAX_DELAY) != pdTRUE) {
             continue;
         }
 
-        ESP_LOGI(kTag, "Demo selection requested: format_sd");
+        ESP_LOGI(kTag, "Display refresh requested: selection=format_sd mode=%s",
+                 RefreshModeName(command.refresh_mode));
         std::lock_guard<std::mutex> lock(s_panel_mutex);
         if (s_display_sleeping) {
             s_current_selection = command.selection;
@@ -474,9 +516,11 @@ void DisplayTask(void*)
             continue;
         }
 
-        const esp_err_t err = ApplyDemoSelection(command.selection, false);
+        const esp_err_t err =
+            ApplyDemoSelection(command.selection, command.refresh_mode == RefreshMode::kFull);
         if (err != ESP_OK) {
-            ESP_LOGW(kTag, "Demo partial refresh failed: %s", esp_err_to_name(err));
+            ESP_LOGW(kTag, "Display refresh failed (mode=%s): %s",
+                     RefreshModeName(command.refresh_mode), esp_err_to_name(err));
         }
     }
 }
@@ -518,8 +562,12 @@ esp_err_t Init()
         return ESP_OK;
     }
 
+    ESP_RETURN_ON_ERROR(shared_bus_service::Init(), kTag, "shared bus init failed");
     ESP_RETURN_ON_ERROR(sticky_board::EnsureSharedSpiBus(), kTag, "shared SPI bus init failed");
     ESP_RETURN_ON_ERROR(sticky_board::EnableEpaperPower(), kTag, "enable e-paper power failed");
+
+    DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
+    ESP_RETURN_ON_ERROR(bus_guard.err(), kTag, "shared display bus acquire failed");
 
     EpaperPanel& panel = Panel();
     ESP_RETURN_ON_ERROR(panel.Initialize(), kTag, "panel initialize failed");
@@ -541,13 +589,13 @@ bool IsInitialized()
     return s_initialized;
 }
 
-esp_err_t SelectDemoSelection(DemoSelection selection)
+esp_err_t SelectDemoSelection(DemoSelection selection, RefreshMode refresh_mode)
 {
     if (!s_initialized || s_command_queue == nullptr) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    const DisplayCommand command{selection};
+    const DisplayCommand command{selection, refresh_mode};
     return xQueueOverwrite(s_command_queue, &command) == pdPASS ? ESP_OK : ESP_FAIL;
 }
 

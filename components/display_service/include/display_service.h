@@ -9,9 +9,15 @@ enum class DemoSelection {
     kTop,
 };
 
+enum class RefreshMode {
+    kPartial,
+    kFull,
+};
+
 esp_err_t Init();
 bool IsInitialized();
-esp_err_t SelectDemoSelection(DemoSelection selection);
+esp_err_t SelectDemoSelection(DemoSelection selection,
+                              RefreshMode refresh_mode = RefreshMode::kPartial);
 esp_err_t EnterDisplaySleep();
 esp_err_t EnterLightSleep();
 esp_err_t WakeDisplay();

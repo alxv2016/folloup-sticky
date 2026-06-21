@@ -9,12 +9,14 @@
 #include <sys/stat.h>
 #include <vector>
 
+#include "esp_check.h"
 #include "esp_log.h"
 #include "followup_task_config.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "power_service.h"
+#include "shared_bus_service.h"
 #include "sd_card.h"
 #include "sticky_board.h"
 #include "sticky_board_config.h"
@@ -72,6 +74,29 @@ public:
 
     WriteBusyGuard(const WriteBusyGuard&) = delete;
     WriteBusyGuard& operator=(const WriteBusyGuard&) = delete;
+};
+
+class StorageBusGuard {
+public:
+    StorageBusGuard() = default;
+
+    ~StorageBusGuard()
+    {
+        if (err_ == ESP_OK) {
+            shared_bus_service::ReleaseStorage();
+        }
+    }
+
+    esp_err_t Acquire()
+    {
+        err_ = shared_bus_service::AcquireStorage();
+        return err_;
+    }
+
+    esp_err_t err() const { return err_; }
+
+private:
+    esp_err_t err_ = ESP_FAIL;
 };
 
 SdCardPins BuildPins()
@@ -244,6 +269,32 @@ esp_err_t MountCardLocked(SdCard& card)
     return s_mount_result;
 }
 
+esp_err_t InitializeCardAtBootLocked(SdCard& card)
+{
+    const bool inserted = card.IsCardInserted();
+    ESP_LOGI(kTag, "SD detect state: %s", inserted ? "inserted" : "not inserted");
+    if (!inserted) {
+        s_mount_result = ESP_ERR_NOT_FOUND;
+        return s_mount_result;
+    }
+
+    StorageBusGuard bus_guard;
+    s_mount_result = bus_guard.Acquire();
+    if (s_mount_result != ESP_OK) {
+        ESP_LOGW(kTag, "Startup shared storage bus acquire failed: %s",
+                 esp_err_to_name(s_mount_result));
+        return s_mount_result;
+    }
+
+    s_mount_result = MountCardLocked(card);
+    if (s_mount_result == ESP_OK) {
+        // This board behaves best when the inserted card stays mounted after
+        // entering SPI mode, rather than being torn back down before display init.
+        ESP_LOGI(kTag, "Startup SD init completed; card remains mounted");
+    }
+    return s_mount_result;
+}
+
 esp_err_t QueueRequest(Operation operation)
 {
     if (s_request_queue == nullptr) {
@@ -274,9 +325,18 @@ void CompleteOperation(Operation operation,
     NotifyLocked();
 }
 
+void RefreshMountedSnapshotAndNotifyLocked(SdCard& card, esp_err_t error)
+{
+    std::lock_guard<std::mutex> state_lock(s_state_mutex);
+    RefreshSnapshotStorageLocked(card);
+    s_snapshot.last_error = error;
+    NotifyLocked();
+}
+
 void HandleFormatRequest()
 {
     WriteBusyGuard write_busy;
+    StorageBusGuard bus_guard;
     SdCard& card = Card();
 
     {
@@ -287,7 +347,14 @@ void HandleFormatRequest()
         NotifyLocked();
     }
 
-    esp_err_t err = ESP_OK;
+    esp_err_t err = bus_guard.Acquire();
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "Shared storage bus acquire failed: %s", esp_err_to_name(err));
+        CompleteOperation(Operation::kFormatSd, OperationPhase::kFailed,
+                          Mode::kError, err, card);
+        return;
+    }
+
     {
         std::lock_guard<std::mutex> card_lock(s_card_mutex);
         err = MountCardLocked(card);
@@ -346,6 +413,8 @@ esp_err_t Init()
         return s_mount_result == ESP_ERR_NOT_FOUND ? ESP_OK : s_mount_result;
     }
 
+    ESP_RETURN_ON_ERROR(shared_bus_service::Init(), kTag, "shared bus init failed");
+
     if (s_request_queue == nullptr) {
         s_request_queue = xQueueCreate(kQueueDepth, sizeof(QueuedRequest));
         if (s_request_queue == nullptr) {
@@ -371,13 +440,7 @@ esp_err_t Init()
     SdCard& card = Card();
     {
         std::lock_guard<std::mutex> card_lock(s_card_mutex);
-        const bool inserted = card.IsCardInserted();
-        ESP_LOGI(kTag, "SD detect state: %s", inserted ? "inserted" : "not inserted");
-        if (inserted) {
-            MountCardLocked(card);
-        } else {
-            s_mount_result = ESP_ERR_NOT_FOUND;
-        }
+        s_mount_result = InitializeCardAtBootLocked(card);
     }
 
     {
@@ -454,6 +517,35 @@ Snapshot GetSnapshot()
 {
     std::lock_guard<std::mutex> lock(s_state_mutex);
     return s_snapshot;
+}
+
+esp_err_t RunWithMountedFilesystem(MountedFilesystemHandler handler, void* context)
+{
+    if (handler == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    WriteBusyGuard write_busy;
+    StorageBusGuard bus_guard;
+    const esp_err_t bus_err = bus_guard.Acquire();
+    if (bus_err != ESP_OK) {
+        return bus_err;
+    }
+
+    SdCard& card = Card();
+    std::lock_guard<std::mutex> card_lock(s_card_mutex);
+
+    esp_err_t err = MountCardLocked(card);
+    if (err == ESP_OK) {
+        err = handler(card.mount_point().c_str(), context);
+    }
+
+    RefreshMountedSnapshotAndNotifyLocked(card, err);
+    return err;
 }
 
 esp_err_t RequestFormatSdCard()

@@ -39,6 +39,7 @@ struct Event {
 };
 
 using EventHandler = void (*)(const Event& event, void* context);
+using MountedFilesystemHandler = esp_err_t (*)(const char* mount_point, void* context);
 
 esp_err_t Init();
 void SetEventHandler(EventHandler handler, void* context);
@@ -46,6 +47,7 @@ void LogDebugStatus();
 bool IsMounted();
 bool IsWriteBusy();
 Snapshot GetSnapshot();
+esp_err_t RunWithMountedFilesystem(MountedFilesystemHandler handler, void* context);
 esp_err_t RequestFormatSdCard();
 const char* MountPoint();
 const char* ModeName(Mode mode);

@@ -2,6 +2,7 @@
 
 #include "sticky_board_config.h"
 
+#include "esp_check.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
@@ -137,6 +138,26 @@ esp_err_t CreateI2cBus(i2c_port_num_t port, gpio_num_t scl_pin, gpio_num_t sda_p
     config.flags.enable_internal_pullup = 1;
 
     return i2c_new_master_bus(&config, out_bus);
+}
+
+esp_err_t PrepareSharedSpiPinsForIdle()
+{
+    ESP_RETURN_ON_ERROR(EnableOutputPin(STICKY_SD_POWER_EN_PIN, 0),
+                        kTag,
+                        "configure SD power idle state failed");
+    ESP_RETURN_ON_ERROR(EnableOutputPin(STICKY_SD_CS_PIN, 1),
+                        kTag,
+                        "configure SD CS idle state failed");
+    ESP_RETURN_ON_ERROR(EnableOutputPin(STICKY_EPD_CS_PIN, 1),
+                        kTag,
+                        "configure EPD CS idle state failed");
+    ESP_RETURN_ON_ERROR(EnableOutputPin(STICKY_EPD_DC_PIN, 0),
+                        kTag,
+                        "configure EPD DC idle state failed");
+    ESP_RETURN_ON_ERROR(EnableOutputPin(STICKY_EPD_RST_PIN, 1),
+                        kTag,
+                        "configure EPD reset idle state failed");
+    return ESP_OK;
 }
 
 }  // namespace
@@ -384,6 +405,10 @@ esp_err_t EnsureSharedSpiBus()
     if (s_shared_spi_bus_initialized) {
         return ESP_OK;
     }
+
+    ESP_RETURN_ON_ERROR(PrepareSharedSpiPinsForIdle(),
+                        kTag,
+                        "shared SPI idle pin setup failed");
 
     spi_bus_config_t bus_config = {};
     bus_config.mosi_io_num = STICKY_SHARED_SPI_MOSI_PIN;

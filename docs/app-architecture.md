@@ -266,6 +266,9 @@ The current early startup sequence is:
 - Initializes `power_service`.
 - Logs one power/battery diagnostic snapshot.
 - Initializes `feedback_service` and requests the startup feedback.
+- Initializes `storage_service` and logs one MicroSD diagnostic snapshot.
+  On this board, when a card is present, storage must initialize before the
+  shared-bus display path so the card enters SPI mode first and remains mounted.
 - Initializes `display_service` and clears the e-paper panel to a blank screen.
 - Initializes `touch_service` and logs app-facing touch events.
 - Initializes `imu_service` and logs three direct IMU samples for bring-up.
@@ -280,7 +283,6 @@ The current early startup sequence is:
 - Initializes `wifi_service`, which loads saved Wi-Fi credentials or built-in
   sdkconfig credentials, starts station mode when credentials exist, or starts
   AP setup mode when no credentials are available.
-- Initializes `storage_service` and logs one MicroSD diagnostic snapshot.
 - Initializes `recording_service` and logs recording status.
 - Initializes `button_service`.
 - Subscribes to button and touch events, forwards user activity into
@@ -750,7 +752,8 @@ Current scope:
 
 - use the schematic page 5 MicroSD pin map
 - check `SD_DETECT`
-- mount `/sdcard` when a card is present
+- mount `/sdcard` during boot when a card is present
+- keep the card mounted during normal runtime after successful boot-time init
 - format the SD card on request, set the `FOLLOUP` volume label, and recreate
   the source-app directory layout:
   `/recordings`, `/todos`, `/summaries`, `/files`, `/trash`,
@@ -772,6 +775,13 @@ MicroSD shares SPI lines with the e-paper path:
 `storage_service` must call `sticky_board::EnsureSharedSpiBus()` before mounting
 the SD card. Shared SPI bus ownership belongs in `board`, not in `sd_card`,
 `epaper_panel`, `storage_service`, or `display_service`.
+
+Hardware validation on Sticky showed an extra board-specific constraint: when an
+SD card is inserted, the card must be initialized on the shared SPI bus before
+the e-paper panel starts using that bus, and the card should remain mounted
+afterward. Tearing the card back down after boot caused the panel to log a
+refresh without visibly updating the screen. Treat "SD first, then display, and
+keep SD mounted" as a required startup policy on this hardware revision.
 
 ### `components/pdm_mic`
 
@@ -891,6 +901,11 @@ Current scope:
   light-sleep recovery
 - log panel refresh metrics and expose refresh-in-progress state for
   auto-sleep blocking
+
+Because the SSD1677 path shares `SPI2_HOST` with MicroSD, `display_service`
+depends on `storage_service` having already performed SD bring-up when a card is
+inserted. The display path should not reorder itself ahead of storage during
+boot on this board.
 
 `display_service` owns app-facing display policy. Driver-specific wiring and
 SSD1677 commands must stay out of `main`. Raw board pin ownership stays in
@@ -1079,6 +1094,10 @@ weather UI, and persistence should be layered above this service later.
   `GPIO13`, `EP_SDI/MOSI` on `GPIO14`, `EP_SDO/MISO` on `GPIO12`, `EP_CS` on
   `GPIO15`, `EP_DC` on `GPIO16`, `EP_RST` on `GPIO17`, `EP_BUSY` on `GPIO18`,
   and `EP_PWR_EN` on `GPIO47`.
+- Hardware bring-up confirmed a board-specific shared-bus rule: with an SD card
+  inserted, the firmware must initialize MicroSD first and keep it mounted
+  before bringing up the e-paper panel. If the card is removed, display init
+  behaves normally without that constraint.
 - The e-paper panel is 800 x 480 raw landscape pixels. The bring-up
   `display_service` draws portrait content by mapping logical 480 x 800
   coordinates into the raw SSD1677 framebuffer.

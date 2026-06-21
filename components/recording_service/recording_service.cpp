@@ -13,6 +13,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "microphone_service.h"
+#include "storage_service.h"
 
 namespace recording_service {
 namespace {
@@ -234,6 +235,77 @@ Event BuildEvent()
     event.state = ResolveStateLocked();
     event.ui_state = BuildUiStateLocked();
     return event;
+}
+
+bool PathUsesStorageMount(const char* path)
+{
+    if (path == nullptr) {
+        return false;
+    }
+
+    const char* mount_point = storage_service::MountPoint();
+    if (mount_point == nullptr) {
+        return false;
+    }
+
+    const size_t mount_len = std::strlen(mount_point);
+    return std::strncmp(path, mount_point, mount_len) == 0 &&
+           (path[mount_len] == '\0' || path[mount_len] == '/');
+}
+
+WavHeader BuildWavHeader(const RecordedClip& clip);
+
+esp_err_t WriteClipToPath(const RecordedClip& clip, const char* path)
+{
+    struct stat st = {};
+    if (stat(path, &st) == 0) {
+        unlink(path);
+    }
+
+    FILE* file = std::fopen(path, "wb");
+    if (file == nullptr) {
+        ESP_LOGW(kTag, "Open WAV file failed: %s", path);
+        return ESP_FAIL;
+    }
+
+    const WavHeader header = BuildWavHeader(clip);
+    bool ok = std::fwrite(&header, sizeof(header), 1, file) == 1;
+    if (ok) {
+        clip.ForEachChunk([&](const int16_t* samples, size_t sample_count) {
+            if (!ok || samples == nullptr || sample_count == 0) {
+                return;
+            }
+            ok = std::fwrite(samples, sizeof(int16_t), sample_count, file) == sample_count;
+        });
+    }
+
+    std::fclose(file);
+    if (!ok) {
+        ESP_LOGW(kTag, "Write WAV file failed: %s", path);
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(kTag, "Saved WAV: path=%s samples=%u duration_ms=%u bytes=%u",
+             path,
+             static_cast<unsigned>(clip.sample_count()),
+             static_cast<unsigned>(clip.duration_ms()),
+             static_cast<unsigned>(clip.wav_byte_count()));
+    return ESP_OK;
+}
+
+struct SaveClipContext {
+    RecordedClipPtr clip;
+    const char* path = nullptr;
+};
+
+esp_err_t SaveClipViaMountedFilesystem(const char*, void* context)
+{
+    auto* save = static_cast<SaveClipContext*>(context);
+    if (save == nullptr || !save->clip || save->path == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    return WriteClipToPath(*save->clip, save->path);
 }
 
 void Notify()
@@ -581,41 +653,14 @@ esp_err_t SaveLastClipWav(const char* path)
     }
 
     SaveExportGuard save_export_guard;
-
-    struct stat st = {};
-    if (stat(path, &st) == 0) {
-        unlink(path);
+    if (PathUsesStorageMount(path)) {
+        SaveClipContext context = {};
+        context.clip = clip;
+        context.path = path;
+        return storage_service::RunWithMountedFilesystem(SaveClipViaMountedFilesystem, &context);
     }
 
-    FILE* file = std::fopen(path, "wb");
-    if (file == nullptr) {
-        ESP_LOGW(kTag, "Open WAV file failed: %s", path);
-        return ESP_FAIL;
-    }
-
-    const WavHeader header = BuildWavHeader(*clip);
-    bool ok = std::fwrite(&header, sizeof(header), 1, file) == 1;
-    if (ok) {
-        clip->ForEachChunk([&](const int16_t* samples, size_t sample_count) {
-            if (!ok || samples == nullptr || sample_count == 0) {
-                return;
-            }
-            ok = std::fwrite(samples, sizeof(int16_t), sample_count, file) == sample_count;
-        });
-    }
-
-    std::fclose(file);
-    if (!ok) {
-        ESP_LOGW(kTag, "Write WAV file failed: %s", path);
-        return ESP_FAIL;
-    }
-
-    ESP_LOGI(kTag, "Saved WAV: path=%s samples=%u duration_ms=%u bytes=%u",
-             path,
-             static_cast<unsigned>(clip->sample_count()),
-             static_cast<unsigned>(clip->duration_ms()),
-             static_cast<unsigned>(clip->wav_byte_count()));
-    return ESP_OK;
+    return WriteClipToPath(*clip, path);
 }
 
 esp_err_t RecordDebugClipToWav(const char* path, uint32_t lead_in_ms, uint32_t record_ms)

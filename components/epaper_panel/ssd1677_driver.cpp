@@ -298,7 +298,8 @@ esp_err_t EpaperPanel::Sleep()
     ESP_RETURN_ON_ERROR(SendData(0x01), kTag, "deep sleep data failed");
     vTaskDelay(pdMS_TO_TICKS(10));
     SetRst(0);
-    SetCs(0);
+    // Leave CS deasserted so the SD card can safely use the shared SPI bus.
+    SetCs(1);
     SetDc(0);
     state_ = EpaperPanelState::kDeepSleep;
     base_image_initialized_ = false;

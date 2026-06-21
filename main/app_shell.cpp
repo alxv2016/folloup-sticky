@@ -47,9 +47,11 @@ void PlayFeedback(feedback_service::FeedbackEvent event)
     (void)feedback_service::Play(event);
 }
 
-void RequestDemoSelection(display_service::DemoSelection selection, const char* source)
+void RequestDemoSelection(display_service::DemoSelection selection,
+                          display_service::RefreshMode refresh_mode,
+                          const char* source)
 {
-    const esp_err_t err = display_service::SelectDemoSelection(selection);
+    const esp_err_t err = display_service::SelectDemoSelection(selection, refresh_mode);
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(kTag, "Display demo selection from %s failed: %s",
                  source, esp_err_to_name(err));
@@ -238,9 +240,14 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
     switch (event.event) {
         case button_service::ButtonEvent::kSingleClick:
             PlayFeedback(feedback_service::FeedbackEvent::kButtonClick);
-            if (event.button == button_service::ButtonId::kUp ||
-                event.button == button_service::ButtonId::kDown) {
-                RequestDemoSelection(display_service::DemoSelection::kTop, "button");
+            if (event.button == button_service::ButtonId::kUp) {
+                RequestDemoSelection(display_service::DemoSelection::kTop,
+                                     display_service::RefreshMode::kPartial,
+                                     "button_up");
+            } else if (event.button == button_service::ButtonId::kDown) {
+                RequestDemoSelection(display_service::DemoSelection::kTop,
+                                     display_service::RefreshMode::kFull,
+                                     "button_down");
             }
             break;
         case button_service::ButtonEvent::kDoubleClick:
@@ -302,7 +309,9 @@ void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
         s_touch_contact_active = true;
         s_last_touch_event_tick = now;
         if (new_contact) {
-            RequestDemoSelection(display_service::DemoSelection::kTop, "touch");
+            RequestDemoSelection(display_service::DemoSelection::kTop,
+                                 display_service::RefreshMode::kPartial,
+                                 "touch");
             PlayFeedback(feedback_service::FeedbackEvent::kTouchContact);
         }
     }
@@ -485,6 +494,9 @@ void Run()
     ESP_ERROR_CHECK(power_service::Init());
     power_service::LogDebugStatus();
     InitFeedbackService();
+    // On this board the SD card needs to enter and stay in SPI mode before
+    // the shared-bus display path is brought up.
+    InitStorageService();
     InitDisplayService();
     InitTouchService();
     InitImuService();
@@ -492,7 +504,6 @@ void Run()
     InitDeviceSleepRuntime();
     InitTimezoneService();
     InitWifiService();
-    InitStorageService();
     InitRecordingService();
     StartShutdownTask();
     InitButtonService();
