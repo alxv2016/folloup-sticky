@@ -261,7 +261,7 @@ inline constexpr int kHeight = 56;
 inline constexpr int kMinWidth = 144;
 inline constexpr int kHorizontalPadding = spacing::k12;
 inline constexpr int kLabelYOffset = 0;
-inline constexpr int kBorderThickness = 2;
+inline constexpr int kBorderThickness = 1;
 inline constexpr int kStrokeThickness = 2;
 
 }  // namespace button
