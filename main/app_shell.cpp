@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "button_service.h"
+#include "device_sleep_service.h"
 #include "device_sleep_runtime.h"
 #include "display_service.h"
 #include "environment_service.h"
@@ -18,6 +19,7 @@
 #include "freertos/task.h"
 #include "gemini_service.h"
 #include "imu_service.h"
+#include "lock_screen_runtime.h"
 #include "power_service.h"
 #include "recording_service.h"
 #include "sdkconfig.h"
@@ -42,6 +44,7 @@ constexpr TickType_t kTouchFeedbackContactGap = pdMS_TO_TICKS(300);
 
 TaskHandle_t s_shutdown_task = nullptr;
 std::atomic<bool> s_power_button_shutdown_pending = false;
+std::atomic<bool> s_power_button_display_wake_only_active = false;
 std::atomic<bool> s_startup_complete = false;
 std::atomic<bool> s_gemini_ready = false;
 bool s_touch_contact_active = false;
@@ -216,6 +219,12 @@ void HandleTimezoneEvent(const timezone_service::Event& event, void*)
                  ? "--:--"
                  : event.snapshot.runtime.current_time.c_str());
 
+    const esp_err_t lock_screen_err = lock_screen_runtime::SyncClockState(true);
+    if (lock_screen_err != ESP_OK && lock_screen_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Lock screen clock update after time event failed: %s",
+                 esp_err_to_name(lock_screen_err));
+    }
+
     const esp_err_t status_bar_err =
         s_startup_complete.load(std::memory_order_relaxed)
             ? status_bar_runtime::UpdateDisplayStateAndRequestRefresh(
@@ -305,29 +314,87 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
         return;
     }
 
+    if (event.button == button_service::ButtonId::kPowerOk &&
+        s_power_button_display_wake_only_active.load(std::memory_order_relaxed)) {
+        ESP_LOGI(kTag, "Consumed display-wake POWER_OK event=%s",
+                 ButtonEventName(event.event));
+        switch (event.event) {
+            case button_service::ButtonEvent::kPressUp:
+            case button_service::ButtonEvent::kSingleClick:
+            case button_service::ButtonEvent::kDoubleClick:
+            case button_service::ButtonEvent::kLongPressUp:
+                s_power_button_display_wake_only_active.store(false,
+                                                              std::memory_order_relaxed);
+                break;
+            case button_service::ButtonEvent::kPressDown:
+            case button_service::ButtonEvent::kLongPressStart:
+            default:
+                break;
+        }
+        return;
+    }
+
     if (storage_service::IsWriteBusy()) {
         ESP_LOGI(kTag, "Button ignored while storage write is active");
         return;
     }
 
+    const device_sleep_service::Stage stage_before =
+        device_sleep_service::GetSnapshot().runtime.stage;
     device_sleep_runtime::NotifyUserActivity();
+    if (event.button == button_service::ButtonId::kPowerOk &&
+        stage_before == device_sleep_service::Stage::kDisplaySleeping) {
+        s_power_button_display_wake_only_active.store(true, std::memory_order_relaxed);
+        ESP_LOGI(kTag, "POWER_OK armed as wake-only for display sleep");
+        return;
+    }
 
     switch (event.event) {
         case button_service::ButtonEvent::kSingleClick:
-            PlayFeedback(feedback_service::FeedbackEvent::kButtonClick);
-            if (event.button == button_service::ButtonId::kUp) {
-                RequestDemoSelection(display_service::DemoSelection::kTop,
-                                     display_service::RefreshMode::kPartial,
-                                     "button_up");
+            if (event.button == button_service::ButtonId::kPowerOk) {
+                const bool was_active = lock_screen_runtime::IsActive();
+                const esp_err_t err = lock_screen_runtime::Toggle();
+                if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+                    ESP_LOGW(kTag, "Power button lock toggle failed: %s",
+                             esp_err_to_name(err));
+                } else {
+                    PlayFeedback(was_active ? feedback_service::FeedbackEvent::kUnlock
+                                            : feedback_service::FeedbackEvent::kLock);
+                }
+            } else if (event.button == button_service::ButtonId::kUp) {
+                PlayFeedback(feedback_service::FeedbackEvent::kButtonClick);
+                if (lock_screen_runtime::IsActive()) {
+                    const esp_err_t err = display_service::RequestRefreshCurrentScreen(
+                        display_service::RefreshMode::kPartial);
+                    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+                        ESP_LOGW(kTag, "Lock screen partial refresh failed: %s",
+                                 esp_err_to_name(err));
+                    }
+                } else {
+                    RequestDemoSelection(display_service::DemoSelection::kTop,
+                                         display_service::RefreshMode::kPartial,
+                                         "button_up");
+                }
             } else if (event.button == button_service::ButtonId::kDown) {
-                RequestDemoSelection(display_service::DemoSelection::kTop,
-                                     display_service::RefreshMode::kFull,
-                                     "button_down");
+                PlayFeedback(feedback_service::FeedbackEvent::kButtonClick);
+                if (lock_screen_runtime::IsActive()) {
+                    const esp_err_t err = display_service::RequestRefreshCurrentScreen(
+                        display_service::RefreshMode::kFull);
+                    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+                        ESP_LOGW(kTag, "Lock screen full refresh failed: %s",
+                                 esp_err_to_name(err));
+                    }
+                } else {
+                    RequestDemoSelection(display_service::DemoSelection::kTop,
+                                         display_service::RefreshMode::kFull,
+                                         "button_down");
+                }
             }
             break;
         case button_service::ButtonEvent::kDoubleClick:
             PlayFeedback(feedback_service::FeedbackEvent::kButtonDoubleClick);
-            if (event.button == button_service::ButtonId::kDown) {
+            if (!lock_screen_runtime::IsActive() &&
+                event.button == button_service::ButtonId::kDown) {
                 ActivateSelectedDemoAction();
             }
             break;
@@ -387,9 +454,11 @@ void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
         s_touch_contact_active = true;
         s_last_touch_event_tick = now;
         if (new_contact) {
-            RequestDemoSelection(display_service::DemoSelection::kTop,
-                                 display_service::RefreshMode::kPartial,
-                                 "touch");
+            if (!lock_screen_runtime::IsActive()) {
+                RequestDemoSelection(display_service::DemoSelection::kTop,
+                                     display_service::RefreshMode::kPartial,
+                                     "touch");
+            }
             PlayFeedback(feedback_service::FeedbackEvent::kTouchContact);
         }
     }
@@ -478,6 +547,14 @@ void InitDisplayService()
     const esp_err_t err = display_service::Init();
     if (err != ESP_OK) {
         ESP_LOGW(kTag, "Display service init failed: %s", esp_err_to_name(err));
+    }
+}
+
+void InitLockScreenRuntime()
+{
+    const esp_err_t err = lock_screen_runtime::Init();
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "Lock screen runtime init failed: %s", esp_err_to_name(err));
     }
 }
 
@@ -598,6 +675,7 @@ void Run()
     // the shared-bus display path is brought up.
     InitStorageService();
     InitDisplayService();
+    InitLockScreenRuntime();
     PlayFeedback(feedback_service::FeedbackEvent::kStartup);
     InitTouchService();
     InitImuService();

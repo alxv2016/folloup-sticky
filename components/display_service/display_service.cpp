@@ -8,6 +8,7 @@
 
 #include "design_tokens.h"
 #include "epaper_ui/font_renderer.h"
+#include "epaper_ui/lock_screen.h"
 #include "epaper_panel.h"
 #include "esp_check.h"
 #include "esp_log.h"
@@ -38,12 +39,14 @@ constexpr auto kDemoValueRole = design::TypographyRole::kDisplay;
 
 enum class DisplayCommandType {
     kSelectSelection,
+    kSetScreen,
     kRefreshCurrent,
 };
 
 struct DisplayCommand {
     DisplayCommandType type = DisplayCommandType::kSelectSelection;
-    DemoSelection selection;
+    ScreenId screen = ScreenId::kHome;
+    DemoSelection selection = DemoSelection::kTop;
     RefreshMode refresh_mode = RefreshMode::kPartial;
 };
 
@@ -53,8 +56,10 @@ TaskHandle_t s_display_task = nullptr;
 std::mutex s_panel_mutex;
 bool s_display_sleeping = false;
 std::atomic<bool> s_refresh_in_progress = false;
+ScreenId s_current_screen = ScreenId::kHome;
 DemoSelection s_current_selection = DemoSelection::kTop;
 epaper_ui::StatusBarState s_status_bar_state = {};
+epaper_ui::LockScreenState s_lock_screen_state = {};
 
 class RefreshBusyGuard {
 public:
@@ -305,7 +310,37 @@ esp_err_t ApplyDemoSelection(DemoSelection selection, bool full_refresh)
     }
 
     LogMetrics(panel.metrics());
+    s_current_screen = ScreenId::kHome;
     s_current_selection = selection;
+    return ESP_OK;
+}
+
+esp_err_t ApplyLockScreen(bool full_refresh)
+{
+    EpaperPanel& panel = Panel();
+    panel.Clear(true);
+    epaper_ui::DrawLockScreen(panel.framebuffer(),
+                              STICKY_EPD_WIDTH,
+                              STICKY_EPD_HEIGHT,
+                              kPortraitWidth,
+                              kPortraitHeight,
+                              s_lock_screen_state,
+                              s_status_bar_state);
+
+    DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
+    if (bus_guard.err() != ESP_OK) {
+        return bus_guard.err();
+    }
+
+    RefreshBusyGuard refresh_busy;
+    const esp_err_t err = full_refresh ? panel.RefreshFullBase()
+                                       : panel.RefreshPartialFullScreen();
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    LogMetrics(panel.metrics());
+    s_current_screen = ScreenId::kLockScreen;
     return ESP_OK;
 }
 
@@ -332,7 +367,13 @@ esp_err_t ApplyStartupSplash()
 
 esp_err_t RefreshCurrentSelectionLocked(bool full_refresh)
 {
-    return ApplyDemoSelection(s_current_selection, full_refresh);
+    switch (s_current_screen) {
+        case ScreenId::kLockScreen:
+            return ApplyLockScreen(full_refresh);
+        case ScreenId::kHome:
+        default:
+            return ApplyDemoSelection(s_current_selection, full_refresh);
+    }
 }
 
 esp_err_t SleepPanelLocked(const char* reason)
@@ -360,14 +401,19 @@ void DisplayTask(void*)
             continue;
         }
 
-        ESP_LOGI(kTag, "Display command requested: selection=format_sd mode=%s",
+        ESP_LOGI(kTag, "Display command requested: type=%d screen=%d mode=%s",
+                 static_cast<int>(command.type),
+                 static_cast<int>(command.screen),
                  RefreshModeName(command.refresh_mode));
         std::lock_guard<std::mutex> lock(s_panel_mutex);
         if (s_display_sleeping) {
             if (command.type == DisplayCommandType::kSelectSelection) {
+                s_current_screen = ScreenId::kHome;
                 s_current_selection = command.selection;
+            } else if (command.type == DisplayCommandType::kSetScreen) {
+                s_current_screen = command.screen;
             }
-            ESP_LOGI(kTag, "Demo selection suppressed while display sleeping");
+            ESP_LOGI(kTag, "Display command suppressed while display sleeping");
             continue;
         }
 
@@ -375,6 +421,11 @@ void DisplayTask(void*)
         if (command.type == DisplayCommandType::kSelectSelection) {
             err = ApplyDemoSelection(command.selection,
                                      command.refresh_mode == RefreshMode::kFull);
+        } else if (command.type == DisplayCommandType::kSetScreen) {
+            err = command.screen == ScreenId::kLockScreen
+                      ? ApplyLockScreen(command.refresh_mode == RefreshMode::kFull)
+                      : ApplyDemoSelection(s_current_selection,
+                                           command.refresh_mode == RefreshMode::kFull);
         } else {
             err = RefreshCurrentSelectionLocked(command.refresh_mode == RefreshMode::kFull);
         }
@@ -449,6 +500,12 @@ bool IsInitialized()
     return s_initialized;
 }
 
+ScreenId GetCurrentScreen()
+{
+    std::lock_guard<std::mutex> lock(s_panel_mutex);
+    return s_current_screen;
+}
+
 esp_err_t SetStatusBarState(const epaper_ui::StatusBarState& state)
 {
     if (!s_initialized) {
@@ -460,6 +517,31 @@ esp_err_t SetStatusBarState(const epaper_ui::StatusBarState& state)
     return ESP_OK;
 }
 
+esp_err_t SetLockScreenState(const epaper_ui::LockScreenState& state)
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    std::lock_guard<std::mutex> lock(s_panel_mutex);
+    s_lock_screen_state = state;
+    return ESP_OK;
+}
+
+esp_err_t SetCurrentScreen(ScreenId screen, RefreshMode refresh_mode)
+{
+    if (!s_initialized || s_command_queue == nullptr) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    DisplayCommand command = {};
+    command.type = DisplayCommandType::kSetScreen;
+    command.screen = screen;
+    command.selection = s_current_selection;
+    command.refresh_mode = refresh_mode;
+    return xQueueOverwrite(s_command_queue, &command) == pdPASS ? ESP_OK : ESP_FAIL;
+}
+
 esp_err_t SelectDemoSelection(DemoSelection selection, RefreshMode refresh_mode)
 {
     if (!s_initialized || s_command_queue == nullptr) {
@@ -468,6 +550,7 @@ esp_err_t SelectDemoSelection(DemoSelection selection, RefreshMode refresh_mode)
 
     DisplayCommand command = {};
     command.type = DisplayCommandType::kSelectSelection;
+    command.screen = ScreenId::kHome;
     command.selection = selection;
     command.refresh_mode = refresh_mode;
     return xQueueOverwrite(s_command_queue, &command) == pdPASS ? ESP_OK : ESP_FAIL;
@@ -481,6 +564,7 @@ esp_err_t RequestRefreshCurrentScreen(RefreshMode refresh_mode)
 
     DisplayCommand command = {};
     command.type = DisplayCommandType::kRefreshCurrent;
+    command.screen = s_current_screen;
     command.selection = s_current_selection;
     command.refresh_mode = refresh_mode;
     return xQueueOverwrite(s_command_queue, &command) == pdPASS ? ESP_OK : ESP_FAIL;

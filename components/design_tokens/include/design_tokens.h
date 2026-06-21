@@ -191,6 +191,22 @@ inline constexpr uint8_t kBackgroundColor = color::kSurfaceRaised;
 
 }  // namespace status_bar
 
+namespace lock_screen {
+
+inline constexpr int kTopPadding = spacing::k16;
+inline constexpr int kSidePadding = spacing::k16;
+inline constexpr int kIndicatorRowHeight = icon::k36;
+inline constexpr int kIndicatorItemGap = spacing::k12;
+inline constexpr int kIndicatorTextGap = spacing::k4;
+inline constexpr int kIndicatorStrokeThickness = 2;
+inline constexpr int kContentTop = spacing::k72 + spacing::k48;
+inline constexpr int kTimeLineHeight = 130;
+inline constexpr int kTimeGap = spacing::k4;
+inline constexpr int kDateGap = spacing::k64;
+inline constexpr int kWeekdayDateGap = spacing::k2;
+
+}  // namespace lock_screen
+
 namespace current_date {
 
 inline constexpr int kSeparatorWidth = 26;

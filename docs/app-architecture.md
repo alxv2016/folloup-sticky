@@ -28,7 +28,8 @@ The repository is currently a minimal ESP-IDF application scaffold with:
 - A `design_tokens` component that owns shared product UI constants such as
   spacing, colors, typography roles, and component sizing.
 - An `epaper_ui` component that owns reusable e-paper presentation primitives
-  such as the status bar renderer being ported from the old app.
+  such as the status bar renderer, lock-screen renderer, and future view
+  widgets being ported from the old app.
 - A ported `sd_card` component for SDSPI/FATFS MicroSD access.
 - A `storage_service` component that owns app-facing MicroSD mount, format, and
   debug status policy.
@@ -281,6 +282,7 @@ Current scope:
 - generated Inter bitmap fonts used by e-paper UI typography roles
 - a small role-aware bitmap font renderer
 - the app status-bar state contract and renderer
+- a reusable lock-screen renderer plus its dedicated state contract
 
 App-owned runtime helpers in `main/` may compose service state into these UI
 contracts, but the drawing primitives themselves should stay reusable and
@@ -293,12 +295,14 @@ The e-paper UI stack is now intentionally split across three layers:
 - `design_tokens` owns product-wide spacing, grayscale, typography, and
   component metrics.
 - `epaper_ui` owns reusable presentation primitives such as bitmap fonts,
-  role-aware text rendering, the status bar renderer, and future view widgets
-  ported from `followup`.
+  role-aware text rendering, the status bar renderer, the lock-screen
+  renderer, and future view widgets ported from `followup`.
 - app-owned runtime helpers in `main/` compose service state into UI contracts.
   Today that includes `status_bar_runtime`, which translates
   `power_service`, `wifi_service`, `timezone_service`, and sleep/shutdown state
-  into a neutral `epaper_ui::StatusBarState`.
+  into a neutral `epaper_ui::StatusBarState`, and `lock_screen_runtime`, which
+  composes time plus status indicators into `epaper_ui::LockScreenState` and
+  lock-screen visibility.
 
 `display_service` remains the owner of the physical panel, framebuffer, refresh
 mode decisions, and sleep/wake transitions. It may consume `epaper_ui`
@@ -963,7 +967,8 @@ Current scope:
 - initialize the raw SSD1677 panel driver
 - render the startup splash with `RefreshFullBase()`
 - own the current portrait framebuffer surface and its refresh policy
-- render the current bridge screen together with the shared status bar
+- render the current active screen, including the home bridge screen or lock
+  screen, together with the appropriate UI chrome
 - enter panel sleep without a special transitional text screen
 - restore the current screen with a forced full refresh after display wake or
   light-sleep recovery
@@ -972,9 +977,11 @@ Current scope:
 
 Current UI state:
 
-- `display_service` still uses a temporary demo/bridge screen for the main
-  content area while real views are ported from `followup`
+- `display_service` now owns a minimal screen model with the temporary home
+  demo/bridge surface plus a real lock screen
 - the status bar is now rendered through `epaper_ui`
+- the lock screen uses its own `epaper_ui` renderer and a dedicated runtime
+  helper in `main/lock_screen_runtime.cpp`
 - sleep and shutdown indicators are driven through `status_bar_runtime`
   immediately before display sleep, light sleep, and deep-sleep shutdown
   transitions

@@ -15,6 +15,10 @@ buzzer_service::Pattern PatternForEvent(FeedbackEvent event)
             return buzzer_service::Pattern::kStartup;
         case FeedbackEvent::kGeminiConnected:
             return buzzer_service::Pattern::kGeminiConnected;
+        case FeedbackEvent::kLock:
+            return buzzer_service::Pattern::kLock;
+        case FeedbackEvent::kUnlock:
+            return buzzer_service::Pattern::kUnlock;
         case FeedbackEvent::kButtonClick:
         case FeedbackEvent::kTouchContact:
             return buzzer_service::Pattern::kClick;
@@ -37,6 +41,10 @@ const char* FeedbackEventName(FeedbackEvent event)
             return "startup";
         case FeedbackEvent::kGeminiConnected:
             return "gemini_connected";
+        case FeedbackEvent::kLock:
+            return "lock";
+        case FeedbackEvent::kUnlock:
+            return "unlock";
         case FeedbackEvent::kButtonClick:
             return "button_click";
         case FeedbackEvent::kButtonDoubleClick:

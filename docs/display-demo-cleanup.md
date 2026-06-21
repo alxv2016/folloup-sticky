@@ -1,8 +1,8 @@
 # Display Demo Cleanup
 
 The current display stack now has a real startup splash, a reusable status bar,
-and sleep/shutdown indicators wired into runtime state. What remains is the
-temporary demo bridge used for the main content surface.
+a real lock screen, and sleep/shutdown indicators wired into runtime state.
+What remains is the temporary demo bridge used for the home content surface.
 
 This document tracks the cleanup needed to move from that bridge to real views
 ported from `followup`.
@@ -33,8 +33,8 @@ now render the status-bar indicators immediately before:
 
 ## Cleanup Goals
 
-The display API should evolve from a demo-selection model into a real
-view/screen model while preserving the current architecture boundaries:
+The home-screen API should evolve the remaining demo-selection model into a
+fully view-oriented model while preserving the current architecture boundaries:
 
 - `epaper_ui` owns reusable renderers and widgets
 - `main/` runtime helpers compose product state into UI contracts
@@ -44,19 +44,22 @@ view/screen model while preserving the current architecture boundaries:
 
 ## TODO
 
-1. Replace `DrawDemoFrame(...)` with the first real view renderer ported from
-   `followup`.
-2. Rename `DemoSelection` to a view-oriented type such as `ViewId`, `ScreenId`,
-   or `PageId`.
+1. Replace `DrawDemoFrame(...)` with the first real home view renderer ported
+   from `followup`.
+2. Remove the remaining demo-selection terminology from the public display/home
+   navigation path now that `display_service` already owns a broader
+   `ScreenId`.
 3. Rename `SelectDemoSelection(...)` and `RequestDemoSelection(...)` so the API
-   reflects view navigation rather than a temporary demo state machine.
+   reflects home/view navigation rather than a temporary demo state machine.
 4. Remove `"format_sd"` and the `"FORMAT"` / `"SD"` demo-card content once the
    real first screen exists.
 5. Move any reusable visual pieces discovered during that port into
    `components/epaper_ui` instead of re-embedding them in `display_service`.
 6. Keep status-bar composition in `main/status_bar_runtime.cpp` and do not move
    service reads into `epaper_ui`.
-7. Preserve the current sleep/wake sequencing: the active screen should redraw
+7. Keep lock-screen composition in `main/lock_screen_runtime.cpp` and do not
+   move service reads into `epaper_ui`.
+8. Preserve the current sleep/wake sequencing: the active screen should redraw
    after wake, and sleep/shutdown indicators should remain status-bar driven.
 
 ## Migration Notes
@@ -65,8 +68,9 @@ This should be an incremental cleanup, not a big-bang rewrite.
 
 Recommended order:
 
-1. Port the first real view.
-2. Teach `display_service` to render that real view plus the status bar.
-3. Rename the public display API from demo terminology to view terminology.
+1. Port the first real home view.
+2. Teach `display_service` to render that view instead of the demo bridge.
+3. Rename the public home display API from demo terminology to view
+   terminology.
 4. Remove the temporary demo bridge only after the replacement view path is in
    use.

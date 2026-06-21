@@ -1,6 +1,8 @@
-#include "epaper_ui/status_bar.h"
+#include "epaper_ui/lock_screen.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <string>
 #include <string_view>
 
 #include "design_tokens.h"
@@ -56,33 +58,6 @@ bool ShouldDrawBlackForTone(int x, int y, uint8_t tone)
         return (x % 2 == 0) && (y % 2 == 0);
     }
     return false;
-}
-
-void FillPortraitRect(uint8_t* framebuffer,
-                      int raw_width,
-                      int raw_height,
-                      int portrait_width,
-                      int portrait_height,
-                      int x,
-                      int y,
-                      int width,
-                      int height,
-                      uint8_t tone)
-{
-    for (int row = 0; row < height; ++row) {
-        for (int col = 0; col < width; ++col) {
-            const int px = x + col;
-            const int py = y + row;
-            DrawPortraitPixel(framebuffer,
-                              raw_width,
-                              raw_height,
-                              portrait_width,
-                              portrait_height,
-                              px,
-                              py,
-                              ShouldDrawBlackForTone(px, py, tone));
-        }
-    }
 }
 
 bool AssetPixelSet(const EmbeddedImageAsset& asset, int x, int y)
@@ -281,40 +256,14 @@ void DrawIconSlot(uint8_t* framebuffer,
                       stroke_thickness);
 }
 
-}  // namespace
-
-int StatusBarHeight()
+void DrawLockScreenStatusRow(uint8_t* framebuffer,
+                             int raw_width,
+                             int raw_height,
+                             int portrait_width,
+                             int portrait_height,
+                             const StatusBarState& state)
 {
-    return design::status_bar::kHeight;
-}
-
-void DrawStatusBar(uint8_t* framebuffer,
-                   int raw_width,
-                   int raw_height,
-                   int portrait_width,
-                   int portrait_height,
-                   const StatusBarState& state,
-                   bool draw_background)
-{
-    if (framebuffer == nullptr) {
-        return;
-    }
-
-    const int bar_height = StatusBarHeight();
-    if (draw_background) {
-        FillPortraitRect(framebuffer,
-                         raw_width,
-                         raw_height,
-                         portrait_width,
-                         portrait_height,
-                         0,
-                         0,
-                         portrait_width,
-                         bar_height,
-                         design::status_bar::kBackgroundColor);
-    }
-
-    const int content_x = design::status_bar::kSidePadding;
+    const int bar_height = design::status_bar::kHeight;
     const int content_right = portrait_width - design::status_bar::kSidePadding;
     const int icon_box = design::status_bar::kPreferredIconSize;
     const int icon_top = CenterY(0, bar_height, icon_box);
@@ -417,19 +366,124 @@ void DrawStatusBar(uint8_t* framebuffer,
                      power_icon,
                      stroke_thickness);
     }
+}
 
-    const std::string_view time_text =
-        state.time_text.empty() ? std::string_view("--:--") : std::string_view(state.time_text);
-    DrawOutlinedText(framebuffer,
-                     raw_width,
-                     raw_height,
-                     portrait_width,
-                     portrait_height,
-                     content_x,
-                     text_y,
-                     time_text,
-                     label_role,
-                     stroke_thickness);
+std::string_view SafeText(const std::string& text, std::string_view fallback)
+{
+    return text.empty() ? fallback : std::string_view(text);
+}
+
+}  // namespace
+
+void DrawLockScreen(uint8_t* framebuffer,
+                    int raw_width,
+                    int raw_height,
+                    int portrait_width,
+                    int portrait_height,
+                    const LockScreenState& state,
+                    const StatusBarState& status_state)
+{
+    if (framebuffer == nullptr) {
+        return;
+    }
+
+    DrawLockScreenStatusRow(framebuffer,
+                            raw_width,
+                            raw_height,
+                            portrait_width,
+                            portrait_height,
+                            status_state);
+
+    const std::string_view hour = SafeText(state.hour_text, "--");
+    const std::string_view minute = SafeText(state.minute_text, "--");
+    const std::string_view weekday = SafeText(state.weekday_text, "");
+    const std::string_view date = SafeText(state.date_text, "");
+
+    const auto time_role = design::TypographyRole::kDisplayXL;
+    const auto weekday_role = design::TypographyRole::kLabelMediumBlack;
+    const auto date_role = design::TypographyRole::kLabelMediumBlack;
+    const int time_line_height = design::lock_screen::kTimeLineHeight;
+    const int weekday_height = LineHeight(weekday_role);
+    const int date_height = LineHeight(date_role);
+    const int hour_width = MeasureText(time_role, hour);
+    const int minute_width = MeasureText(time_role, minute);
+    const int weekday_width = MeasureText(weekday_role, weekday);
+    const int date_width = MeasureText(date_role, date);
+    const int content_width = std::max({hour_width, minute_width, weekday_width, date_width});
+    const int content_height = (2 * time_line_height) + design::lock_screen::kTimeGap +
+                               design::lock_screen::kDateGap + weekday_height +
+                               design::lock_screen::kWeekdayDateGap + date_height;
+    const int content_x = std::max(0, (portrait_width - content_width) / 2);
+    const int content_y = std::max(design::lock_screen::kContentTop,
+                                   (portrait_height - content_height) / 2);
+
+    DrawText(
+        [&](int px, int py, uint8_t color) {
+            DrawPortraitPixel(framebuffer,
+                              raw_width,
+                              raw_height,
+                              portrait_width,
+                              portrait_height,
+                              px,
+                              py,
+                              ShouldDrawBlackForTone(px, py, color));
+        },
+        content_x + std::max(0, (content_width - hour_width) / 2),
+        content_y,
+        hour,
+        design::color::kBlack,
+        time_role);
+    DrawText(
+        [&](int px, int py, uint8_t color) {
+            DrawPortraitPixel(framebuffer,
+                              raw_width,
+                              raw_height,
+                              portrait_width,
+                              portrait_height,
+                              px,
+                              py,
+                              ShouldDrawBlackForTone(px, py, color));
+        },
+        content_x + std::max(0, (content_width - minute_width) / 2),
+        content_y + time_line_height + design::lock_screen::kTimeGap,
+        minute,
+        design::color::kBlack,
+        time_role);
+    DrawText(
+        [&](int px, int py, uint8_t color) {
+            DrawPortraitPixel(framebuffer,
+                              raw_width,
+                              raw_height,
+                              portrait_width,
+                              portrait_height,
+                              px,
+                              py,
+                              ShouldDrawBlackForTone(px, py, color));
+        },
+        content_x + std::max(0, (content_width - weekday_width) / 2),
+        content_y + (2 * time_line_height) + design::lock_screen::kTimeGap +
+            design::lock_screen::kDateGap,
+        weekday,
+        design::color::kBlack,
+        weekday_role);
+    DrawText(
+        [&](int px, int py, uint8_t color) {
+            DrawPortraitPixel(framebuffer,
+                              raw_width,
+                              raw_height,
+                              portrait_width,
+                              portrait_height,
+                              px,
+                              py,
+                              ShouldDrawBlackForTone(px, py, color));
+        },
+        content_x + std::max(0, (content_width - date_width) / 2),
+        content_y + (2 * time_line_height) + design::lock_screen::kTimeGap +
+            design::lock_screen::kDateGap + weekday_height +
+            design::lock_screen::kWeekdayDateGap,
+        date,
+        design::color::kGray2,
+        date_role);
 }
 
 }  // namespace epaper_ui

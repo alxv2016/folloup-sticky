@@ -34,7 +34,8 @@ void DrawStatusBar(uint8_t* framebuffer,
                    int raw_height,
                    int portrait_width,
                    int portrait_height,
-                   const StatusBarState& state);
+                   const StatusBarState& state,
+                   bool draw_background = true);
 
 }  // namespace epaper_ui
 
