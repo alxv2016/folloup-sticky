@@ -35,7 +35,6 @@ constexpr size_t kMaxFiles = 5;
 constexpr size_t kMaxLoggedEntries = 5;
 constexpr uint32_t kWorkerTaskStackWords = 6144;
 constexpr UBaseType_t kQueueDepth = 4;
-constexpr TickType_t kFormatCheckpointUiDelay = pdMS_TO_TICKS(50);
 
 constexpr const char* kDefaultDirectories[] = {
     "recordings",
@@ -156,21 +155,11 @@ void RefreshSnapshotStorageLocked(SdCard& card)
 
 void SetOperationLocked(Operation operation,
                         OperationPhase phase,
-                        esp_err_t error = ESP_OK,
-                        int progress_percent = 0)
+                        esp_err_t error = ESP_OK)
 {
     s_snapshot.operation = operation;
     s_snapshot.phase = phase;
-    s_snapshot.progress_percent = std::clamp(progress_percent, 0, 100);
     s_snapshot.last_error = error;
-}
-
-void UpdateFormatProgressLocked(int progress_percent)
-{
-    if (s_snapshot.operation == Operation::kFormatSd &&
-        s_snapshot.phase == OperationPhase::kStarted) {
-        s_snapshot.progress_percent = std::clamp(progress_percent, 0, 100);
-    }
 }
 
 void CaptureNotificationLocked(Event* event, EventHandler* handler, void** context)
@@ -186,37 +175,15 @@ void CaptureNotificationLocked(Event* event, EventHandler* handler, void** conte
     }
 }
 
-void NotifyFormatProgress(SdCard& card, int progress_percent)
-{
-    Event event = {};
-    EventHandler handler = nullptr;
-    void* context = nullptr;
-    {
-        std::lock_guard<std::mutex> card_lock(s_card_mutex);
-        std::lock_guard<std::mutex> state_lock(s_state_mutex);
-        UpdateFormatProgressLocked(progress_percent);
-        RefreshSnapshotStorageLocked(card);
-        CaptureNotificationLocked(&event, &handler, &context);
-    }
-    DispatchEvent(event, handler, context);
-}
-
 void LogFormatStep(const char* step, SdCard& card)
 {
     ESP_LOGI(kTag,
-             "Format step: %s inserted=%d mounted=%d mode=%s phase=%s progress=%d",
+             "Format step: %s inserted=%d mounted=%d mode=%s phase=%s",
              step != nullptr ? step : "<null>",
              card.IsCardInserted() ? 1 : 0,
              card.IsMounted() ? 1 : 0,
              ModeName(s_snapshot.mode),
-             OperationPhaseName(s_snapshot.phase),
-             s_snapshot.progress_percent);
-}
-
-void AllowUiCheckpoint(const char* step)
-{
-    ESP_LOGI(kTag, "Format step: allowing UI checkpoint after %s", step != nullptr ? step : "<null>");
-    vTaskDelay(kFormatCheckpointUiDelay);
+             OperationPhaseName(s_snapshot.phase));
 }
 
 bool EnsureDirectoryExists(const std::string& path)
@@ -387,10 +354,7 @@ void CompleteOperation(Operation operation,
         std::lock_guard<std::mutex> state_lock(s_state_mutex);
         s_snapshot.mode = mode;
         RefreshSnapshotStorageLocked(card);
-        SetOperationLocked(operation,
-                           phase,
-                           error,
-                           phase == OperationPhase::kSucceeded ? 100 : s_snapshot.progress_percent);
+        SetOperationLocked(operation, phase, error);
         event = BuildEventLocked();
         handler = s_event_handler;
         context = s_event_context;
@@ -439,9 +403,9 @@ void HandleFormatRequest()
         std::lock_guard<std::mutex> card_lock(s_card_mutex);
         std::lock_guard<std::mutex> state_lock(s_state_mutex);
         s_snapshot.mode = Mode::kFormatting;
-        SetOperationLocked(Operation::kFormatSd, OperationPhase::kStarted, ESP_OK, 10);
+        SetOperationLocked(Operation::kFormatSd, OperationPhase::kStarted, ESP_OK);
         RefreshSnapshotStorageLocked(card);
-        LogFormatStep("publish_started_10", card);
+        LogFormatStep("publish_started", card);
         CaptureNotificationLocked(&event, &handler, &context);
     }
     DispatchEvent(event, handler, context);
@@ -469,14 +433,6 @@ void HandleFormatRequest()
                  static_cast<long long>((esp_timer_get_time() - started_at_us) / 1000));
     }
     if (err == ESP_OK) {
-        NotifyFormatProgress(card, 25);
-        ESP_LOGI(kTag,
-                 "Format step: published progress=25 elapsed_ms=%lld",
-                 static_cast<long long>((esp_timer_get_time() - started_at_us) / 1000));
-        AllowUiCheckpoint("progress_25");
-    }
-
-    if (err == ESP_OK) {
         StorageBusGuard storage_bus;
         err = storage_bus.Acquire();
         if (err != ESP_OK) {
@@ -495,14 +451,6 @@ void HandleFormatRequest()
                      static_cast<long long>((esp_timer_get_time() - started_at_us) / 1000));
         }
     }
-    if (err == ESP_OK) {
-        NotifyFormatProgress(card, 80);
-        ESP_LOGI(kTag,
-                 "Format step: published progress=80 elapsed_ms=%lld",
-                 static_cast<long long>((esp_timer_get_time() - started_at_us) / 1000));
-        AllowUiCheckpoint("progress_80");
-    }
-
     if (err == ESP_OK) {
         StorageBusGuard storage_bus;
         err = storage_bus.Acquire();
@@ -525,14 +473,6 @@ void HandleFormatRequest()
                      static_cast<long long>((esp_timer_get_time() - started_at_us) / 1000));
         }
     }
-    if (err == ESP_OK) {
-        NotifyFormatProgress(card, 90);
-        ESP_LOGI(kTag,
-                 "Format step: published progress=90 elapsed_ms=%lld",
-                 static_cast<long long>((esp_timer_get_time() - started_at_us) / 1000));
-        AllowUiCheckpoint("progress_90");
-    }
-
     if (err == ESP_OK) {
         StorageBusGuard storage_bus;
         err = storage_bus.Acquire();
@@ -782,7 +722,7 @@ esp_err_t RequestFormatSdCard()
         }
         s_snapshot.usb_detected = ReadUsbDetected();
         s_snapshot.mode = Mode::kFormatting;
-        SetOperationLocked(Operation::kFormatSd, OperationPhase::kStarted, ESP_OK, 0);
+        SetOperationLocked(Operation::kFormatSd, OperationPhase::kStarted, ESP_OK);
         event = BuildEventLocked();
         handler = s_event_handler;
         context = s_event_context;

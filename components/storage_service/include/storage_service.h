@@ -33,7 +33,6 @@ struct Snapshot {
     Mode mode = Mode::kAppMounted;
     Operation operation = Operation::kNone;
     OperationPhase phase = OperationPhase::kIdle;
-    int progress_percent = 0;
     esp_err_t last_error = ESP_OK;
 };
 

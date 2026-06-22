@@ -585,8 +585,7 @@ void HandleStorageEvent(const storage_service::Event& event, void*)
         esp_err_t overlay_err = ESP_OK;
         switch (event.snapshot.phase) {
             case storage_service::OperationPhase::kStarted:
-                overlay_err = overlay_runtime::ShowStorageModalFormatting(
-                    event.snapshot.progress_percent);
+                overlay_err = overlay_runtime::ShowStorageModalFormatting();
                 break;
             case storage_service::OperationPhase::kSucceeded:
                 overlay_err = overlay_runtime::ShowStorageModalFormatSuccess();

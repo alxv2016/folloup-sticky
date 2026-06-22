@@ -362,8 +362,8 @@ The current app-runtime helpers under `main/` are:
   state into `epaper_ui::StatusBarState`
 - `footer_runtime`: project footer layout and future shared page focus into
   `epaper_ui::GlobalFooterState`
-- `overlay_runtime`: own retained shutdown/select/toast overlay state, hit
-  testing, and overlay presentation hooks
+- `overlay_runtime`: own retained shutdown/select/storage/toast overlay state,
+  hit testing, and overlay presentation hooks
 - `input_focus_runtime`: own overlay-first button routing for roving focus
   movement plus app-wide touch contact precedence
 - `page_interaction_runtime`: own the registration contract future page
@@ -991,6 +991,10 @@ Current scope:
   the source-app directory layout:
   `/recordings`, `/todos`, `/summaries`, `/files`, `/trash`,
   `/trash/recordings`, and `/trash/todos`
+- publish coarse format lifecycle state only: started, succeeded, or failed
+- avoid progress-checkpoint UI churn during format; the current product flow
+  shows a single "Formatting in progress. Please wait..." modal until the
+  operation completes with success or error
 - log mount status, total/free bytes, and a small root directory preview
 - write/read `/sdcard/SDPROBE.TXT` once as a bring-up probe
 
@@ -1008,6 +1012,13 @@ MicroSD shares SPI lines with the e-paper path:
 `storage_service` must call `sticky_board::EnsureSharedSpiBus()` before mounting
 the SD card. Shared SPI bus ownership belongs in `board`, not in `sd_card`,
 `epaper_panel`, `storage_service`, or `display_service`.
+
+During runtime SD format on Sticky, the storage path should minimize shared-SPI
+display activity. The current product policy is to show the formatting overlay
+once when format begins and then leave the SD worker undisturbed until the
+success or error modal is shown at the end. Do not reintroduce intermediate
+format-progress overlay refreshes unless a hardware-validated need outweighs
+the added bus contention risk.
 
 Hardware validation on Sticky showed an extra board-specific constraint: when an
 SD card is inserted, the card must be initialized on the shared SPI bus before

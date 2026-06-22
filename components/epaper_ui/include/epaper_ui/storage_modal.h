@@ -20,7 +20,6 @@ struct StorageModalState {
     bool visible = false;
     StorageModalKind kind = StorageModalKind::kNone;
     int selected_action_index = 0;
-    int progress_percent = 0;
 };
 
 UiRect StorageModalPanelBounds(int portrait_width,

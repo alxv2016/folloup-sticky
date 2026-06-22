@@ -2,13 +2,11 @@
 
 #include <algorithm>
 #include <array>
-#include <cstdio>
 #include <string_view>
 
 #include "design_tokens.h"
 #include "epaper_ui/button.h"
 #include "epaper_ui/font_renderer.h"
-#include "epaper_ui/progress_bar.h"
 #include "render_utils.h"
 
 namespace epaper_ui {
@@ -17,7 +15,6 @@ namespace {
 constexpr design::TypographyRole kTitleRole = design::TypographyRole::kHeadingH2;
 constexpr design::TypographyRole kBodyRole = design::TypographyRole::kBody;
 constexpr design::TypographyRole kButtonRole = design::TypographyRole::kLabelSmall;
-constexpr int kProgressTopGap = design::spacing::k12;
 
 std::string_view TitleForKind(StorageModalKind kind)
 {
@@ -45,11 +42,12 @@ std::string_view BodyForKind(StorageModalKind kind)
             return "No SD card is inserted. Insert an SD card to continue.";
         case StorageModalKind::kConfirmFormat:
             return "Formatting the SD card will erase everything on the card.";
+        case StorageModalKind::kFormatting:
+            return "Formatting in progress. Please wait...";
         case StorageModalKind::kFormatSuccess:
             return "The SD card was formatted successfully.";
         case StorageModalKind::kFormatError:
             return "There was an error and the SD card could not be formatted.";
-        case StorageModalKind::kFormatting:
         case StorageModalKind::kNone:
         default:
             return {};
@@ -160,20 +158,6 @@ int CardHeight(int portrait_width, const StorageModalState& state)
     const int inner_width =
         std::max(0, card_width - (2 * design::modal::kHorizontalPadding));
     const int title_height = LineHeight(kTitleRole);
-
-    if (state.kind == StorageModalKind::kFormatting) {
-        ProgressBarStyle progress_style = {};
-        progress_style.width = inner_width;
-        const ProgressBarState progress_state = {
-            .label_text = "Progress",
-            .status_text = "100%",
-            .progress_percent = 100,
-        };
-        const UiRect progress_bounds =
-            ProgressBarBounds(0, 0, progress_state, progress_style);
-        return design::modal::kTopPadding + title_height + kProgressTopGap +
-               progress_bounds.height + design::modal::kBottomPadding;
-    }
 
     int body_line_count = 0;
     (void)WrapLines(BodyForKind(state.kind), inner_width, &body_line_count);
@@ -370,32 +354,6 @@ void DrawStorageModal(uint8_t* framebuffer,
                        TitleForKind(state.kind),
                        kTitleRole,
                        design::color::kBlack);
-
-    if (state.kind == StorageModalKind::kFormatting) {
-        ProgressBarStyle progress_style = {};
-        progress_style.width = inner_width;
-        const int progress_y = title_y + LineHeight(kTitleRole) + kProgressTopGap;
-        char percent_buffer[16] = {};
-        std::snprintf(percent_buffer,
-                      sizeof(percent_buffer),
-                      "%d%%",
-                      std::clamp(state.progress_percent, 0, 100));
-        const ProgressBarState progress_state = {
-            .label_text = "Progress",
-            .status_text = percent_buffer,
-            .progress_percent = state.progress_percent,
-        };
-        DrawProgressBar(framebuffer,
-                        raw_width,
-                        raw_height,
-                        portrait_width,
-                        portrait_height,
-                        inner_x,
-                        progress_y,
-                        progress_state,
-                        progress_style);
-        return;
-    }
 
     int body_line_count = 0;
     const auto body_lines = WrapLines(BodyForKind(state.kind), inner_width, &body_line_count);

@@ -910,7 +910,6 @@ esp_err_t ShowStorageModalNoSdCard()
             .visible = true,
             .kind = epaper_ui::StorageModalKind::kNoSdCard,
             .selected_action_index = 0,
-            .progress_percent = 0,
         };
         if (s_storage_modal_state.kind != next_state.kind || !s_storage_modal_state.visible) {
             s_storage_modal_state = next_state;
@@ -951,7 +950,6 @@ esp_err_t ShowStorageModalConfirmFormat()
             .visible = true,
             .kind = epaper_ui::StorageModalKind::kConfirmFormat,
             .selected_action_index = 0,
-            .progress_percent = 0,
         };
         if (s_storage_modal_state.kind != next_state.kind || !s_storage_modal_state.visible ||
             s_storage_modal_state.selected_action_index != next_state.selected_action_index) {
@@ -977,7 +975,7 @@ esp_err_t ShowStorageModalConfirmFormat()
     return SyncOverlayState(true, refresh_policy);
 }
 
-esp_err_t ShowStorageModalFormatting(int progress_percent)
+esp_err_t ShowStorageModalFormatting()
 {
     bool changed = false;
     display_service::OverlayRefreshPolicy refresh_policy =
@@ -988,14 +986,11 @@ esp_err_t ShowStorageModalFormatting(int progress_percent)
             return ESP_ERR_INVALID_STATE;
         }
         const OverlayRefreshSnapshot before = CaptureOverlayRefreshSnapshotLocked();
-        const int clamped_progress = std::clamp(progress_percent, 0, 100);
         if (!s_storage_modal_state.visible ||
-            s_storage_modal_state.kind != epaper_ui::StorageModalKind::kFormatting ||
-            s_storage_modal_state.progress_percent != clamped_progress) {
+            s_storage_modal_state.kind != epaper_ui::StorageModalKind::kFormatting) {
             s_storage_modal_state.visible = true;
             s_storage_modal_state.kind = epaper_ui::StorageModalKind::kFormatting;
             s_storage_modal_state.selected_action_index = 0;
-            s_storage_modal_state.progress_percent = clamped_progress;
             s_storage_modal_focus.Configure(0);
             AdvanceOverlayInteractionGenerationLocked();
             refresh_policy =
@@ -1007,7 +1002,7 @@ esp_err_t ShowStorageModalFormatting(int progress_percent)
     if (!changed) {
         return ESP_OK;
     }
-    ESP_LOGI(kTag, "Storage modal shown: formatting progress=%d", progress_percent);
+    ESP_LOGI(kTag, "Storage modal shown: formatting");
     return SyncOverlayState(true, refresh_policy);
 }
 
@@ -1027,10 +1022,8 @@ esp_err_t ShowStorageModalFormatSuccess()
             .visible = true,
             .kind = epaper_ui::StorageModalKind::kFormatSuccess,
             .selected_action_index = 0,
-            .progress_percent = 100,
         };
-        if (s_storage_modal_state.kind != next_state.kind || !s_storage_modal_state.visible ||
-            s_storage_modal_state.progress_percent != next_state.progress_percent) {
+        if (s_storage_modal_state.kind != next_state.kind || !s_storage_modal_state.visible) {
             s_storage_modal_state = next_state;
             s_storage_modal_focus.Configure(1, 0);
             SyncStorageModalStateFromFocusLocked();
@@ -1069,7 +1062,6 @@ esp_err_t ShowStorageModalFormatError()
             .visible = true,
             .kind = epaper_ui::StorageModalKind::kFormatError,
             .selected_action_index = 0,
-            .progress_percent = 0,
         };
         if (s_storage_modal_state.kind != next_state.kind || !s_storage_modal_state.visible) {
             s_storage_modal_state = next_state;

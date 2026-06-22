@@ -23,7 +23,7 @@ esp_err_t ShowShutdownModal();
 esp_err_t DismissShutdownModal();
 esp_err_t ShowStorageModalNoSdCard();
 esp_err_t ShowStorageModalConfirmFormat();
-esp_err_t ShowStorageModalFormatting(int progress_percent);
+esp_err_t ShowStorageModalFormatting();
 esp_err_t ShowStorageModalFormatSuccess();
 esp_err_t ShowStorageModalFormatError();
 esp_err_t DismissStorageModal();

@@ -130,6 +130,14 @@ Current blockers:
 
 Plain USB power does not block auto sleep.
 
+During SD format, `storage_service::IsWriteBusy()` raises the `storage_write`
+blocker. That keeps the sleep state machine from entering display sleep or
+light sleep in the middle of the format operation. IMU motion polling still
+continues during that time, but it reads the LSM6DS3 over the separate sensor
+I2C bus and does not directly contend with the shared SPI bus used by MicroSD
+and the e-paper panel. Motion logs during formatting are therefore expected and
+are not, by themselves, evidence that the SD format path is being interrupted.
+
 ## Configuration
 
 The build-time settings live under `Folloup Settings`:
