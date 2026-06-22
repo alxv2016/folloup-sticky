@@ -16,9 +16,8 @@ std::mutex s_state_mutex;
 bool s_sleep_indicator_visible = false;
 bool s_shutdown_indicator_visible = false;
 
-epaper_ui::WifiStatus BuildWifiStatus()
+epaper_ui::WifiStatus BuildWifiStatus(const wifi_service::UiState& ui_state)
 {
-    const wifi_service::UiState ui_state = wifi_service::GetUiState();
     if (!ui_state.wifi_enabled) {
         return epaper_ui::WifiStatus::kDisabled;
     }
@@ -57,11 +56,11 @@ void SetShutdownIndicatorVisible(bool visible)
 epaper_ui::StatusBarState BuildState()
 {
     epaper_ui::StatusBarState state = {};
-    state.wifi = BuildWifiStatus();
+    const wifi_service::UiState wifi_state = wifi_service::GetUiState();
+    state.wifi = BuildWifiStatus(wifi_state);
     state.time_text = BuildTimeText();
     state.show_gemini_icon =
-        state.wifi == epaper_ui::WifiStatus::kConnected &&
-        gemini_service::GetSnapshot().runtime.ready;
+        wifi_state.connected && gemini_service::GetSnapshot().runtime.ready;
 
     power_service::Status power_status = {};
     if (power_service::ReadStatus(&power_status) == ESP_OK && power_status.battery.available) {

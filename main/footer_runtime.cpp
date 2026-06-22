@@ -16,6 +16,8 @@ std::mutex s_state_mutex;
 LayoutState s_layout_state = {};
 ProjectionState s_projection_state = {};
 int32_t s_interaction_generation = 1;
+ActivateHandler s_activate_handler = nullptr;
+void* s_activate_context = nullptr;
 
 const EmbeddedImageAsset* FooterIcon(FooterFocusItem item)
 {
@@ -34,6 +36,27 @@ const EmbeddedImageAsset* FooterIcon(FooterFocusItem item)
         case FooterFocusItem::kNone:
         default:
             return nullptr;
+    }
+}
+
+const char* FooterFocusItemName(FooterFocusItem item)
+{
+    switch (item) {
+        case FooterFocusItem::kHome:
+            return "home";
+        case FooterFocusItem::kSettings:
+            return "settings";
+        case FooterFocusItem::kWifi:
+            return "wifi";
+        case FooterFocusItem::kTime:
+            return "time";
+        case FooterFocusItem::kFolder:
+            return "folder";
+        case FooterFocusItem::kMic:
+            return "mic";
+        case FooterFocusItem::kNone:
+        default:
+            return "none";
     }
 }
 
@@ -140,6 +163,43 @@ bool LayoutStateEquals(const LayoutState& lhs, const LayoutState& rhs)
            lhs.show_mic == rhs.show_mic;
 }
 
+void LogFooterTouchProbe(const epaper_ui::GlobalFooterState& state,
+                         int x,
+                         int y,
+                         epaper_ui::GlobalFooterItemId hit_item,
+                         bool hit)
+{
+    const int portrait_width = display_service::PortraitWidth();
+    const int portrait_height = display_service::PortraitHeight();
+    const epaper_ui::UiRect footer_bounds =
+        epaper_ui::GlobalFooterBounds(portrait_width, portrait_height, state);
+    const epaper_ui::UiRect settings_bounds = epaper_ui::GlobalFooterItemBounds(
+        portrait_width, portrait_height, state, epaper_ui::GlobalFooterItemId::kSettings);
+    const epaper_ui::UiRect home_bounds = epaper_ui::GlobalFooterItemBounds(
+        portrait_width, portrait_height, state, epaper_ui::GlobalFooterItemId::kHome);
+
+    ESP_LOGI(kTag,
+             "Footer probe x=%d y=%d footer=[%d,%d %dx%d] settings_visible=%d settings=[%d,%d %dx%d] home_visible=%d home=[%d,%d %dx%d] hit=%d item=%d",
+             x,
+             y,
+             footer_bounds.x,
+             footer_bounds.y,
+             footer_bounds.width,
+             footer_bounds.height,
+             state.settings.visible ? 1 : 0,
+             settings_bounds.x,
+             settings_bounds.y,
+             settings_bounds.width,
+             settings_bounds.height,
+             state.home.visible ? 1 : 0,
+             home_bounds.x,
+             home_bounds.y,
+             home_bounds.width,
+             home_bounds.height,
+             hit ? 1 : 0,
+             static_cast<int>(hit_item));
+}
+
 void AdvanceInteractionGenerationLocked()
 {
     if (s_interaction_generation == INT32_MAX) {
@@ -150,6 +210,13 @@ void AdvanceInteractionGenerationLocked()
 }
 
 }  // namespace
+
+void SetActivateHandler(ActivateHandler handler, void* context)
+{
+    std::lock_guard<std::mutex> lock(s_state_mutex);
+    s_activate_handler = handler;
+    s_activate_context = context;
+}
 
 void SetLayoutState(const LayoutState& state)
 {
@@ -191,12 +258,14 @@ bool ResolveTouchTarget(int x, int y, app_interaction::InteractiveTarget* target
         generation = s_interaction_generation;
     }
     epaper_ui::GlobalFooterItemId item = epaper_ui::GlobalFooterItemId::kNone;
-    if (!epaper_ui::HitTestGlobalFooterItem(display_service::PortraitWidth(),
-                                            display_service::PortraitHeight(),
-                                            state,
-                                            x,
-                                            y,
-                                            &item)) {
+    const bool hit = epaper_ui::HitTestGlobalFooterItem(display_service::PortraitWidth(),
+                                                        display_service::PortraitHeight(),
+                                                        state,
+                                                        x,
+                                                        y,
+                                                        &item);
+    LogFooterTouchProbe(state, x, y, item, hit);
+    if (!hit) {
         return false;
     }
 
@@ -204,6 +273,8 @@ bool ResolveTouchTarget(int x, int y, app_interaction::InteractiveTarget* target
     if (focused_item == FooterFocusItem::kNone) {
         return false;
     }
+
+    ESP_LOGI(kTag, "Footer resolved touch item=%s", FooterFocusItemName(focused_item));
 
     if (target != nullptr) {
         *target = {
@@ -240,6 +311,7 @@ bool FocusTouchTarget(const app_interaction::InteractiveTarget& target)
             return false;
         }
         if (!IsItemVisible(s_layout_state, item)) {
+            ESP_LOGI(kTag, "Footer focus ignored for hidden item=%s", FooterFocusItemName(item));
             return false;
         }
         if (s_projection_state.focused_item != item) {
@@ -283,8 +355,22 @@ app_interaction::InputResult ActivateTouchTarget(const app_interaction::Interact
             return result;
         }
         if (!IsItemVisible(s_layout_state, item)) {
+            ESP_LOGI(kTag, "Footer activate ignored for hidden item=%s",
+                     FooterFocusItemName(item));
             return result;
         }
+    }
+
+    ActivateHandler handler = nullptr;
+    void* context = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(s_state_mutex);
+        handler = s_activate_handler;
+        context = s_activate_context;
+    }
+    if (handler != nullptr) {
+        ESP_LOGI(kTag, "Footer activate dispatch item=%s", FooterFocusItemName(item));
+        return handler(item, context);
     }
 
     result.consumed = true;

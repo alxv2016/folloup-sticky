@@ -10,6 +10,7 @@
 #include "design_tokens.h"
 #include "epaper_ui/font_renderer.h"
 #include "epaper_ui/lock_screen.h"
+#include "epaper_ui/settings_page.h"
 #include "epaper_ui/shutdown_modal.h"
 #include "epaper_ui/toast.h"
 #include "epaper_panel.h"
@@ -31,26 +32,24 @@ constexpr const char* kTag = "DisplayService";
 constexpr int kPortraitWidth = STICKY_EPD_HEIGHT;
 constexpr int kPortraitHeight = STICKY_EPD_WIDTH;
 constexpr int kSplashLogoGap = design::spacing::k16;
-constexpr int kDemoCardWidth = 360;
-constexpr int kDemoCardHeight = 220;
-constexpr int kDemoCardX = (kPortraitWidth - kDemoCardWidth) / 2;
-constexpr int kDemoCardY = (kPortraitHeight - kDemoCardHeight) / 2;
-constexpr int kDemoTextGap = design::spacing::k12;
+constexpr int kHomePlaceholderCardWidth = 360;
+constexpr int kHomePlaceholderCardHeight = 220;
+constexpr int kHomePlaceholderCardX = (kPortraitWidth - kHomePlaceholderCardWidth) / 2;
+constexpr int kHomePlaceholderCardY = (kPortraitHeight - kHomePlaceholderCardHeight) / 2;
+constexpr int kHomePlaceholderTextGap = design::spacing::k12;
 constexpr uint32_t kDisplayTaskStackWords = 4096;
-constexpr auto kDemoTitleRole = design::TypographyRole::kHeadingH2;
-constexpr auto kDemoValueRole = design::TypographyRole::kDisplay;
+constexpr auto kHomePlaceholderTitleRole = design::TypographyRole::kHeadingH2;
+constexpr auto kHomePlaceholderValueRole = design::TypographyRole::kDisplay;
 
 enum class DisplayCommandType {
-    kSelectSelection,
     kSetScreen,
     kRefreshOverlay,
     kRefreshCurrent,
 };
 
 struct DisplayCommand {
-    DisplayCommandType type = DisplayCommandType::kSelectSelection;
+    DisplayCommandType type = DisplayCommandType::kSetScreen;
     ScreenId screen = ScreenId::kHome;
-    DemoSelection selection = DemoSelection::kTop;
     RefreshMode refresh_mode = RefreshMode::kPartial;
     OverlayRefreshPolicy overlay_refresh_policy = OverlayRefreshPolicy::kRebuildUnderlay;
 };
@@ -62,9 +61,9 @@ std::mutex s_panel_mutex;
 bool s_display_sleeping = false;
 std::atomic<bool> s_refresh_in_progress = false;
 ScreenId s_current_screen = ScreenId::kHome;
-DemoSelection s_current_selection = DemoSelection::kTop;
 epaper_ui::StatusBarState s_status_bar_state = {};
 epaper_ui::GlobalFooterState s_global_footer_state = {};
+epaper_ui::SettingsPageState s_settings_page_state = {};
 epaper_ui::LockScreenState s_lock_screen_state = {};
 epaper_ui::ShutdownModalState s_shutdown_modal_state = {};
 epaper_ui::SelectModalState s_select_modal_state = {};
@@ -222,30 +221,34 @@ void DrawActionInRect(uint8_t* framebuffer,
                       std::string_view second,
                       bool selected)
 {
-    const int first_height = epaper_ui::LineHeight(kDemoTitleRole);
-    const int second_height = epaper_ui::LineHeight(kDemoValueRole);
-    const int block_height = first_height + second_height + kDemoTextGap;
-    const int first_x = x + (width - epaper_ui::MeasureText(kDemoTitleRole, first)) / 2;
-    const int second_x = x + (width - epaper_ui::MeasureText(kDemoValueRole, second)) / 2;
+    const int first_height = epaper_ui::LineHeight(kHomePlaceholderTitleRole);
+    const int second_height = epaper_ui::LineHeight(kHomePlaceholderValueRole);
+    const int block_height = first_height + second_height + kHomePlaceholderTextGap;
+    const int first_x =
+        x + (width - epaper_ui::MeasureText(kHomePlaceholderTitleRole, first)) / 2;
+    const int second_x =
+        x + (width - epaper_ui::MeasureText(kHomePlaceholderValueRole, second)) / 2;
     const int first_y = y + (height - block_height) / 2;
-    const int second_y = first_y + first_height + kDemoTextGap;
+    const int second_y = first_y + first_height + kHomePlaceholderTextGap;
     const bool text_black = !selected;
 
     FillPortraitRect(framebuffer, x, y, width, height, selected);
-    DrawTypographyText(framebuffer, first_x, first_y, first, kDemoTitleRole, text_black);
-    DrawTypographyText(framebuffer, second_x, second_y, second, kDemoValueRole, text_black);
+    DrawTypographyText(
+        framebuffer, first_x, first_y, first, kHomePlaceholderTitleRole, text_black);
+    DrawTypographyText(
+        framebuffer, second_x, second_y, second, kHomePlaceholderValueRole, text_black);
 }
 
-void DrawDemoFrame(uint8_t* framebuffer, DemoSelection selection)
+void DrawHomePlaceholder(uint8_t* framebuffer)
 {
     DrawActionInRect(framebuffer,
-                     kDemoCardX,
-                     kDemoCardY,
-                     kDemoCardWidth,
-                     kDemoCardHeight,
-                     "FORMAT",
-                     "SD",
-                     selection == DemoSelection::kTop);
+                     kHomePlaceholderCardX,
+                     kHomePlaceholderCardY,
+                     kHomePlaceholderCardWidth,
+                     kHomePlaceholderCardHeight,
+                     "HOME",
+                     "PLACEHOLDER",
+                     false);
 }
 
 void DrawSplashScreen(uint8_t* framebuffer)
@@ -306,11 +309,11 @@ void CaptureUnderlaySnapshot(const uint8_t* framebuffer)
     s_underlay_snapshot_valid = true;
 }
 
-void DrawHomeUnderlay(uint8_t* framebuffer, DemoSelection selection)
+void DrawHomeUnderlay(uint8_t* framebuffer)
 {
     EpaperPanel& panel = Panel();
     panel.Clear(true);
-    DrawDemoFrame(framebuffer, selection);
+    DrawHomePlaceholder(framebuffer);
     epaper_ui::DrawStatusBar(framebuffer,
                              STICKY_EPD_WIDTH,
                              STICKY_EPD_HEIGHT,
@@ -336,6 +339,20 @@ void DrawLockScreenUnderlay(uint8_t* framebuffer)
                               kPortraitHeight,
                               s_lock_screen_state,
                               s_status_bar_state);
+}
+
+void DrawSettingsUnderlay(uint8_t* framebuffer)
+{
+    EpaperPanel& panel = Panel();
+    panel.Clear(true);
+    epaper_ui::DrawSettingsPage(framebuffer,
+                                STICKY_EPD_WIDTH,
+                                STICKY_EPD_HEIGHT,
+                                kPortraitWidth,
+                                kPortraitHeight,
+                                s_settings_page_state,
+                                s_status_bar_state,
+                                s_global_footer_state);
 }
 
 void LogMetrics(const EpaperPanelMetrics& metrics)
@@ -373,10 +390,10 @@ const char* OverlayRefreshPolicyName(OverlayRefreshPolicy policy)
     }
 }
 
-esp_err_t ApplyDemoSelection(DemoSelection selection, bool full_refresh)
+esp_err_t ApplyHomeScreen(bool full_refresh)
 {
     EpaperPanel& panel = Panel();
-    DrawHomeUnderlay(panel.framebuffer(), selection);
+    DrawHomeUnderlay(panel.framebuffer());
     CaptureUnderlaySnapshot(panel.framebuffer());
     DrawCurrentOverlays(panel.framebuffer());
 
@@ -394,7 +411,6 @@ esp_err_t ApplyDemoSelection(DemoSelection selection, bool full_refresh)
 
     LogMetrics(panel.metrics());
     s_current_screen = ScreenId::kHome;
-    s_current_selection = selection;
     return ESP_OK;
 }
 
@@ -422,6 +438,30 @@ esp_err_t ApplyLockScreen(bool full_refresh)
     return ESP_OK;
 }
 
+esp_err_t ApplySettings(bool full_refresh)
+{
+    EpaperPanel& panel = Panel();
+    DrawSettingsUnderlay(panel.framebuffer());
+    CaptureUnderlaySnapshot(panel.framebuffer());
+    DrawCurrentOverlays(panel.framebuffer());
+
+    DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
+    if (bus_guard.err() != ESP_OK) {
+        return bus_guard.err();
+    }
+
+    RefreshBusyGuard refresh_busy;
+    const esp_err_t err = full_refresh ? panel.RefreshFullBase()
+                                       : panel.RefreshPartialFullScreen();
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    LogMetrics(panel.metrics());
+    s_current_screen = ScreenId::kSettings;
+    return ESP_OK;
+}
+
 esp_err_t ApplyStartupSplash()
 {
     EpaperPanel& panel = Panel();
@@ -443,14 +483,17 @@ esp_err_t ApplyStartupSplash()
     return ESP_OK;
 }
 
-esp_err_t RefreshCurrentSelectionLocked(bool full_refresh)
+esp_err_t RefreshCurrentScreenLocked(bool full_refresh)
 {
     switch (s_current_screen) {
+        case ScreenId::kHome:
+            return ApplyHomeScreen(full_refresh);
+        case ScreenId::kSettings:
+            return ApplySettings(full_refresh);
         case ScreenId::kLockScreen:
             return ApplyLockScreen(full_refresh);
-        case ScreenId::kHome:
         default:
-            return ApplyDemoSelection(s_current_selection, full_refresh);
+            return ApplyHomeScreen(full_refresh);
     }
 }
 
@@ -461,7 +504,7 @@ esp_err_t RefreshOverlayStateLocked(OverlayRefreshPolicy policy)
                  "Overlay refresh path: policy=%s snapshot_valid=%d",
                  OverlayRefreshPolicyName(policy),
                  s_underlay_snapshot_valid ? 1 : 0);
-        return RefreshCurrentSelectionLocked(false);
+        return RefreshCurrentScreenLocked(false);
     }
 
     EpaperPanel& panel = Panel();
@@ -504,8 +547,8 @@ esp_err_t SleepPanelLocked(const char* reason)
 void DisplayTask(void*)
 {
     DisplayCommand command = {};
-    command.type = DisplayCommandType::kSelectSelection;
-    command.selection = DemoSelection::kTop;
+    command.type = DisplayCommandType::kSetScreen;
+    command.screen = ScreenId::kHome;
     command.refresh_mode = RefreshMode::kPartial;
     while (true) {
         if (xQueueReceive(s_command_queue, &command, portMAX_DELAY) != pdTRUE) {
@@ -518,10 +561,7 @@ void DisplayTask(void*)
                  RefreshModeName(command.refresh_mode));
         std::lock_guard<std::mutex> lock(s_panel_mutex);
         if (s_display_sleeping) {
-            if (command.type == DisplayCommandType::kSelectSelection) {
-                s_current_screen = ScreenId::kHome;
-                s_current_selection = command.selection;
-            } else if (command.type == DisplayCommandType::kSetScreen) {
+            if (command.type == DisplayCommandType::kSetScreen) {
                 s_current_screen = command.screen;
             }
             ESP_LOGI(kTag, "Display command suppressed while display sleeping");
@@ -529,18 +569,18 @@ void DisplayTask(void*)
         }
 
         esp_err_t err = ESP_OK;
-        if (command.type == DisplayCommandType::kSelectSelection) {
-            err = ApplyDemoSelection(command.selection,
-                                     command.refresh_mode == RefreshMode::kFull);
-        } else if (command.type == DisplayCommandType::kSetScreen) {
-            err = command.screen == ScreenId::kLockScreen
-                      ? ApplyLockScreen(command.refresh_mode == RefreshMode::kFull)
-                      : ApplyDemoSelection(s_current_selection,
-                                           command.refresh_mode == RefreshMode::kFull);
+        if (command.type == DisplayCommandType::kSetScreen) {
+            if (command.screen == ScreenId::kLockScreen) {
+                err = ApplyLockScreen(command.refresh_mode == RefreshMode::kFull);
+            } else if (command.screen == ScreenId::kSettings) {
+                err = ApplySettings(command.refresh_mode == RefreshMode::kFull);
+            } else {
+                err = ApplyHomeScreen(command.refresh_mode == RefreshMode::kFull);
+            }
         } else if (command.type == DisplayCommandType::kRefreshOverlay) {
             err = RefreshOverlayStateLocked(command.overlay_refresh_policy);
         } else {
-            err = RefreshCurrentSelectionLocked(command.refresh_mode == RefreshMode::kFull);
+            err = RefreshCurrentScreenLocked(command.refresh_mode == RefreshMode::kFull);
         }
         if (err != ESP_OK) {
             ESP_LOGW(kTag, "Display refresh failed (mode=%s): %s",
@@ -651,6 +691,17 @@ esp_err_t SetGlobalFooterState(const epaper_ui::GlobalFooterState& state)
     return ESP_OK;
 }
 
+esp_err_t SetSettingsPageState(const epaper_ui::SettingsPageState& state)
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    std::lock_guard<std::mutex> lock(s_panel_mutex);
+    s_settings_page_state = state;
+    return ESP_OK;
+}
+
 esp_err_t SetLockScreenState(const epaper_ui::LockScreenState& state)
 {
     if (!s_initialized) {
@@ -704,21 +755,6 @@ esp_err_t SetCurrentScreen(ScreenId screen, RefreshMode refresh_mode)
     DisplayCommand command = {};
     command.type = DisplayCommandType::kSetScreen;
     command.screen = screen;
-    command.selection = s_current_selection;
-    command.refresh_mode = refresh_mode;
-    return xQueueOverwrite(s_command_queue, &command) == pdPASS ? ESP_OK : ESP_FAIL;
-}
-
-esp_err_t SelectDemoSelection(DemoSelection selection, RefreshMode refresh_mode)
-{
-    if (!s_initialized || s_command_queue == nullptr) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    DisplayCommand command = {};
-    command.type = DisplayCommandType::kSelectSelection;
-    command.screen = ScreenId::kHome;
-    command.selection = selection;
     command.refresh_mode = refresh_mode;
     return xQueueOverwrite(s_command_queue, &command) == pdPASS ? ESP_OK : ESP_FAIL;
 }
@@ -732,7 +768,6 @@ esp_err_t RequestOverlayRefresh(OverlayRefreshPolicy policy)
     DisplayCommand command = {};
     command.type = DisplayCommandType::kRefreshOverlay;
     command.screen = s_current_screen;
-    command.selection = s_current_selection;
     command.overlay_refresh_policy = policy;
     return xQueueOverwrite(s_command_queue, &command) == pdPASS ? ESP_OK : ESP_FAIL;
 }
@@ -746,7 +781,6 @@ esp_err_t RequestRefreshCurrentScreen(RefreshMode refresh_mode)
     DisplayCommand command = {};
     command.type = DisplayCommandType::kRefreshCurrent;
     command.screen = s_current_screen;
-    command.selection = s_current_selection;
     command.refresh_mode = refresh_mode;
     return xQueueOverwrite(s_command_queue, &command) == pdPASS ? ESP_OK : ESP_FAIL;
 }
@@ -762,7 +796,7 @@ esp_err_t RefreshCurrentScreen(RefreshMode refresh_mode)
         return ESP_OK;
     }
 
-    return RefreshCurrentSelectionLocked(refresh_mode == RefreshMode::kFull);
+    return RefreshCurrentScreenLocked(refresh_mode == RefreshMode::kFull);
 }
 
 esp_err_t EnterDisplaySleep()
@@ -806,7 +840,7 @@ esp_err_t WakeDisplay()
         return ESP_OK;
     }
 
-    ESP_RETURN_ON_ERROR(RefreshCurrentSelectionLocked(true),
+    ESP_RETURN_ON_ERROR(RefreshCurrentScreenLocked(true),
                         kTag,
                         "display wake refresh failed");
     s_display_sleeping = false;
@@ -821,7 +855,7 @@ esp_err_t RecoverAfterLightSleep()
     }
 
     std::lock_guard<std::mutex> lock(s_panel_mutex);
-    ESP_RETURN_ON_ERROR(RefreshCurrentSelectionLocked(true),
+    ESP_RETURN_ON_ERROR(RefreshCurrentScreenLocked(true),
                         kTag,
                         "display light-sleep recovery refresh failed");
     s_display_sleeping = false;

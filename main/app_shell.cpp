@@ -2,7 +2,6 @@
 
 #include <atomic>
 #include <cstdint>
-#include <cstring>
 #include <mutex>
 #include <string>
 
@@ -25,11 +24,13 @@
 #include "input_focus_runtime.h"
 #include "lock_screen_runtime.h"
 #include "overlay_runtime.h"
+#include "page_interaction_runtime.h"
 #include "power_service.h"
 #include "project_assets.h"
 #include "recording_session_service.h"
 #include "recording_service.h"
 #include "sdkconfig.h"
+#include "settings_page_runtime.h"
 #include "status_bar_runtime.h"
 #include "storage_service.h"
 #include "timezone_service.h"
@@ -65,29 +66,188 @@ void PlayFeedback(feedback_service::FeedbackEvent event)
     (void)feedback_service::Play(event);
 }
 
-void RequestDemoSelection(display_service::DemoSelection selection,
-                          display_service::RefreshMode refresh_mode,
-                          const char* source)
+void SyncStatusBarState(const char* source)
 {
-    const bool startup_complete = s_startup_complete.load(std::memory_order_relaxed);
-    const bool startup_handoff = source != nullptr &&
-                                 std::strcmp(source, "startup_complete") == 0;
-    if (!startup_complete && !startup_handoff) {
-        return;
-    }
-
     const esp_err_t status_bar_err = status_bar_runtime::UpdateDisplayState();
     if (status_bar_err != ESP_OK && status_bar_err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(kTag, "Status bar update before display refresh from %s failed: %s",
                  source, esp_err_to_name(status_bar_err));
     }
+}
 
-    const esp_err_t err = display_service::SelectDemoSelection(selection, refresh_mode);
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        ESP_LOGW(kTag, "Display demo selection from %s failed: %s",
-                 source, esp_err_to_name(err));
+bool IsSettingsScreenActive()
+{
+    return display_service::GetCurrentScreen() == display_service::ScreenId::kSettings;
+}
+
+footer_runtime::LayoutState FooterLayoutForScreen(display_service::ScreenId screen)
+{
+    footer_runtime::LayoutState layout = {};
+    layout.visible = true;
+    layout.show_settings = true;
+    layout.show_home = screen == display_service::ScreenId::kSettings;
+    layout.show_mic = true;
+    return layout;
+}
+
+footer_runtime::ProjectionState FooterProjectionForScreen(display_service::ScreenId)
+{
+    footer_runtime::ProjectionState projection = {};
+    return projection;
+}
+
+void ConfigurePageInteractionForScreen(display_service::ScreenId screen)
+{
+    if (screen == display_service::ScreenId::kSettings) {
+        page_interaction_runtime::RegisterTouchProvider(
+            settings_page_runtime::BuildTouchProvider());
         return;
     }
+
+    page_interaction_runtime::ClearTouchProvider();
+}
+
+esp_err_t SyncSettingsPageState(bool request_refresh_if_active)
+{
+    const bool startup_complete = s_startup_complete.load(std::memory_order_relaxed);
+    const bool active = startup_complete && IsSettingsScreenActive();
+    const esp_err_t err =
+        request_refresh_if_active && active
+            ? settings_page_runtime::UpdateDisplayStateAndRequestRefresh(
+                  display_service::RefreshMode::kPartial)
+            : settings_page_runtime::UpdateDisplayState();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Settings page state sync failed: %s", esp_err_to_name(err));
+    }
+    return err;
+}
+
+esp_err_t ShowHomeScreen(display_service::RefreshMode refresh_mode)
+{
+    SyncStatusBarState("show_home_screen");
+    ConfigurePageInteractionForScreen(display_service::ScreenId::kHome);
+    footer_runtime::SetLayoutState(FooterLayoutForScreen(display_service::ScreenId::kHome));
+    footer_runtime::SetProjectionState(FooterProjectionForScreen(display_service::ScreenId::kHome));
+    const esp_err_t footer_err = footer_runtime::UpdateDisplayState();
+    if (footer_err != ESP_OK && footer_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Footer sync before home screen failed: %s", esp_err_to_name(footer_err));
+    }
+    return display_service::SetCurrentScreen(display_service::ScreenId::kHome, refresh_mode);
+}
+
+esp_err_t ShowSettingsScreen(display_service::RefreshMode refresh_mode)
+{
+    SyncStatusBarState("show_settings_screen");
+    settings_page_runtime::ResetFocus();
+    ConfigurePageInteractionForScreen(display_service::ScreenId::kSettings);
+    footer_runtime::SetLayoutState(FooterLayoutForScreen(display_service::ScreenId::kSettings));
+    footer_runtime::SetProjectionState(settings_page_runtime::BuildFooterProjectionState());
+    const esp_err_t footer_err = footer_runtime::UpdateDisplayState();
+    if (footer_err != ESP_OK && footer_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Footer sync before settings screen failed: %s",
+                 esp_err_to_name(footer_err));
+    }
+    const esp_err_t settings_err = settings_page_runtime::UpdateDisplayState();
+    if (settings_err != ESP_OK && settings_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Settings page sync before show failed: %s",
+                 esp_err_to_name(settings_err));
+    }
+    return display_service::SetCurrentScreen(display_service::ScreenId::kSettings,
+                                             refresh_mode);
+}
+
+app_interaction::InputResult HandleFooterActivate(footer_runtime::FooterFocusItem item, void*)
+{
+    app_interaction::InputResult result = {};
+    result.consumed = true;
+
+    ESP_LOGI(kTag, "Footer activate: item=%d", static_cast<int>(item));
+
+    esp_err_t err = ESP_OK;
+    switch (item) {
+        case footer_runtime::FooterFocusItem::kHome:
+            err = ShowHomeScreen(display_service::RefreshMode::kFull);
+            break;
+        case footer_runtime::FooterFocusItem::kSettings:
+            err = ShowSettingsScreen(display_service::RefreshMode::kFull);
+            break;
+        case footer_runtime::FooterFocusItem::kWifi:
+        case footer_runtime::FooterFocusItem::kTime:
+        case footer_runtime::FooterFocusItem::kFolder:
+        case footer_runtime::FooterFocusItem::kMic:
+        case footer_runtime::FooterFocusItem::kNone:
+        default:
+            return result;
+    }
+
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Footer activation failed for item=%d: %s",
+                 static_cast<int>(item), esp_err_to_name(err));
+    }
+    return result;
+}
+
+bool HandleSettingsScreenButtonEvent(const button_service::ButtonEventInfo& event)
+{
+    if (!IsSettingsScreenActive()) {
+        return false;
+    }
+
+    switch (event.event) {
+        case button_service::ButtonEvent::kSingleClick:
+            if (event.button == button_service::ButtonId::kUp ||
+                event.button == button_service::ButtonId::kDown) {
+                const int delta =
+                    event.button == button_service::ButtonId::kUp ? -1 : 1;
+                if (settings_page_runtime::MoveFocus(delta)) {
+                    PlayFeedback(feedback_service::FeedbackEvent::kButtonClick);
+                }
+                return true;
+            }
+            if (event.button == button_service::ButtonId::kPowerOk) {
+                const settings_page_runtime::ActivationResult activation =
+                    settings_page_runtime::ActivateFocusedItem();
+                if (!activation.handled) {
+                    return true;
+                }
+                if (activation.play_feedback) {
+                    PlayFeedback(activation.feedback_event);
+                }
+                if (activation.footer_item != footer_runtime::FooterFocusItem::kNone) {
+                    (void)HandleFooterActivate(activation.footer_item, nullptr);
+                }
+                return true;
+            }
+            break;
+        case button_service::ButtonEvent::kDoubleClick:
+            if (event.button == button_service::ButtonId::kDown) {
+                const settings_page_runtime::ActivationResult activation =
+                    settings_page_runtime::ActivateFocusedItem();
+                if (!activation.handled) {
+                    return true;
+                }
+                if (activation.play_feedback) {
+                    PlayFeedback(activation.feedback_event);
+                }
+                if (activation.footer_item != footer_runtime::FooterFocusItem::kNone) {
+                    (void)HandleFooterActivate(activation.footer_item, nullptr);
+                }
+                return true;
+            }
+            break;
+        case button_service::ButtonEvent::kPressDown:
+        case button_service::ButtonEvent::kPressUp:
+        case button_service::ButtonEvent::kLongPressStart:
+        case button_service::ButtonEvent::kLongPressUp:
+            if (event.button == button_service::ButtonId::kPowerOk) {
+                return true;
+            }
+            break;
+        default:
+            break;
+    }
+
+    return false;
 }
 
 void ConfirmPendingOtaImage()
@@ -340,6 +500,8 @@ void HandleStorageEvent(const storage_service::Event& event, void*)
              storage_service::OperationName(event.snapshot.operation),
              storage_service::OperationPhaseName(event.snapshot.phase),
              esp_err_to_name(event.snapshot.last_error));
+
+    (void)SyncSettingsPageState(true);
 }
 
 void HandleTimezoneEvent(const timezone_service::Event& event, void*)
@@ -445,6 +607,8 @@ void HandleWifiEvent(const wifi_service::Event& event, void*)
         ESP_LOGW(kTag, "Status bar update after Wi-Fi event failed: %s",
                  esp_err_to_name(status_bar_err));
     }
+
+    (void)SyncSettingsPageState(true);
 }
 
 void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
@@ -534,6 +698,10 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
         return;
     }
 
+    if (HandleSettingsScreenButtonEvent(event)) {
+        return;
+    }
+
     if (event.button == button_service::ButtonId::kPowerOk) {
         const recording_session_service::Context recording_context =
             BuildRecordingSessionContext();
@@ -591,6 +759,16 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
                     PlayFeedback(was_active ? feedback_service::FeedbackEvent::kUnlock
                                             : feedback_service::FeedbackEvent::kLock);
                 }
+            } else if (event.button == button_service::ButtonId::kDown) {
+                if (!lock_screen_runtime::IsActive()) {
+                    const esp_err_t err = ShowSettingsScreen(display_service::RefreshMode::kFull);
+                    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+                        ESP_LOGW(kTag, "DOWN double-click settings navigation failed: %s",
+                                 esp_err_to_name(err));
+                    } else {
+                        PlayFeedback(feedback_service::FeedbackEvent::kButtonDoubleClick);
+                    }
+                }
             } else if (event.button != button_service::ButtonId::kDown) {
                 PlayFeedback(feedback_service::FeedbackEvent::kButtonDoubleClick);
             }
@@ -608,10 +786,20 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
 
 void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
 {
-    ESP_LOGD(kTag,
-             "Touch intent: phase=%s count=%u",
-             TouchPhaseName(event.phase),
-             static_cast<unsigned>(event.count));
+    if (event.count > 0) {
+        ESP_LOGI(kTag,
+                 "Touch intent: phase=%s count=%u x=%u y=%u size=%u id=%u",
+                 TouchPhaseName(event.phase),
+                 static_cast<unsigned>(event.count),
+                 static_cast<unsigned>(event.points[0].x),
+                 static_cast<unsigned>(event.points[0].y),
+                 static_cast<unsigned>(event.points[0].size),
+                 static_cast<unsigned>(event.points[0].id));
+    } else {
+        ESP_LOGI(kTag, "Touch intent: phase=%s count=%u",
+                 TouchPhaseName(event.phase),
+                 static_cast<unsigned>(event.count));
+    }
     if (!s_startup_complete.load(std::memory_order_relaxed)) {
         return;
     }
@@ -629,6 +817,9 @@ void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
         xTaskNotifyGive(s_shutdown_task);
     }
     if (touch_result.consumed) {
+        if (IsSettingsScreenActive()) {
+            (void)settings_page_runtime::SyncFocusFromFooterProjection();
+        }
         return;
     }
 
@@ -640,13 +831,6 @@ void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
         PlayFeedback(feedback_service::FeedbackEvent::kTouchContact);
     }
 
-    for (uint8_t i = 0; i < event.count; ++i) {
-        ESP_LOGD(kTag, "Touch intent point[%u]: x=%u y=%u size=%u id=%u",
-                 static_cast<unsigned>(i), static_cast<unsigned>(event.points[i].x),
-                 static_cast<unsigned>(event.points[i].y),
-                 static_cast<unsigned>(event.points[i].size),
-                 static_cast<unsigned>(event.points[i].id));
-    }
 }
 
 void ShutdownTask(void*)
@@ -825,14 +1009,19 @@ void InitRecordingSessionService()
 
 void InitFooterRuntime()
 {
-    footer_runtime::LayoutState layout_state = {};
-    layout_state.visible = true;
-    layout_state.show_mic = true;
-    footer_runtime::SetLayoutState(layout_state);
-    footer_runtime::SetProjectionState({});
+    footer_runtime::SetActivateHandler(HandleFooterActivate, nullptr);
+    ConfigurePageInteractionForScreen(display_service::ScreenId::kHome);
+    footer_runtime::SetLayoutState(FooterLayoutForScreen(display_service::ScreenId::kHome));
+    footer_runtime::SetProjectionState(FooterProjectionForScreen(display_service::ScreenId::kHome));
     const esp_err_t err = footer_runtime::UpdateDisplayState();
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(kTag, "Footer runtime init failed: %s", esp_err_to_name(err));
+    }
+
+    const esp_err_t settings_err = settings_page_runtime::UpdateDisplayState();
+    if (settings_err != ESP_OK && settings_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Settings page runtime init failed: %s",
+                 esp_err_to_name(settings_err));
     }
 }
 
@@ -926,9 +1115,10 @@ void Run()
     if (footer_err != ESP_OK && footer_err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(kTag, "Initial footer update failed: %s", esp_err_to_name(footer_err));
     }
-    RequestDemoSelection(display_service::DemoSelection::kTop,
-                         display_service::RefreshMode::kFull,
-                         "startup_complete");
+    const esp_err_t home_err = ShowHomeScreen(display_service::RefreshMode::kFull);
+    if (home_err != ESP_OK && home_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Initial home screen show failed: %s", esp_err_to_name(home_err));
+    }
     s_startup_complete.store(true, std::memory_order_relaxed);
 }
 

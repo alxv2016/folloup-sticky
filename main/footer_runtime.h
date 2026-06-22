@@ -38,6 +38,9 @@ struct ProjectionState {
     FooterFocusItem focused_item = FooterFocusItem::kNone;
 };
 
+using ActivateHandler = app_interaction::InputResult (*)(FooterFocusItem item, void* context);
+
+void SetActivateHandler(ActivateHandler handler, void* context);
 void SetLayoutState(const LayoutState& state);
 void SetProjectionState(const ProjectionState& state);
 LayoutState GetLayoutState();

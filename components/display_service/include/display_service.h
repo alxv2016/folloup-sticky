@@ -3,6 +3,7 @@
 
 #include "epaper_ui/lock_screen.h"
 #include "epaper_ui/global_footer.h"
+#include "epaper_ui/settings_page.h"
 #include "epaper_ui/shutdown_modal.h"
 #include "epaper_ui/select_modal.h"
 #include "epaper_ui/status_bar.h"
@@ -13,11 +14,8 @@ namespace display_service {
 
 enum class ScreenId {
     kHome,
+    kSettings,
     kLockScreen,
-};
-
-enum class DemoSelection {
-    kTop,
 };
 
 enum class RefreshMode {
@@ -37,14 +35,13 @@ int PortraitHeight();
 ScreenId GetCurrentScreen();
 esp_err_t SetStatusBarState(const epaper_ui::StatusBarState& state);
 esp_err_t SetGlobalFooterState(const epaper_ui::GlobalFooterState& state);
+esp_err_t SetSettingsPageState(const epaper_ui::SettingsPageState& state);
 esp_err_t SetLockScreenState(const epaper_ui::LockScreenState& state);
 esp_err_t SetShutdownModalState(const epaper_ui::ShutdownModalState& state);
 esp_err_t SetSelectModalState(const epaper_ui::SelectModalState& state);
 esp_err_t SetToastState(const epaper_ui::ToastState& state);
 esp_err_t SetCurrentScreen(ScreenId screen,
                            RefreshMode refresh_mode = RefreshMode::kPartial);
-esp_err_t SelectDemoSelection(DemoSelection selection,
-                              RefreshMode refresh_mode = RefreshMode::kPartial);
 esp_err_t RequestOverlayRefresh(
     OverlayRefreshPolicy policy = OverlayRefreshPolicy::kRebuildUnderlay);
 esp_err_t RequestRefreshCurrentScreen(RefreshMode refresh_mode = RefreshMode::kPartial);

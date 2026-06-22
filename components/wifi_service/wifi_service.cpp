@@ -47,6 +47,7 @@ enum class TransitionRequest : uint8_t {
     kStart,
     kStartStation,
     kEnterAccessPoint,
+    kDisableAccessPoint,
     kDisconnectStation,
     kStopWifi,
 };
@@ -217,6 +218,39 @@ std::string DisconnectReasonToString(uint8_t reason)
     char detail[24] = {};
     std::snprintf(detail, sizeof(detail), "REASON %d", reason);
     return detail;
+}
+
+void ConfigureAccessPointConfig(const std::string& ap_ssid, wifi_config_t* config)
+{
+    if (config == nullptr) {
+        return;
+    }
+
+    *config = {};
+    strlcpy(reinterpret_cast<char*>(config->ap.ssid), ap_ssid.c_str(), sizeof(config->ap.ssid));
+    config->ap.ssid_len = ap_ssid.size();
+    config->ap.channel = 1;
+    config->ap.max_connection = 4;
+    config->ap.authmode = WIFI_AUTH_OPEN;
+    config->ap.pmf_cfg.required = false;
+}
+
+void ConfigureStationConfig(const Credentials& credentials, wifi_config_t* config)
+{
+    if (config == nullptr) {
+        return;
+    }
+
+    *config = {};
+    strlcpy(reinterpret_cast<char*>(config->sta.ssid), credentials.ssid.c_str(),
+            sizeof(config->sta.ssid));
+    strlcpy(reinterpret_cast<char*>(config->sta.password), credentials.password.c_str(),
+            sizeof(config->sta.password));
+    config->sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+    config->sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+    config->sta.failure_retry_cnt = 0;
+    config->sta.pmf_cfg.capable = true;
+    config->sta.pmf_cfg.required = false;
 }
 
 bool LoadString(nvs_handle_t handle, const char* key, std::string* out)
@@ -719,6 +753,7 @@ void StartConfigPortal()
 
 void HandleWifiEvent(int32_t event_id, void* event_data);
 void HandleIpEvent(int32_t event_id, void* event_data);
+void StartStationAttempt(bool allow_ap_fallback);
 void TransitionWorker(void*);
 
 void OnWifiEvent(void* arg, esp_event_base_t base, int32_t event_id, void* event_data)
@@ -743,7 +778,6 @@ void OnWifiConnectTimeout(void* arg)
         s_connect_timer_active = false;
         s_reconnecting = false;
         s_connected = false;
-        s_access_point_mode = false;
         s_ip_address.clear();
         s_rssi = 0;
     }
@@ -830,11 +864,22 @@ void EnterAccessPointModeNow()
 {
     InitializeStack();
     UpdateAccessPointIdentity();
-    StopConfigPortal();
     CheckOrAbort(esp_timer_stop(s_connect_timer), "esp_timer_stop");
 
     if (!GetUiState().wifi_enabled) {
         StopWifiNow();
+        return;
+    }
+
+    ReloadSavedCredentials();
+
+    Credentials credentials;
+    {
+        std::lock_guard<std::mutex> lock(s_state_mutex);
+        credentials = ResolveStationCredentialsLocked();
+    }
+    if (credentials.valid()) {
+        StartStationAttempt(false);
         return;
     }
 
@@ -853,12 +898,7 @@ void EnterAccessPointModeNow()
     }
 
     wifi_config_t config = {};
-    strlcpy(reinterpret_cast<char*>(config.ap.ssid), ap_ssid.c_str(), sizeof(config.ap.ssid));
-    config.ap.ssid_len = ap_ssid.size();
-    config.ap.channel = 1;
-    config.ap.max_connection = 4;
-    config.ap.authmode = WIFI_AUTH_OPEN;
-    config.ap.pmf_cfg.required = false;
+    ConfigureAccessPointConfig(ap_ssid, &config);
 
     esp_err_t err = esp_wifi_stop();
     if (err != ESP_OK && err != ESP_ERR_WIFI_NOT_INIT && err != ESP_ERR_WIFI_NOT_STARTED) {
@@ -878,7 +918,7 @@ void EnterAccessPointModeNow()
     Notify(State::kAccessPointMode, GetUiState().ap_ssid);
 }
 
-void StartStationAttempt()
+void StartStationAttempt(bool allow_ap_fallback)
 {
     InitializeStack();
     ReloadSavedCredentials();
@@ -889,17 +929,68 @@ void StartStationAttempt()
     }
 
     Credentials credentials;
+    bool access_point_mode = false;
+    std::string ap_ssid;
     {
         std::lock_guard<std::mutex> lock(s_state_mutex);
         credentials = ResolveStationCredentialsLocked();
+        access_point_mode = s_access_point_mode;
+        ap_ssid = s_ap_ssid;
     }
     if (!credentials.valid()) {
-        ESP_LOGI(kTag, "No station credentials; entering AP setup mode");
-        EnterAccessPointModeNow();
+        if (allow_ap_fallback) {
+            ESP_LOGI(kTag, "No station credentials; entering AP setup mode");
+            EnterAccessPointModeNow();
+            return;
+        }
+
+        if (!access_point_mode) {
+            StopConfigPortal();
+        }
+        CheckOrAbort(esp_timer_stop(s_connect_timer), "esp_timer_stop");
+        {
+            std::lock_guard<std::mutex> lock(s_state_mutex);
+            s_suppress_disconnect_event = true;
+            s_connect_timer_active = false;
+            s_reconnecting = false;
+            s_connected = false;
+            s_current_ssid.clear();
+            s_ip_address.clear();
+            s_rssi = 0;
+        }
+
+        esp_err_t err = esp_wifi_stop();
+        if (err != ESP_OK && err != ESP_ERR_WIFI_NOT_INIT && err != ESP_ERR_WIFI_NOT_STARTED) {
+            ESP_ERROR_CHECK(err);
+        }
+        ESP_ERROR_CHECK(esp_wifi_set_mode(access_point_mode ? WIFI_MODE_AP : WIFI_MODE_STA));
+        if (access_point_mode) {
+            wifi_config_t ap_config = {};
+            ConfigureAccessPointConfig(ap_ssid, &ap_config);
+            ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
+        }
+        ESP_ERROR_CHECK(esp_wifi_start());
+
+        {
+            std::lock_guard<std::mutex> lock(s_state_mutex);
+            s_suppress_disconnect_event = false;
+            if (access_point_mode) {
+                s_ap_url = IpInfoToUrl(s_ap_netif);
+            }
+        }
+
+        if (access_point_mode) {
+            StartConfigPortal();
+            Notify(State::kAccessPointMode, ap_ssid);
+        } else {
+            Notify(State::kDisconnected, "NO_CREDENTIALS");
+        }
         return;
     }
 
-    StopConfigPortal();
+    if (!access_point_mode) {
+        StopConfigPortal();
+    }
     CheckOrAbort(esp_timer_stop(s_connect_timer), "esp_timer_stop");
     {
         std::lock_guard<std::mutex> lock(s_state_mutex);
@@ -907,38 +998,42 @@ void StartStationAttempt()
         s_connect_timer_active = false;
         s_reconnecting = false;
         s_connected = false;
-        s_access_point_mode = false;
         s_active_credentials = credentials;
         s_current_ssid = credentials.ssid;
         s_ip_address.clear();
         s_rssi = 0;
     }
 
-    wifi_config_t config = {};
-    strlcpy(reinterpret_cast<char*>(config.sta.ssid), credentials.ssid.c_str(),
-            sizeof(config.sta.ssid));
-    strlcpy(reinterpret_cast<char*>(config.sta.password), credentials.password.c_str(),
-            sizeof(config.sta.password));
-    config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
-    config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
-    config.sta.failure_retry_cnt = 0;
-    config.sta.pmf_cfg.capable = true;
-    config.sta.pmf_cfg.required = false;
+    wifi_config_t station_config = {};
+    ConfigureStationConfig(credentials, &station_config);
+    wifi_config_t ap_config = {};
+    if (access_point_mode) {
+        ConfigureAccessPointConfig(ap_ssid, &ap_config);
+    }
 
     esp_err_t err = esp_wifi_stop();
     if (err != ESP_OK && err != ESP_ERR_WIFI_NOT_INIT && err != ESP_ERR_WIFI_NOT_STARTED) {
         ESP_ERROR_CHECK(err);
     }
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &config));
+    ESP_ERROR_CHECK(esp_wifi_set_mode(access_point_mode ? WIFI_MODE_APSTA : WIFI_MODE_STA));
+    if (access_point_mode) {
+        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
+    }
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &station_config));
     ESP_ERROR_CHECK(esp_wifi_start());
 
     {
         std::lock_guard<std::mutex> lock(s_state_mutex);
         s_suppress_disconnect_event = false;
         s_connect_timer_active = true;
+        if (access_point_mode) {
+            s_ap_url = IpInfoToUrl(s_ap_netif);
+        }
     }
 
+    if (access_point_mode) {
+        StartConfigPortal();
+    }
     Notify(State::kConnecting, credentials.ssid);
     ESP_ERROR_CHECK(esp_timer_start_once(s_connect_timer, kConnectTimeoutSec * 1000000ULL));
     ESP_ERROR_CHECK(esp_wifi_connect());
@@ -963,7 +1058,6 @@ void DisconnectStationNow(bool clear_saved_credentials)
     {
         std::lock_guard<std::mutex> lock(s_state_mutex);
         s_connected = false;
-        s_access_point_mode = false;
         s_current_ssid.clear();
         s_ip_address.clear();
         s_rssi = 0;
@@ -985,14 +1079,17 @@ void HandleTransitionRequest(TransitionRequest request)
 #if CONFIG_FOLLOWUP_WIFI_START_IN_AP_MODE
             EnterAccessPointModeNow();
 #else
-            StartStationAttempt();
+            StartStationAttempt(true);
 #endif
             break;
         case TransitionRequest::kStartStation:
-            StartStationAttempt();
+            StartStationAttempt(false);
             break;
         case TransitionRequest::kEnterAccessPoint:
             EnterAccessPointModeNow();
+            break;
+        case TransitionRequest::kDisableAccessPoint:
+            StartStationAttempt(false);
             break;
         case TransitionRequest::kDisconnectStation:
             DisconnectStationNow(s_clear_saved_credentials_on_disconnect);
@@ -1091,8 +1188,7 @@ void HandleWifiEvent(int32_t event_id, void* event_data)
                 s_ip_address.clear();
                 s_rssi = 0;
                 const Credentials credentials = ResolveStationCredentialsLocked();
-                should_reconnect =
-                    s_wifi_enabled && !s_access_point_mode && credentials.valid() && !s_reconnecting;
+                should_reconnect = s_wifi_enabled && credentials.valid() && !s_reconnecting;
                 s_reconnecting = should_reconnect;
                 reconnect_ssid = credentials.ssid;
             }
@@ -1139,7 +1235,6 @@ void HandleIpEvent(int32_t event_id, void* event_data)
         s_connect_timer_active = false;
         s_reconnecting = false;
         s_connected = true;
-        s_access_point_mode = false;
         s_ip_address = ip_address;
         s_rssi = rssi;
         if (s_persist_active_credentials_on_success && s_active_credentials.valid()) {
@@ -1239,13 +1334,22 @@ void SetWifiEnabled(bool enabled)
     QueueTransition(enabled ? TransitionRequest::kStart : TransitionRequest::kStopWifi);
 }
 
-void EnterAccessPointMode()
+void SetAccessPointEnabled(bool enabled)
 {
     {
         std::lock_guard<std::mutex> lock(s_state_mutex);
-        s_wifi_enabled = true;
+        s_access_point_mode = enabled;
+        if (enabled) {
+            s_wifi_enabled = true;
+        }
     }
-    QueueTransition(TransitionRequest::kEnterAccessPoint);
+    QueueTransition(enabled ? TransitionRequest::kEnterAccessPoint
+                            : TransitionRequest::kDisableAccessPoint);
+}
+
+void EnterAccessPointMode()
+{
+    SetAccessPointEnabled(true);
 }
 
 bool ConnectToNetwork(const std::string& ssid, const std::string& password, bool save_on_success)

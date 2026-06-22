@@ -13,6 +13,8 @@ namespace {
 
 constexpr int kColumnGap = design::spacing::k16;
 constexpr int kButtonGap = design::spacing::k8;
+constexpr int kTouchHitSlopX = design::spacing::k4;
+constexpr int kTouchHitSlopY = design::spacing::k12;
 
 struct VisibleFooterButton {
     GlobalFooterItemId item = GlobalFooterItemId::kNone;
@@ -184,6 +186,20 @@ UiRect FooterButtonBounds(int portrait_width,
     return {};
 }
 
+UiRect ExpandTouchBounds(const UiRect& bounds)
+{
+    if (bounds.IsEmpty()) {
+        return bounds;
+    }
+
+    return {
+        bounds.x - kTouchHitSlopX,
+        bounds.y - kTouchHitSlopY,
+        bounds.width + (2 * kTouchHitSlopX),
+        bounds.height + (2 * kTouchHitSlopY),
+    };
+}
+
 }  // namespace
 
 UiRect GlobalFooterBounds(int portrait_width, int portrait_height, const GlobalFooterState& state)
@@ -235,7 +251,8 @@ bool HitTestGlobalFooterItem(int portrait_width,
     };
 
     for (GlobalFooterItemId candidate : kItems) {
-        const UiRect bounds = GlobalFooterItemBounds(portrait_width, portrait_height, state, candidate);
+        const UiRect bounds =
+            ExpandTouchBounds(GlobalFooterItemBounds(portrait_width, portrait_height, state, candidate));
         if (!bounds.IsEmpty() && bounds.Contains(x, y)) {
             if (item != nullptr) {
                 *item = candidate;

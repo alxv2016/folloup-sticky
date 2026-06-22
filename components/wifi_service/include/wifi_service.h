@@ -69,6 +69,7 @@ void Start();
 void SetEventHandler(EventHandler handler, void* context);
 void SetPortalRouteRegistrar(PortalRouteRegistrar registrar, void* context);
 void SetWifiEnabled(bool enabled);
+void SetAccessPointEnabled(bool enabled);
 void EnterAccessPointMode();
 bool ConnectToNetwork(const std::string& ssid, const std::string& password,
                       bool save_on_success = true);

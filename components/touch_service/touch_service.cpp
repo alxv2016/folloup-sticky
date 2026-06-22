@@ -35,6 +35,19 @@ GT911& TouchController()
     return gt911;
 }
 
+uint16_t NormalizeTouchY(uint16_t raw_y)
+{
+    if (STICKY_TOUCH_LOGICAL_HEIGHT <= 0) {
+        return raw_y;
+    }
+
+    const uint16_t max_y = static_cast<uint16_t>(STICKY_TOUCH_LOGICAL_HEIGHT - 1);
+    if (raw_y > max_y) {
+        return 0;
+    }
+    return static_cast<uint16_t>(max_y - raw_y);
+}
+
 void DispatchTouchPoints(int8_t count, const GTPoint* points)
 {
     if (count <= 0 || points == nullptr) {
@@ -46,11 +59,14 @@ void DispatchTouchPoints(int8_t count, const GTPoint* points)
     event.count = static_cast<uint8_t>(count > kMaxTouchPoints ? kMaxTouchPoints : count);
     for (uint8_t i = 0; i < event.count; ++i) {
         event.points[i].x = points[i].x;
-        event.points[i].y = points[i].y;
+        event.points[i].y = NormalizeTouchY(points[i].y);
         event.points[i].size = points[i].size;
         event.points[i].id = points[i].id;
-        ESP_LOGD(kTag, "Touch point[%u]: x=%u y=%u size=%u id=%u",
-                 static_cast<unsigned>(i), static_cast<unsigned>(event.points[i].x),
+        ESP_LOGI(kTag, "Touch point[%u]: raw=(%u,%u) mapped=(%u,%u) size=%u id=%u",
+                 static_cast<unsigned>(i),
+                 static_cast<unsigned>(points[i].x),
+                 static_cast<unsigned>(points[i].y),
+                 static_cast<unsigned>(event.points[i].x),
                  static_cast<unsigned>(event.points[i].y),
                  static_cast<unsigned>(event.points[i].size),
                  static_cast<unsigned>(event.points[i].id));

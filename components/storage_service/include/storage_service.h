@@ -1,6 +1,8 @@
 #ifndef STORAGE_SERVICE_H_
 #define STORAGE_SERVICE_H_
 
+#include <cstdint>
+
 #include "esp_err.h"
 
 namespace storage_service {
@@ -38,6 +40,13 @@ struct Event {
     Snapshot snapshot = {};
 };
 
+struct StorageStats {
+    bool available = false;
+    uint64_t total_bytes = 0;
+    uint64_t free_bytes = 0;
+    int used_percent = 0;
+};
+
 using EventHandler = void (*)(const Event& event, void* context);
 using MountedFilesystemHandler = esp_err_t (*)(const char* mount_point, void* context);
 
@@ -47,6 +56,7 @@ void LogDebugStatus();
 bool IsMounted();
 bool IsWriteBusy();
 Snapshot GetSnapshot();
+bool GetStorageStats(StorageStats* stats);
 esp_err_t RunWithMountedFilesystem(MountedFilesystemHandler handler, void* context);
 esp_err_t RequestFormatSdCard();
 const char* MountPoint();

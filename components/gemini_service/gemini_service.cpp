@@ -280,7 +280,6 @@ bool ShouldStartAuthenticationLocked()
 {
     return s_initialized &&
            s_network_connected &&
-           !s_access_point_mode &&
            !s_request_in_flight &&
            !s_authenticated &&
            !GetEffectiveApiKeyLocked().empty();
@@ -471,6 +470,9 @@ void AuthenticationTask(void* arg)
     if (context == nullptr) {
         CompleteAuthentication(0, AuthResult{
             .success = false,
+            .http_status = 0,
+            .model_resource_name = {},
+            .model_display_name = {},
             .error_code = "task_context_missing",
             .error_message = "Gemini authentication task context missing",
         });
@@ -827,7 +829,10 @@ Result ApplySettingsPatch(const SettingsPatch& patch)
     }
     return {
         .success = true,
+        .validation_error = false,
         .status_code = 200,
+        .field = {},
+        .error_code = {},
         .message = "Gemini API key stored",
     };
 }
@@ -878,7 +883,10 @@ Result ClearStoredApiKey()
     }
     return {
         .success = true,
+        .validation_error = false,
         .status_code = 200,
+        .field = {},
+        .error_code = {},
         .message = "Gemini API key cleared",
     };
 }
@@ -931,7 +939,7 @@ bool BeginAuthentication()
             s_last_model_display_name.clear();
             SetLastErrorLocked("not_configured", "No Gemini API key configured");
             missing_api_key = true;
-        } else if (!s_network_connected || s_access_point_mode) {
+        } else if (!s_network_connected) {
             return false;
         }
 

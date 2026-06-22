@@ -119,6 +119,15 @@ app_interaction::InputResult HandleTouchEvent(const touch_service::TouchEventInf
     }
 
     if (!target_hit && !has_prior_touch_context) {
+        if (event.count > 0) {
+            ESP_LOGI(kTag,
+                     "Touch miss phase=%d x=%u y=%u size=%u id=%u",
+                     static_cast<int>(event.phase),
+                     static_cast<unsigned>(event.points[0].x),
+                     static_cast<unsigned>(event.points[0].y),
+                     static_cast<unsigned>(event.points[0].size),
+                     static_cast<unsigned>(event.points[0].id));
+        }
         return result;
     }
 

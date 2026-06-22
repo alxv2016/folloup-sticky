@@ -130,12 +130,15 @@ bool ReadUsbDetected()
     return status.usb_detected;
 }
 
-void NotifyLocked()
+Event BuildEventLocked()
 {
-    EventHandler handler = s_event_handler;
-    void* context = s_event_context;
     Event event = {};
     event.snapshot = s_snapshot;
+    return event;
+}
+
+void DispatchEvent(const Event& event, EventHandler handler, void* context)
+{
     if (handler != nullptr) {
         handler(event, context);
     }
@@ -318,20 +321,36 @@ void CompleteOperation(Operation operation,
                        esp_err_t error,
                        SdCard& card)
 {
-    std::lock_guard<std::mutex> state_lock(s_state_mutex);
-    s_snapshot.mode = mode;
-    RefreshSnapshotStorageLocked(card);
-    SetOperationLocked(operation, phase, error);
-    NotifyLocked();
+    Event event = {};
+    EventHandler handler = nullptr;
+    void* context = nullptr;
+    {
+        std::lock_guard<std::mutex> state_lock(s_state_mutex);
+        s_snapshot.mode = mode;
+        RefreshSnapshotStorageLocked(card);
+        SetOperationLocked(operation, phase, error);
+        event = BuildEventLocked();
+        handler = s_event_handler;
+        context = s_event_context;
+    }
+    DispatchEvent(event, handler, context);
 }
 
 void RefreshMountedSnapshotAndNotifyLocked(SdCard& card, esp_err_t error)
 {
-    std::lock_guard<std::mutex> state_lock(s_state_mutex);
-    s_snapshot.mode = card.IsMounted() ? Mode::kAppMounted : Mode::kError;
-    RefreshSnapshotStorageLocked(card);
-    s_snapshot.last_error = error;
-    NotifyLocked();
+    Event event = {};
+    EventHandler handler = nullptr;
+    void* context = nullptr;
+    {
+        std::lock_guard<std::mutex> state_lock(s_state_mutex);
+        s_snapshot.mode = card.IsMounted() ? Mode::kAppMounted : Mode::kError;
+        RefreshSnapshotStorageLocked(card);
+        s_snapshot.last_error = error;
+        event = BuildEventLocked();
+        handler = s_event_handler;
+        context = s_event_context;
+    }
+    DispatchEvent(event, handler, context);
 }
 
 bool ShouldRetryMountedFilesystemOperation(esp_err_t err, const SdCard& card)
@@ -353,13 +372,19 @@ void HandleFormatRequest()
     StorageBusGuard bus_guard;
     SdCard& card = Card();
 
+    Event event = {};
+    EventHandler handler = nullptr;
+    void* context = nullptr;
     {
         std::lock_guard<std::mutex> state_lock(s_state_mutex);
         s_snapshot.mode = Mode::kFormatting;
         SetOperationLocked(Operation::kFormatSd, OperationPhase::kStarted);
         RefreshSnapshotStorageLocked(card);
-        NotifyLocked();
+        event = BuildEventLocked();
+        handler = s_event_handler;
+        context = s_event_context;
     }
+    DispatchEvent(event, handler, context);
 
     esp_err_t err = bus_guard.Acquire();
     if (err != ESP_OK) {
@@ -457,6 +482,9 @@ esp_err_t Init()
         s_mount_result = InitializeCardAtBootLocked(card);
     }
 
+    Event init_event = {};
+    EventHandler init_handler = nullptr;
+    void* init_context = nullptr;
     {
         std::lock_guard<std::mutex> state_lock(s_state_mutex);
         s_initialized = true;
@@ -464,8 +492,11 @@ esp_err_t Init()
         s_snapshot.mode = card.IsMounted() ? Mode::kAppMounted : Mode::kError;
         SetOperationLocked(Operation::kNone, OperationPhase::kIdle, s_mount_result);
         RefreshSnapshotStorageLocked(card);
-        NotifyLocked();
+        init_event = BuildEventLocked();
+        init_handler = s_event_handler;
+        init_context = s_event_context;
     }
+    DispatchEvent(init_event, init_handler, init_context);
 
     return s_mount_result == ESP_ERR_NOT_FOUND ? ESP_OK : s_mount_result;
 }
@@ -533,6 +564,34 @@ Snapshot GetSnapshot()
     return s_snapshot;
 }
 
+bool GetStorageStats(StorageStats* stats)
+{
+    if (stats == nullptr) {
+        return false;
+    }
+
+    *stats = {};
+    std::lock_guard<std::mutex> card_lock(s_card_mutex);
+    SdCard& card = Card();
+    if (!card.IsCardInserted() || !card.IsMounted()) {
+        return false;
+    }
+
+    uint64_t total_bytes = 0;
+    uint64_t free_bytes = 0;
+    if (!card.GetStorageStats(total_bytes, free_bytes) || total_bytes == 0) {
+        return false;
+    }
+
+    const uint64_t clamped_free_bytes = std::min(total_bytes, free_bytes);
+    const uint64_t used_bytes = total_bytes - clamped_free_bytes;
+    stats->available = true;
+    stats->total_bytes = total_bytes;
+    stats->free_bytes = clamped_free_bytes;
+    stats->used_percent = static_cast<int>((used_bytes * 100ULL) / total_bytes);
+    return true;
+}
+
 esp_err_t RunWithMountedFilesystem(MountedFilesystemHandler handler, void* context)
 {
     if (handler == nullptr) {
@@ -576,6 +635,9 @@ esp_err_t RunWithMountedFilesystem(MountedFilesystemHandler handler, void* conte
 
 esp_err_t RequestFormatSdCard()
 {
+    Event event = {};
+    EventHandler handler = nullptr;
+    void* context = nullptr;
     {
         std::lock_guard<std::mutex> lock(s_state_mutex);
         if (s_snapshot.mode != Mode::kAppMounted) {
@@ -585,14 +647,25 @@ esp_err_t RequestFormatSdCard()
         s_snapshot.usb_detected = ReadUsbDetected();
         s_snapshot.mode = Mode::kFormatting;
         SetOperationLocked(Operation::kFormatSd, OperationPhase::kStarted);
-        NotifyLocked();
+        event = BuildEventLocked();
+        handler = s_event_handler;
+        context = s_event_context;
     }
+    DispatchEvent(event, handler, context);
     const esp_err_t err = QueueRequest(Operation::kFormatSd);
     if (err != ESP_OK) {
-        std::lock_guard<std::mutex> lock(s_state_mutex);
-        s_snapshot.mode = Mode::kAppMounted;
-        SetOperationLocked(Operation::kFormatSd, OperationPhase::kFailed, err);
-        NotifyLocked();
+        Event failure_event = {};
+        EventHandler failure_handler = nullptr;
+        void* failure_context = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(s_state_mutex);
+            s_snapshot.mode = Mode::kAppMounted;
+            SetOperationLocked(Operation::kFormatSd, OperationPhase::kFailed, err);
+            failure_event = BuildEventLocked();
+            failure_handler = s_event_handler;
+            failure_context = s_event_context;
+        }
+        DispatchEvent(failure_event, failure_handler, failure_context);
     }
     return err;
 }
