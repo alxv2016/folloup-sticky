@@ -5,6 +5,7 @@
 #include "epaper_ui/global_footer.h"
 #include "epaper_ui/settings_page.h"
 #include "epaper_ui/shutdown_modal.h"
+#include "epaper_ui/storage_modal.h"
 #include "epaper_ui/select_modal.h"
 #include "epaper_ui/status_bar.h"
 #include "epaper_ui/toast.h"
@@ -38,6 +39,7 @@ esp_err_t SetGlobalFooterState(const epaper_ui::GlobalFooterState& state);
 esp_err_t SetSettingsPageState(const epaper_ui::SettingsPageState& state);
 esp_err_t SetLockScreenState(const epaper_ui::LockScreenState& state);
 esp_err_t SetShutdownModalState(const epaper_ui::ShutdownModalState& state);
+esp_err_t SetStorageModalState(const epaper_ui::StorageModalState& state);
 esp_err_t SetSelectModalState(const epaper_ui::SelectModalState& state);
 esp_err_t SetToastState(const epaper_ui::ToastState& state);
 esp_err_t SetCurrentScreen(ScreenId screen,

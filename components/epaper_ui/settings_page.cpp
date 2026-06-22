@@ -15,7 +15,7 @@ constexpr int kTitleBottomGap = design::spacing::k24;
 constexpr int kNetworkHeadingGap = 0;
 constexpr int kSectionGap = design::spacing::k24;
 constexpr int kStorageStatusGap = design::spacing::k12;
-constexpr int kStorageButtonTopGap = design::spacing::k24;
+constexpr int kStorageButtonTopGap = design::spacing::k16;
 
 struct Layout {
     UiRect wifi_toggle = {};
@@ -24,15 +24,9 @@ struct Layout {
     UiRect format_sd_button = {};
 };
 
-int FooterTop(int portrait_height)
-{
-    return std::max(0,
-                    portrait_height - design::global_footer::kBottomPadding -
-                        design::global_footer::kButtonSize);
-}
-
 Layout BuildLayout(int portrait_width, int portrait_height, const SettingsPageState& state)
 {
+    (void)portrait_height;
     const int page_x = kSideInset;
     const int page_width = std::max(0, portrait_width - (2 * kSideInset));
     const int title_y = StatusBarHeight() + kTopGap;
@@ -62,10 +56,7 @@ Layout BuildLayout(int portrait_width, int portrait_height, const SettingsPageSt
 
     ButtonStyle format_button_style = {};
     format_button_style.width = page_width;
-    const int footer_button_y = FooterTop(portrait_height) - design::button::kHeight;
-    const int content_button_y = storage_status.bottom() + kStorageButtonTopGap;
-    const int button_y =
-        content_button_y <= footer_button_y ? footer_button_y : content_button_y;
+    const int button_y = storage_status.bottom() + kStorageButtonTopGap;
     const UiRect format_sd_button =
         ButtonBounds(page_x, button_y, state.format_sd_button, format_button_style);
 

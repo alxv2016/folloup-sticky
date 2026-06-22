@@ -6,6 +6,7 @@
 #include "button_service.h"
 #include "epaper_ui/select_modal.h"
 #include "epaper_ui/shutdown_modal.h"
+#include "epaper_ui/storage_modal.h"
 #include "epaper_ui/toast.h"
 #include "esp_err.h"
 
@@ -13,12 +14,19 @@ namespace overlay_runtime {
 
 esp_err_t Init();
 bool IsShutdownModalVisible();
+bool IsStorageModalVisible();
 bool IsSelectModalVisible();
 bool IsShutdownPending();
 bool IsInputCaptured();
 
 esp_err_t ShowShutdownModal();
 esp_err_t DismissShutdownModal();
+esp_err_t ShowStorageModalNoSdCard();
+esp_err_t ShowStorageModalConfirmFormat();
+esp_err_t ShowStorageModalFormatting(int progress_percent);
+esp_err_t ShowStorageModalFormatSuccess();
+esp_err_t ShowStorageModalFormatError();
+esp_err_t DismissStorageModal();
 esp_err_t ShowSelectModal(const epaper_ui::SelectModalState& state);
 esp_err_t DismissSelectModal();
 bool MoveFocus(int delta);
@@ -26,6 +34,7 @@ bool ResolveTouchTarget(int x, int y, app_interaction::InteractiveTarget* target
 bool FocusTouchTarget(const app_interaction::InteractiveTarget& target);
 app_interaction::InputResult ActivateTouchTarget(const app_interaction::InteractiveTarget& target);
 void SetShutdownRequestInProgress(bool in_progress);
+bool TakePendingFeedback(app_interaction::FeedbackCue* cue);
 
 app_interaction::InputResult HandleButtonEvent(const button_service::ButtonEventInfo& event);
 

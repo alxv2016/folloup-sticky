@@ -66,6 +66,50 @@ void PlayFeedback(feedback_service::FeedbackEvent event)
     (void)feedback_service::Play(event);
 }
 
+app_interaction::InputResult MakeFeedbackResult(app_interaction::FeedbackCue cue)
+{
+    app_interaction::InputResult result = {};
+    result.play_feedback = true;
+    result.feedback_cue = cue;
+    return result;
+}
+
+void PlayInteractionFeedback(const app_interaction::InputResult& result)
+{
+    if (!result.play_feedback) {
+        return;
+    }
+
+    switch (result.feedback_cue) {
+        case app_interaction::FeedbackCue::kClick:
+            PlayFeedback(feedback_service::FeedbackEvent::kButtonClick);
+            break;
+        case app_interaction::FeedbackCue::kTouchContact:
+            PlayFeedback(feedback_service::FeedbackEvent::kTouchContact);
+            break;
+        case app_interaction::FeedbackCue::kModalOpen:
+            PlayFeedback(feedback_service::FeedbackEvent::kModalOpen);
+            break;
+        case app_interaction::FeedbackCue::kError:
+            PlayFeedback(feedback_service::FeedbackEvent::kError);
+            break;
+        case app_interaction::FeedbackCue::kRecordingStart:
+            PlayFeedback(feedback_service::FeedbackEvent::kRecordingStart);
+            break;
+        case app_interaction::FeedbackCue::kNone:
+        default:
+            break;
+    }
+}
+
+void FlushOverlayFeedback()
+{
+    app_interaction::FeedbackCue cue = app_interaction::FeedbackCue::kNone;
+    while (overlay_runtime::TakePendingFeedback(&cue)) {
+        PlayInteractionFeedback(MakeFeedbackResult(cue));
+    }
+}
+
 void SyncStatusBarState(const char* source)
 {
     const esp_err_t status_bar_err = status_bar_runtime::UpdateDisplayState();
@@ -122,6 +166,23 @@ esp_err_t SyncSettingsPageState(bool request_refresh_if_active)
     return err;
 }
 
+void HandleSettingsPageAction(settings_page_runtime::ActionRequest request, void*)
+{
+    if (request != settings_page_runtime::ActionRequest::kShowFormatSdModal) {
+        return;
+    }
+
+    const storage_service::Snapshot snapshot = storage_service::GetSnapshot();
+    const esp_err_t err =
+        !snapshot.inserted
+            ? overlay_runtime::ShowStorageModalNoSdCard()
+            : overlay_runtime::ShowStorageModalConfirmFormat();
+    FlushOverlayFeedback();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Show format SD modal failed: %s", esp_err_to_name(err));
+    }
+}
+
 esp_err_t ShowHomeScreen(display_service::RefreshMode refresh_mode)
 {
     SyncStatusBarState("show_home_screen");
@@ -166,9 +227,13 @@ app_interaction::InputResult HandleFooterActivate(footer_runtime::FooterFocusIte
     esp_err_t err = ESP_OK;
     switch (item) {
         case footer_runtime::FooterFocusItem::kHome:
+            result.play_feedback = true;
+            result.feedback_cue = app_interaction::FeedbackCue::kClick;
             err = ShowHomeScreen(display_service::RefreshMode::kFull);
             break;
         case footer_runtime::FooterFocusItem::kSettings:
+            result.play_feedback = true;
+            result.feedback_cue = app_interaction::FeedbackCue::kClick;
             err = ShowSettingsScreen(display_service::RefreshMode::kFull);
             break;
         case footer_runtime::FooterFocusItem::kWifi:
@@ -200,7 +265,8 @@ bool HandleSettingsScreenButtonEvent(const button_service::ButtonEventInfo& even
                 const int delta =
                     event.button == button_service::ButtonId::kUp ? -1 : 1;
                 if (settings_page_runtime::MoveFocus(delta)) {
-                    PlayFeedback(feedback_service::FeedbackEvent::kButtonClick);
+                    PlayInteractionFeedback(
+                        MakeFeedbackResult(app_interaction::FeedbackCue::kClick));
                 }
                 return true;
             }
@@ -211,10 +277,13 @@ bool HandleSettingsScreenButtonEvent(const button_service::ButtonEventInfo& even
                     return true;
                 }
                 if (activation.play_feedback) {
-                    PlayFeedback(activation.feedback_event);
+                    PlayInteractionFeedback(
+                        MakeFeedbackResult(activation.feedback_cue));
                 }
                 if (activation.footer_item != footer_runtime::FooterFocusItem::kNone) {
-                    (void)HandleFooterActivate(activation.footer_item, nullptr);
+                    const app_interaction::InputResult footer_result =
+                        HandleFooterActivate(activation.footer_item, nullptr);
+                    PlayInteractionFeedback(footer_result);
                 }
                 return true;
             }
@@ -227,10 +296,13 @@ bool HandleSettingsScreenButtonEvent(const button_service::ButtonEventInfo& even
                     return true;
                 }
                 if (activation.play_feedback) {
-                    PlayFeedback(activation.feedback_event);
+                    PlayInteractionFeedback(
+                        MakeFeedbackResult(activation.feedback_cue));
                 }
                 if (activation.footer_item != footer_runtime::FooterFocusItem::kNone) {
-                    (void)HandleFooterActivate(activation.footer_item, nullptr);
+                    const app_interaction::InputResult footer_result =
+                        HandleFooterActivate(activation.footer_item, nullptr);
+                    PlayInteractionFeedback(footer_result);
                 }
                 return true;
             }
@@ -332,7 +404,8 @@ recording_session_service::Context BuildRecordingSessionContext()
     recording_session_service::Context context = {};
     context.lock_screen_active = lock_screen_runtime::IsActive();
     context.overlay_visible =
-        overlay_runtime::IsShutdownModalVisible() || overlay_runtime::IsSelectModalVisible();
+        overlay_runtime::IsShutdownModalVisible() || overlay_runtime::IsStorageModalVisible() ||
+        overlay_runtime::IsSelectModalVisible();
     return context;
 }
 
@@ -440,9 +513,14 @@ void HandleRecordingSessionEvent(const recording_session_service::Event& event, 
     }
 
     switch (event.snapshot.phase) {
+        case recording_session_service::Phase::kRecording:
+            PlayInteractionFeedback(
+                MakeFeedbackResult(app_interaction::FeedbackCue::kRecordingStart));
+            break;
         case recording_session_service::Phase::kAwaitingTagSelection: {
             const esp_err_t err =
                 overlay_runtime::ShowSelectModal(BuildRecordingTagSelectModalState());
+            FlushOverlayFeedback();
             if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
                 ESP_LOGW(kTag, "Show recording select modal failed: %s", esp_err_to_name(err));
             }
@@ -451,6 +529,7 @@ void HandleRecordingSessionEvent(const recording_session_service::Event& event, 
         case recording_session_service::Phase::kTranscribing: {
             const esp_err_t err = overlay_runtime::ShowToast(
                 BuildToast("Transcribing recording...", EmbeddedIconId::kTranscribe));
+            FlushOverlayFeedback();
             if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
                 ESP_LOGW(kTag, "Show transcription toast failed: %s", esp_err_to_name(err));
             }
@@ -466,6 +545,7 @@ void HandleRecordingSessionEvent(const recording_session_service::Event& event, 
                 toast = BuildToast(event.snapshot.last_status_message.c_str(), EmbeddedIconId::kClose);
             }
             const esp_err_t err = overlay_runtime::ShowToastForDuration(toast, 2500);
+            FlushOverlayFeedback();
             if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
                 ESP_LOGW(kTag, "Show recording completion toast failed: %s",
                          esp_err_to_name(err));
@@ -478,6 +558,7 @@ void HandleRecordingSessionEvent(const recording_session_service::Event& event, 
                                    : event.snapshot.last_status_message.c_str();
             const esp_err_t err = overlay_runtime::ShowToastForDuration(
                 BuildToast(text, EmbeddedIconId::kClose), 2500);
+            FlushOverlayFeedback();
             if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
                 ESP_LOGW(kTag, "Show recording failure toast failed: %s",
                          esp_err_to_name(err));
@@ -486,7 +567,6 @@ void HandleRecordingSessionEvent(const recording_session_service::Event& event, 
         }
         case recording_session_service::Phase::kIdle:
         case recording_session_service::Phase::kArmed:
-        case recording_session_service::Phase::kRecording:
         case recording_session_service::Phase::kSaving:
         default:
             break;
@@ -501,7 +581,41 @@ void HandleStorageEvent(const storage_service::Event& event, void*)
              storage_service::OperationPhaseName(event.snapshot.phase),
              esp_err_to_name(event.snapshot.last_error));
 
-    (void)SyncSettingsPageState(true);
+    if (event.snapshot.operation == storage_service::Operation::kFormatSd) {
+        esp_err_t overlay_err = ESP_OK;
+        switch (event.snapshot.phase) {
+            case storage_service::OperationPhase::kStarted:
+                overlay_err = overlay_runtime::ShowStorageModalFormatting(
+                    event.snapshot.progress_percent);
+                break;
+            case storage_service::OperationPhase::kSucceeded:
+                overlay_err = overlay_runtime::ShowStorageModalFormatSuccess();
+                break;
+            case storage_service::OperationPhase::kFailed:
+                overlay_err =
+                    event.snapshot.last_error == ESP_ERR_NOT_FOUND
+                        ? overlay_runtime::ShowStorageModalNoSdCard()
+                        : overlay_runtime::ShowStorageModalFormatError();
+                break;
+            case storage_service::OperationPhase::kIdle:
+            default:
+                break;
+        }
+        if (overlay_err != ESP_OK && overlay_err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(kTag, "Storage modal update failed: %s", esp_err_to_name(overlay_err));
+        }
+        FlushOverlayFeedback();
+    }
+
+    const bool formatting_in_progress =
+        event.snapshot.operation == storage_service::Operation::kFormatSd &&
+        event.snapshot.phase == storage_service::OperationPhase::kStarted;
+    if (!formatting_in_progress) {
+        (void)SyncSettingsPageState(true);
+        return;
+    }
+
+    ESP_LOGI(kTag, "Storage intent: skipping settings page refresh during active format");
 }
 
 void HandleTimezoneEvent(const timezone_service::Event& event, void*)
@@ -627,9 +741,26 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
 
     const app_interaction::InputResult overlay_result =
         input_focus_runtime::HandleButtonEvent(event);
+    PlayInteractionFeedback(overlay_result);
     if (overlay_result.select_modal_submitted) {
         (void)recording_session_service::SubmitTagSelection(
             overlay_result.select_modal_selected_index);
+    }
+    if (overlay_result.request_format_sd_card) {
+        const esp_err_t err = storage_service::RequestFormatSdCard();
+        if (err != ESP_OK) {
+            ESP_LOGW(kTag, "Format SD request failed: %s", esp_err_to_name(err));
+            const storage_service::Snapshot snapshot = storage_service::GetSnapshot();
+            const esp_err_t overlay_err =
+                (!snapshot.inserted || err == ESP_ERR_NOT_FOUND)
+                    ? overlay_runtime::ShowStorageModalNoSdCard()
+                    : overlay_runtime::ShowStorageModalFormatError();
+            FlushOverlayFeedback();
+            if (overlay_err != ESP_OK && overlay_err != ESP_ERR_INVALID_STATE) {
+                ESP_LOGW(kTag, "Format SD error modal failed: %s",
+                         esp_err_to_name(overlay_err));
+            }
+        }
     }
     if (overlay_result.request_shutdown && s_shutdown_task != nullptr) {
         xTaskNotifyGive(s_shutdown_task);
@@ -682,6 +813,7 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
 
         ESP_LOGW(kTag, "Shutdown chord detected: UP held while POWER_OK pressed");
         const esp_err_t err = overlay_runtime::ShowShutdownModal();
+        FlushOverlayFeedback();
         if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
             ESP_LOGW(kTag, "Show shutdown modal failed: %s", esp_err_to_name(err));
         }
@@ -727,7 +859,8 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
     switch (event.event) {
         case button_service::ButtonEvent::kSingleClick:
             if (event.button == button_service::ButtonId::kUp) {
-                PlayFeedback(feedback_service::FeedbackEvent::kButtonClick);
+                PlayInteractionFeedback(
+                    MakeFeedbackResult(app_interaction::FeedbackCue::kClick));
                 if (lock_screen_runtime::IsActive()) {
                     const esp_err_t err =
                         lock_screen_runtime::RequestRefresh(display_service::RefreshMode::kPartial);
@@ -737,7 +870,8 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
                     }
                 }
             } else if (event.button == button_service::ButtonId::kDown) {
-                PlayFeedback(feedback_service::FeedbackEvent::kButtonClick);
+                PlayInteractionFeedback(
+                    MakeFeedbackResult(app_interaction::FeedbackCue::kClick));
                 if (lock_screen_runtime::IsActive()) {
                     const esp_err_t err =
                         lock_screen_runtime::RequestRefresh(display_service::RefreshMode::kFull);
@@ -809,9 +943,26 @@ void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
     }
 
     const app_interaction::InputResult touch_result = input_focus_runtime::HandleTouchEvent(event);
+    PlayInteractionFeedback(touch_result);
     if (touch_result.select_modal_submitted) {
         (void)recording_session_service::SubmitTagSelection(
             touch_result.select_modal_selected_index);
+    }
+    if (touch_result.request_format_sd_card) {
+        const esp_err_t err = storage_service::RequestFormatSdCard();
+        if (err != ESP_OK) {
+            ESP_LOGW(kTag, "Format SD touch request failed: %s", esp_err_to_name(err));
+            const storage_service::Snapshot snapshot = storage_service::GetSnapshot();
+            const esp_err_t overlay_err =
+                (!snapshot.inserted || err == ESP_ERR_NOT_FOUND)
+                    ? overlay_runtime::ShowStorageModalNoSdCard()
+                    : overlay_runtime::ShowStorageModalFormatError();
+            FlushOverlayFeedback();
+            if (overlay_err != ESP_OK && overlay_err != ESP_ERR_INVALID_STATE) {
+                ESP_LOGW(kTag, "Format SD touch error modal failed: %s",
+                         esp_err_to_name(overlay_err));
+            }
+        }
     }
     if (touch_result.request_shutdown && s_shutdown_task != nullptr) {
         xTaskNotifyGive(s_shutdown_task);
@@ -826,11 +977,6 @@ void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
     if (storage_service::IsWriteBusy()) {
         return;
     }
-
-    if (event.phase == touch_service::TouchPhase::kBegin) {
-        PlayFeedback(feedback_service::FeedbackEvent::kTouchContact);
-    }
-
 }
 
 void ShutdownTask(void*)
@@ -1010,6 +1156,7 @@ void InitRecordingSessionService()
 void InitFooterRuntime()
 {
     footer_runtime::SetActivateHandler(HandleFooterActivate, nullptr);
+    settings_page_runtime::SetActionHandler(HandleSettingsPageAction, nullptr);
     ConfigurePageInteractionForScreen(display_service::ScreenId::kHome);
     footer_runtime::SetLayoutState(FooterLayoutForScreen(display_service::ScreenId::kHome));
     footer_runtime::SetProjectionState(FooterProjectionForScreen(display_service::ScreenId::kHome));

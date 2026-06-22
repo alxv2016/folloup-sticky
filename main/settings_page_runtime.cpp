@@ -9,7 +9,6 @@
 
 #include "epaper_ui/settings_page.h"
 #include "esp_log.h"
-#include "feedback_service.h"
 #include "storage_service.h"
 #include "ui_refresh_runtime.h"
 #include "wifi_service.h"
@@ -29,6 +28,8 @@ constexpr FocusItem kFocusOrder[] = {
 std::mutex s_mutex;
 FocusItem s_focused_item = FocusItem::kNone;
 int32_t s_interaction_generation = 1;
+ActionHandler s_action_handler = nullptr;
+void* s_action_context = nullptr;
 
 std::string FormatStorageBytes(uint64_t bytes)
 {
@@ -178,6 +179,8 @@ esp_err_t SyncFocusUi(display_service::RefreshMode refresh_mode)
 ActivationResult ActivateItem(FocusItem item)
 {
     ActivationResult result = {};
+    ActionHandler action_handler = nullptr;
+    void* action_context = nullptr;
 
     switch (item) {
         case FocusItem::kWifiToggle: {
@@ -185,7 +188,7 @@ ActivationResult ActivateItem(FocusItem item)
             wifi_service::SetWifiEnabled(!state.wifi_enabled);
             result.handled = true;
             result.play_feedback = true;
-            result.feedback_event = feedback_service::FeedbackEvent::kButtonClick;
+            result.feedback_cue = app_interaction::FeedbackCue::kClick;
             break;
         }
         case FocusItem::kAccessPointToggle: {
@@ -193,30 +196,34 @@ ActivationResult ActivateItem(FocusItem item)
             wifi_service::SetAccessPointEnabled(!state.access_point_mode);
             result.handled = true;
             result.play_feedback = true;
-            result.feedback_event = feedback_service::FeedbackEvent::kButtonClick;
+            result.feedback_cue = app_interaction::FeedbackCue::kClick;
             break;
         }
         case FocusItem::kFormatSdButton:
-            (void)storage_service::RequestFormatSdCard();
+            {
+                std::lock_guard<std::mutex> lock(s_mutex);
+                action_handler = s_action_handler;
+                action_context = s_action_context;
+            }
             result.handled = true;
             result.play_feedback = true;
-            result.feedback_event = feedback_service::FeedbackEvent::kButtonClick;
+            result.feedback_cue = app_interaction::FeedbackCue::kClick;
             break;
         case FocusItem::kFooterSettings:
             result.handled = true;
-            result.play_feedback = true;
-            result.feedback_event = feedback_service::FeedbackEvent::kButtonClick;
             result.footer_item = footer_runtime::FooterFocusItem::kSettings;
             break;
         case FocusItem::kFooterHome:
             result.handled = true;
-            result.play_feedback = true;
-            result.feedback_event = feedback_service::FeedbackEvent::kButtonClick;
             result.footer_item = footer_runtime::FooterFocusItem::kHome;
             break;
         case FocusItem::kNone:
         default:
             break;
+    }
+
+    if (item == FocusItem::kFormatSdButton && action_handler != nullptr) {
+        action_handler(ActionRequest::kShowFormatSdModal, action_context);
     }
 
     return result;
@@ -238,7 +245,11 @@ epaper_ui::SettingsPageState BuildStateLocked()
     const storage_service::Snapshot storage_snapshot = storage_service::GetSnapshot();
 
     storage_service::StorageStats storage_stats = {};
-    const bool has_storage_stats = storage_service::GetStorageStats(&storage_stats);
+    const bool allow_live_storage_stats =
+        !storage_service::IsWriteBusy() &&
+        storage_snapshot.mode != storage_service::Mode::kFormatting;
+    const bool has_storage_stats =
+        allow_live_storage_stats && storage_service::GetStorageStats(&storage_stats);
 
     epaper_ui::SettingsPageState state = {};
     state.title_text = "Settings";
@@ -389,9 +400,8 @@ app_interaction::InputResult ActivateTouchTargetImpl(const app_interaction::Inte
     const ActivationResult activation = ActivateItem(item);
     result.consumed = activation.handled;
     if (activation.handled) {
-        if (activation.play_feedback) {
-            (void)feedback_service::Play(activation.feedback_event);
-        }
+        result.play_feedback = activation.play_feedback;
+        result.feedback_cue = activation.feedback_cue;
         (void)UpdateDisplayStateAndRequestRefresh(display_service::RefreshMode::kPartial);
     }
     return result;
@@ -507,6 +517,13 @@ void ResetFocus()
     }
 
     footer_runtime::SetProjectionState(projection);
+}
+
+void SetActionHandler(ActionHandler handler, void* context)
+{
+    std::lock_guard<std::mutex> lock(s_mutex);
+    s_action_handler = handler;
+    s_action_context = context;
 }
 
 page_interaction_runtime::TouchProvider BuildTouchProvider()

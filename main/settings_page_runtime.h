@@ -7,7 +7,6 @@
 #include "app_interaction_target.h"
 #include "display_service.h"
 #include "esp_err.h"
-#include "feedback_service.h"
 #include "footer_runtime.h"
 #include "page_interaction_runtime.h"
 
@@ -22,11 +21,17 @@ enum class FocusItem : uint8_t {
     kFooterHome,
 };
 
+enum class ActionRequest : uint8_t {
+    kNone = 0,
+    kShowFormatSdModal,
+};
+
+using ActionHandler = void (*)(ActionRequest request, void* context);
+
 struct ActivationResult {
     bool handled = false;
     bool play_feedback = false;
-    feedback_service::FeedbackEvent feedback_event =
-        feedback_service::FeedbackEvent::kButtonClick;
+    app_interaction::FeedbackCue feedback_cue = app_interaction::FeedbackCue::kNone;
     footer_runtime::FooterFocusItem footer_item = footer_runtime::FooterFocusItem::kNone;
 };
 
@@ -38,6 +43,7 @@ ActivationResult ActivateFocusedItem();
 footer_runtime::ProjectionState BuildFooterProjectionState();
 bool SyncFocusFromFooterProjection();
 void ResetFocus();
+void SetActionHandler(ActionHandler handler, void* context);
 page_interaction_runtime::TouchProvider BuildTouchProvider();
 
 }  // namespace settings_page_runtime

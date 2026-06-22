@@ -12,6 +12,7 @@
 #include "epaper_ui/lock_screen.h"
 #include "epaper_ui/settings_page.h"
 #include "epaper_ui/shutdown_modal.h"
+#include "epaper_ui/storage_modal.h"
 #include "epaper_ui/toast.h"
 #include "epaper_panel.h"
 #include "esp_check.h"
@@ -66,6 +67,7 @@ epaper_ui::GlobalFooterState s_global_footer_state = {};
 epaper_ui::SettingsPageState s_settings_page_state = {};
 epaper_ui::LockScreenState s_lock_screen_state = {};
 epaper_ui::ShutdownModalState s_shutdown_modal_state = {};
+epaper_ui::StorageModalState s_storage_modal_state = {};
 epaper_ui::SelectModalState s_select_modal_state = {};
 epaper_ui::ToastState s_toast_state = {};
 std::array<uint8_t, STICKY_EPD_BUFFER_LEN> s_underlay_snapshot = {};
@@ -284,6 +286,12 @@ void DrawCurrentOverlays(uint8_t* framebuffer)
                          kPortraitWidth,
                          kPortraitHeight,
                          s_toast_state);
+    epaper_ui::DrawStorageModal(framebuffer,
+                                STICKY_EPD_WIDTH,
+                                STICKY_EPD_HEIGHT,
+                                kPortraitWidth,
+                                kPortraitHeight,
+                                s_storage_modal_state);
     epaper_ui::DrawSelectModal(framebuffer,
                                STICKY_EPD_WIDTH,
                                STICKY_EPD_HEIGHT,
@@ -721,6 +729,17 @@ esp_err_t SetShutdownModalState(const epaper_ui::ShutdownModalState& state)
 
     std::lock_guard<std::mutex> lock(s_panel_mutex);
     s_shutdown_modal_state = state;
+    return ESP_OK;
+}
+
+esp_err_t SetStorageModalState(const epaper_ui::StorageModalState& state)
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    std::lock_guard<std::mutex> lock(s_panel_mutex);
+    s_storage_modal_state = state;
     return ESP_OK;
 }
 

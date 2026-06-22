@@ -14,6 +14,7 @@ enum class Owner : uint8_t {
 
 enum class Kind : uint8_t {
     kNone = 0,
+    kOverlayStorageModalAction,
     kOverlaySelectModalItem,
     kOverlayShutdownAction,
     kOverlayToastCloseAction,

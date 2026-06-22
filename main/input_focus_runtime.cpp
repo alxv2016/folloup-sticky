@@ -2,7 +2,6 @@
 
 #include <mutex>
 
-#include "feedback_service.h"
 #include "esp_log.h"
 #include "footer_runtime.h"
 #include "page_interaction_runtime.h"
@@ -97,7 +96,8 @@ app_interaction::InputResult HandleButtonEvent(const button_service::ButtonEvent
         app_interaction::InputResult result = {};
         result.consumed = true;
         if (overlay_runtime::MoveFocus(delta)) {
-            (void)feedback_service::Play(feedback_service::FeedbackEvent::kButtonClick);
+            result.play_feedback = true;
+            result.feedback_cue = app_interaction::FeedbackCue::kClick;
         }
         return result;
     }
@@ -119,6 +119,10 @@ app_interaction::InputResult HandleTouchEvent(const touch_service::TouchEventInf
     }
 
     if (!target_hit && !has_prior_touch_context) {
+        if (event.phase == touch_service::TouchPhase::kBegin) {
+            result.play_feedback = true;
+            result.feedback_cue = app_interaction::FeedbackCue::kTouchContact;
+        }
         if (event.count > 0) {
             ESP_LOGI(kTag,
                      "Touch miss phase=%d x=%u y=%u size=%u id=%u",
@@ -170,7 +174,8 @@ app_interaction::InputResult HandleTouchEvent(const touch_service::TouchEventInf
                 }
             }
             if (play_touch_feedback) {
-                (void)feedback_service::Play(feedback_service::FeedbackEvent::kTouchContact);
+                result.play_feedback = true;
+                result.feedback_cue = app_interaction::FeedbackCue::kTouchContact;
             }
             return result;
         }

@@ -489,6 +489,22 @@ The current app-wide touch lifecycle is:
 - touch-up with no armed target cancels activation without inventing a second
   selection state
 
+The current app-wide interaction feedback lifecycle is:
+
+- page, footer, overlay, and input-focus helpers may decide that an interaction
+  should produce product feedback, but they should emit only neutral
+  app-owned feedback cues
+- shared interaction contracts such as `main/app_interaction_result.h` should
+  use app-owned cue enums rather than depending on `feedback_service` or
+  `buzzer_service` types directly
+- retained overlay state may queue a pending neutral feedback cue when modal or
+  toast presentation changes, but it should not play buzzer feedback directly
+- `main/app_shell.cpp` is the single place that maps neutral app-owned feedback
+  cues onto `feedback_service` events and requests actual playback
+
+This keeps interaction ownership local while preventing buzzer policy from
+leaking into reusable runtime helpers or shared interaction contracts.
+
 ## Task Mapping
 
 App-owned FreeRTOS tasks use the shared mapping in
@@ -923,10 +939,17 @@ Current scope:
   patterns
 - keeps app-level feedback names separate from low-level tone/pattern names
 
-AppShell requests feedback events for button single-click, button double-click,
-non-power long-press-start, lock, unlock, touch contact, startup, and shutdown.
-It should not know about LEDC timer numbers, PWM duty values, GPIO setup, or
-exact buzzer pattern composition.
+`feedback_service` is intentionally an app-shell dependency, not a runtime-helper
+dependency. App-owned helpers under `main/` such as `overlay_runtime`,
+`input_focus_runtime`, `footer_runtime`, and future page runtimes should not
+call `feedback_service` directly. They should emit neutral app-owned feedback
+cues and let `app_shell` map those cues onto `feedback_service` events.
+
+`app_shell` may request feedback events for button single-click, button
+double-click, non-power long-press-start, lock, unlock, touch contact, modal
+open, startup, shutdown, and other product-level interaction outcomes. It
+should not know about LEDC timer numbers, PWM duty values, GPIO setup, or exact
+buzzer pattern composition.
 
 ### `components/sd_card`
 

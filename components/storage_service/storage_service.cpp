@@ -20,6 +20,7 @@
 #include "sd_card.h"
 #include "sticky_board.h"
 #include "sticky_board_config.h"
+#include "esp_timer.h"
 
 namespace storage_service {
 namespace {
@@ -34,6 +35,7 @@ constexpr size_t kMaxFiles = 5;
 constexpr size_t kMaxLoggedEntries = 5;
 constexpr uint32_t kWorkerTaskStackWords = 6144;
 constexpr UBaseType_t kQueueDepth = 4;
+constexpr TickType_t kFormatCheckpointUiDelay = pdMS_TO_TICKS(50);
 
 constexpr const char* kDefaultDirectories[] = {
     "recordings",
@@ -154,11 +156,67 @@ void RefreshSnapshotStorageLocked(SdCard& card)
 
 void SetOperationLocked(Operation operation,
                         OperationPhase phase,
-                        esp_err_t error = ESP_OK)
+                        esp_err_t error = ESP_OK,
+                        int progress_percent = 0)
 {
     s_snapshot.operation = operation;
     s_snapshot.phase = phase;
+    s_snapshot.progress_percent = std::clamp(progress_percent, 0, 100);
     s_snapshot.last_error = error;
+}
+
+void UpdateFormatProgressLocked(int progress_percent)
+{
+    if (s_snapshot.operation == Operation::kFormatSd &&
+        s_snapshot.phase == OperationPhase::kStarted) {
+        s_snapshot.progress_percent = std::clamp(progress_percent, 0, 100);
+    }
+}
+
+void CaptureNotificationLocked(Event* event, EventHandler* handler, void** context)
+{
+    if (event != nullptr) {
+        *event = BuildEventLocked();
+    }
+    if (handler != nullptr) {
+        *handler = s_event_handler;
+    }
+    if (context != nullptr) {
+        *context = s_event_context;
+    }
+}
+
+void NotifyFormatProgress(SdCard& card, int progress_percent)
+{
+    Event event = {};
+    EventHandler handler = nullptr;
+    void* context = nullptr;
+    {
+        std::lock_guard<std::mutex> card_lock(s_card_mutex);
+        std::lock_guard<std::mutex> state_lock(s_state_mutex);
+        UpdateFormatProgressLocked(progress_percent);
+        RefreshSnapshotStorageLocked(card);
+        CaptureNotificationLocked(&event, &handler, &context);
+    }
+    DispatchEvent(event, handler, context);
+}
+
+void LogFormatStep(const char* step, SdCard& card)
+{
+    ESP_LOGI(kTag,
+             "Format step: %s inserted=%d mounted=%d mode=%s phase=%s progress=%d",
+             step != nullptr ? step : "<null>",
+             card.IsCardInserted() ? 1 : 0,
+             card.IsMounted() ? 1 : 0,
+             ModeName(s_snapshot.mode),
+             OperationPhaseName(s_snapshot.phase),
+             s_snapshot.progress_percent);
+}
+
+void AllowUiCheckpoint(const char* step)
+{
+    ESP_LOGI(kTag, "Format step: allowing UI checkpoint after %s", step != nullptr ? step : "<null>");
+    vTaskDelay(kFormatCheckpointUiDelay);
 }
 
 bool EnsureDirectoryExists(const std::string& path)
@@ -325,10 +383,14 @@ void CompleteOperation(Operation operation,
     EventHandler handler = nullptr;
     void* context = nullptr;
     {
+        std::lock_guard<std::mutex> card_lock(s_card_mutex);
         std::lock_guard<std::mutex> state_lock(s_state_mutex);
         s_snapshot.mode = mode;
         RefreshSnapshotStorageLocked(card);
-        SetOperationLocked(operation, phase, error);
+        SetOperationLocked(operation,
+                           phase,
+                           error,
+                           phase == OperationPhase::kSucceeded ? 100 : s_snapshot.progress_percent);
         event = BuildEventLocked();
         handler = s_event_handler;
         context = s_event_context;
@@ -336,19 +398,18 @@ void CompleteOperation(Operation operation,
     DispatchEvent(event, handler, context);
 }
 
-void RefreshMountedSnapshotAndNotifyLocked(SdCard& card, esp_err_t error)
+void RefreshMountedSnapshotAndNotify(SdCard& card, esp_err_t error)
 {
     Event event = {};
     EventHandler handler = nullptr;
     void* context = nullptr;
     {
+        std::lock_guard<std::mutex> card_lock(s_card_mutex);
         std::lock_guard<std::mutex> state_lock(s_state_mutex);
         s_snapshot.mode = card.IsMounted() ? Mode::kAppMounted : Mode::kError;
         RefreshSnapshotStorageLocked(card);
         s_snapshot.last_error = error;
-        event = BuildEventLocked();
-        handler = s_event_handler;
-        context = s_event_context;
+        CaptureNotificationLocked(&event, &handler, &context);
     }
     DispatchEvent(event, handler, context);
 }
@@ -369,47 +430,126 @@ bool ShouldRetryMountedFilesystemOperation(esp_err_t err, const SdCard& card)
 void HandleFormatRequest()
 {
     WriteBusyGuard write_busy;
-    StorageBusGuard bus_guard;
     SdCard& card = Card();
-
+    const int64_t started_at_us = esp_timer_get_time();
     Event event = {};
     EventHandler handler = nullptr;
     void* context = nullptr;
     {
+        std::lock_guard<std::mutex> card_lock(s_card_mutex);
         std::lock_guard<std::mutex> state_lock(s_state_mutex);
         s_snapshot.mode = Mode::kFormatting;
-        SetOperationLocked(Operation::kFormatSd, OperationPhase::kStarted);
+        SetOperationLocked(Operation::kFormatSd, OperationPhase::kStarted, ESP_OK, 10);
         RefreshSnapshotStorageLocked(card);
-        event = BuildEventLocked();
-        handler = s_event_handler;
-        context = s_event_context;
+        LogFormatStep("publish_started_10", card);
+        CaptureNotificationLocked(&event, &handler, &context);
     }
     DispatchEvent(event, handler, context);
 
-    esp_err_t err = bus_guard.Acquire();
-    if (err != ESP_OK) {
-        ESP_LOGW(kTag, "Shared storage bus acquire failed: %s", esp_err_to_name(err));
-        CompleteOperation(Operation::kFormatSd, OperationPhase::kFailed,
-                          Mode::kError, err, card);
-        return;
-    }
+    esp_err_t err = ESP_OK;
 
     {
+        StorageBusGuard storage_bus;
+        err = storage_bus.Acquire();
+        if (err != ESP_OK) {
+            ESP_LOGW(kTag, "Shared storage bus acquire failed before mount: %s",
+                     esp_err_to_name(err));
+            CompleteOperation(Operation::kFormatSd, OperationPhase::kFailed,
+                              Mode::kError, err, card);
+            return;
+        }
         std::lock_guard<std::mutex> card_lock(s_card_mutex);
+        LogFormatStep("mount_before", card);
         err = MountCardLocked(card);
-        if (err == ESP_OK) {
-            err = card.Format();
+        ESP_LOGI(kTag,
+                 "Format step: mount_after err=%s inserted=%d mounted=%d elapsed_ms=%lld",
+                 esp_err_to_name(err),
+                 card.IsCardInserted() ? 1 : 0,
+                 card.IsMounted() ? 1 : 0,
+                 static_cast<long long>((esp_timer_get_time() - started_at_us) / 1000));
+    }
+    if (err == ESP_OK) {
+        NotifyFormatProgress(card, 25);
+        ESP_LOGI(kTag,
+                 "Format step: published progress=25 elapsed_ms=%lld",
+                 static_cast<long long>((esp_timer_get_time() - started_at_us) / 1000));
+        AllowUiCheckpoint("progress_25");
+    }
+
+    if (err == ESP_OK) {
+        StorageBusGuard storage_bus;
+        err = storage_bus.Acquire();
+        if (err != ESP_OK) {
+            ESP_LOGW(kTag, "Shared storage bus acquire failed before format: %s",
+                     esp_err_to_name(err));
         }
         if (err == ESP_OK) {
+            std::lock_guard<std::mutex> card_lock(s_card_mutex);
+            LogFormatStep("format_before", card);
+            err = card.Format();
+            ESP_LOGI(kTag,
+                     "Format step: format_after err=%s inserted=%d mounted=%d elapsed_ms=%lld",
+                     esp_err_to_name(err),
+                     card.IsCardInserted() ? 1 : 0,
+                     card.IsMounted() ? 1 : 0,
+                     static_cast<long long>((esp_timer_get_time() - started_at_us) / 1000));
+        }
+    }
+    if (err == ESP_OK) {
+        NotifyFormatProgress(card, 80);
+        ESP_LOGI(kTag,
+                 "Format step: published progress=80 elapsed_ms=%lld",
+                 static_cast<long long>((esp_timer_get_time() - started_at_us) / 1000));
+        AllowUiCheckpoint("progress_80");
+    }
+
+    if (err == ESP_OK) {
+        StorageBusGuard storage_bus;
+        err = storage_bus.Acquire();
+        if (err != ESP_OK) {
+            ESP_LOGW(kTag, "Shared storage bus acquire failed before set label: %s",
+                     esp_err_to_name(err));
+        }
+        if (err == ESP_OK) {
+            std::lock_guard<std::mutex> card_lock(s_card_mutex);
+            LogFormatStep("set_label_before", card);
             const esp_err_t label_err = card.SetVolumeLabel(kVolumeLabel);
             if (label_err == ESP_ERR_NOT_SUPPORTED) {
                 ESP_LOGW(kTag, "SD volume label skipped: FATFS label support disabled");
             } else {
                 err = label_err;
             }
+            ESP_LOGI(kTag,
+                     "Format step: set_label_after err=%s elapsed_ms=%lld",
+                     esp_err_to_name(err),
+                     static_cast<long long>((esp_timer_get_time() - started_at_us) / 1000));
         }
-        if (err == ESP_OK && !EnsureDefaultDirectories(card)) {
-            err = ESP_FAIL;
+    }
+    if (err == ESP_OK) {
+        NotifyFormatProgress(card, 90);
+        ESP_LOGI(kTag,
+                 "Format step: published progress=90 elapsed_ms=%lld",
+                 static_cast<long long>((esp_timer_get_time() - started_at_us) / 1000));
+        AllowUiCheckpoint("progress_90");
+    }
+
+    if (err == ESP_OK) {
+        StorageBusGuard storage_bus;
+        err = storage_bus.Acquire();
+        if (err != ESP_OK) {
+            ESP_LOGW(kTag, "Shared storage bus acquire failed before ensure dirs: %s",
+                     esp_err_to_name(err));
+        }
+        if (err == ESP_OK) {
+            std::lock_guard<std::mutex> card_lock(s_card_mutex);
+            LogFormatStep("ensure_dirs_before", card);
+            if (!EnsureDefaultDirectories(card)) {
+                err = ESP_FAIL;
+            }
+            ESP_LOGI(kTag,
+                     "Format step: ensure_dirs_after err=%s elapsed_ms=%lld",
+                     esp_err_to_name(err),
+                     static_cast<long long>((esp_timer_get_time() - started_at_us) / 1000));
         }
     }
 
@@ -603,33 +743,29 @@ esp_err_t RunWithMountedFilesystem(MountedFilesystemHandler handler, void* conte
     }
 
     WriteBusyGuard write_busy;
-    StorageBusGuard bus_guard;
-    const esp_err_t bus_err = bus_guard.Acquire();
-    if (bus_err != ESP_OK) {
-        return bus_err;
-    }
-
     SdCard& card = Card();
-    std::lock_guard<std::mutex> card_lock(s_card_mutex);
-
-    esp_err_t err = MountCardLocked(card);
-    if (err == ESP_OK) {
-        err = handler(card.mount_point().c_str(), context);
-        if (ShouldRetryMountedFilesystemOperation(err, card)) {
-            ESP_LOGW(kTag,
-                     "Mounted filesystem operation failed: %s; remounting SD and retrying once",
-                     esp_err_to_name(err));
-            card.Unmount();
-            err = MountCardLocked(card);
-            if (err == ESP_OK) {
-                err = handler(card.mount_point().c_str(), context);
-            } else {
-                ESP_LOGW(kTag, "SD remount before retry failed: %s", esp_err_to_name(err));
+    esp_err_t err = ESP_OK;
+    {
+        std::lock_guard<std::mutex> card_lock(s_card_mutex);
+        err = MountCardLocked(card);
+        if (err == ESP_OK) {
+            err = handler(card.mount_point().c_str(), context);
+            if (ShouldRetryMountedFilesystemOperation(err, card)) {
+                ESP_LOGW(kTag,
+                         "Mounted filesystem operation failed: %s; remounting SD and retrying once",
+                         esp_err_to_name(err));
+                card.Unmount();
+                err = MountCardLocked(card);
+                if (err == ESP_OK) {
+                    err = handler(card.mount_point().c_str(), context);
+                } else {
+                    ESP_LOGW(kTag, "SD remount before retry failed: %s", esp_err_to_name(err));
+                }
             }
         }
     }
 
-    RefreshMountedSnapshotAndNotifyLocked(card, err);
+    RefreshMountedSnapshotAndNotify(card, err);
     return err;
 }
 
@@ -646,7 +782,7 @@ esp_err_t RequestFormatSdCard()
         }
         s_snapshot.usb_detected = ReadUsbDetected();
         s_snapshot.mode = Mode::kFormatting;
-        SetOperationLocked(Operation::kFormatSd, OperationPhase::kStarted);
+        SetOperationLocked(Operation::kFormatSd, OperationPhase::kStarted, ESP_OK, 0);
         event = BuildEventLocked();
         handler = s_event_handler;
         context = s_event_context;

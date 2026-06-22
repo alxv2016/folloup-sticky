@@ -5,7 +5,6 @@
 #include <mutex>
 #include <string>
 
-#include "feedback_service.h"
 #include "esp_log.h"
 #include "gemini_service.h"
 #include "storage_service.h"
@@ -341,7 +340,6 @@ bool HandlePowerLongPressStart(const Context& context)
     s_snapshot.last_error_code.clear();
     s_snapshot.last_error_message.clear();
     NotifyLocked();
-    (void)feedback_service::Play(feedback_service::FeedbackEvent::kRecordingStart);
     return true;
 }
 

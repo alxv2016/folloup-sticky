@@ -15,6 +15,7 @@
 #include "esp_vfs_fat.h"
 #include "sdmmc_cmd.h"
 #include "sdkconfig.h"
+#include "esp_timer.h"
 
 namespace {
 
@@ -216,16 +217,40 @@ esp_err_t SdCard::Format()
         return ESP_ERR_INVALID_STATE;
     }
 
+    const int64_t started_at_us = esp_timer_get_time();
     sdmmc_card_t* formatted_card = card_;
+    ESP_LOGI(kTag,
+             "Format begin: mount_point=%s card=%p inserted=%d mounted=%d",
+             mount_point_.c_str(),
+             static_cast<void*>(formatted_card),
+             IsCardInserted() ? 1 : 0,
+             IsMounted() ? 1 : 0);
     esp_err_t err = esp_vfs_fat_sdcard_format(mount_point_.c_str(), formatted_card);
+    ESP_LOGI(kTag,
+             "Format FAT call returned: err=%s elapsed_ms=%lld",
+             esp_err_to_name(err),
+             static_cast<long long>((esp_timer_get_time() - started_at_us) / 1000));
     if (err != ESP_OK) {
         ESP_LOGW(kTag, "failed to format SD card at %s: %s", mount_point_.c_str(),
                  esp_err_to_name(err));
         return err;
     }
 
+    ESP_LOGI(kTag, "Format step: unmount after FAT format");
     Unmount();
+    ESP_LOGI(kTag,
+             "Format step: unmount complete inserted=%d mounted=%d elapsed_ms=%lld",
+             IsCardInserted() ? 1 : 0,
+             IsMounted() ? 1 : 0,
+             static_cast<long long>((esp_timer_get_time() - started_at_us) / 1000));
+    ESP_LOGI(kTag, "Format step: remount after FAT format");
     err = Mount(false, last_allocation_unit_size_, last_max_files_, true);
+    ESP_LOGI(kTag,
+             "Format step: remount complete err=%s inserted=%d mounted=%d elapsed_ms=%lld",
+             esp_err_to_name(err),
+             IsCardInserted() ? 1 : 0,
+             IsMounted() ? 1 : 0,
+             static_cast<long long>((esp_timer_get_time() - started_at_us) / 1000));
     if (err != ESP_OK) {
         ESP_LOGW(kTag, "failed to remount SD card after format at %s: %s",
                  mount_point_.c_str(), esp_err_to_name(err));
