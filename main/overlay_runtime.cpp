@@ -22,11 +22,14 @@ bool s_initialized = false;
 epaper_ui::ShutdownModalState s_shutdown_modal_state = {};
 epaper_ui::StorageModalState s_storage_modal_state = {};
 epaper_ui::SelectModalState s_select_modal_state = {};
+epaper_ui::KeyboardState s_keyboard_state = {};
 epaper_ui::ToastState s_toast_state = {};
 page_navigation::RovingFocus s_shutdown_modal_focus = {};
 page_navigation::RovingFocus s_storage_modal_focus = {};
 page_navigation::RovingFocus s_select_modal_focus = {};
 bool s_shutdown_request_in_progress = false;
+KeyboardEventHandler s_keyboard_event_handler = nullptr;
+void* s_keyboard_event_context = nullptr;
 esp_timer_handle_t s_toast_timer = nullptr;
 uint32_t s_toast_generation = 0;
 int32_t s_overlay_interaction_generation = 1;
@@ -105,6 +108,16 @@ app_interaction::InteractiveTarget MakeToastCloseTarget(int32_t generation)
     };
 }
 
+app_interaction::InteractiveTarget MakeKeyboardKeyTarget(int index, int32_t generation)
+{
+    return {
+        .owner = app_interaction::Owner::kOverlay,
+        .kind = app_interaction::Kind::kOverlayKeyboardKey,
+        .primary_index = index,
+        .secondary_index = generation,
+    };
+}
+
 void SyncShutdownModalStateFromFocusLocked()
 {
     s_shutdown_modal_state.selected_action =
@@ -147,6 +160,7 @@ struct OverlayRefreshSnapshot {
     bool shutdown_visible = false;
     bool storage_visible = false;
     bool select_visible = false;
+    bool keyboard_visible = false;
     bool toast_visible = false;
     epaper_ui::UiRect bounds = {};
 };
@@ -192,6 +206,7 @@ OverlayRefreshSnapshot CaptureOverlayRefreshSnapshotLocked()
     snapshot.shutdown_visible = s_shutdown_modal_state.visible;
     snapshot.storage_visible = s_storage_modal_state.visible;
     snapshot.select_visible = s_select_modal_state.visible;
+    snapshot.keyboard_visible = s_keyboard_state.visible;
     snapshot.toast_visible = s_toast_state.visible;
 
     if (snapshot.toast_visible) {
@@ -199,6 +214,13 @@ OverlayRefreshSnapshot CaptureOverlayRefreshSnapshotLocked()
             snapshot.bounds,
             ShadowedRect(epaper_ui::ToastPanelBounds(portrait_width, portrait_height, s_toast_state),
                          design::toast::kShadowOffset));
+    }
+    if (snapshot.keyboard_visible) {
+        snapshot.bounds = UnionRect(
+            snapshot.bounds,
+            ShadowedRect(
+                epaper_ui::KeyboardPanelBounds(portrait_width, portrait_height, s_keyboard_state, {}),
+                design::modal::kShadowOffset));
     }
     if (snapshot.storage_visible) {
         snapshot.bounds = UnionRect(
@@ -232,6 +254,7 @@ display_service::OverlayRefreshPolicy DetermineOverlayRefreshPolicy(
     const bool visibility_changed = before.shutdown_visible != after.shutdown_visible ||
                                     before.storage_visible != after.storage_visible ||
                                     before.select_visible != after.select_visible ||
+                                    before.keyboard_visible != after.keyboard_visible ||
                                     before.toast_visible != after.toast_visible;
     if (visibility_changed || !RectEquals(before.bounds, after.bounds)) {
         return display_service::OverlayRefreshPolicy::kRebuildUnderlay;
@@ -350,6 +373,7 @@ bool IsCurrentOverlayTargetLocked(const app_interaction::InteractiveTarget& targ
 esp_err_t ApplyOverlayState(const epaper_ui::ShutdownModalState& shutdown_modal_state,
                             const epaper_ui::StorageModalState& storage_modal_state,
                             const epaper_ui::SelectModalState& select_modal_state,
+                            const epaper_ui::KeyboardState& keyboard_state,
                             const epaper_ui::ToastState& toast_state)
 {
     ESP_RETURN_ON_ERROR(display_service::SetShutdownModalState(shutdown_modal_state),
@@ -361,6 +385,9 @@ esp_err_t ApplyOverlayState(const epaper_ui::ShutdownModalState& shutdown_modal_
     ESP_RETURN_ON_ERROR(display_service::SetSelectModalState(select_modal_state),
                         kTag,
                         "set select modal state failed");
+    ESP_RETURN_ON_ERROR(display_service::SetKeyboardState(keyboard_state),
+                        kTag,
+                        "set keyboard state failed");
     ESP_RETURN_ON_ERROR(display_service::SetToastState(toast_state),
                         kTag,
                         "set toast state failed");
@@ -381,6 +408,7 @@ esp_err_t SyncOverlayState(
     epaper_ui::ShutdownModalState shutdown_modal_state = {};
     epaper_ui::StorageModalState storage_modal_state = {};
     epaper_ui::SelectModalState select_modal_state = {};
+    epaper_ui::KeyboardState keyboard_state = {};
     epaper_ui::ToastState toast_state = {};
     {
         std::lock_guard<std::mutex> lock(s_state_mutex);
@@ -390,12 +418,14 @@ esp_err_t SyncOverlayState(
         shutdown_modal_state = s_shutdown_modal_state;
         storage_modal_state = s_storage_modal_state;
         select_modal_state = s_select_modal_state;
+        keyboard_state = s_keyboard_state;
         toast_state = s_toast_state;
     }
 
     return ApplyOverlayState(shutdown_modal_state,
                              storage_modal_state,
                              select_modal_state,
+                             keyboard_state,
                              toast_state);
 }
 
@@ -440,6 +470,7 @@ esp_err_t Init()
         s_shutdown_modal_state = {};
         s_storage_modal_state = {};
         s_select_modal_state = {};
+        s_keyboard_state = {};
         s_toast_state = {};
         s_overlay_interaction_generation = 1;
         s_feedback_pending = false;
@@ -447,6 +478,8 @@ esp_err_t Init()
         s_shutdown_modal_focus.Configure(0);
         s_storage_modal_focus.Configure(0);
         s_select_modal_focus.Configure(0);
+        s_keyboard_event_handler = nullptr;
+        s_keyboard_event_context = nullptr;
         s_shutdown_request_in_progress = false;
         if (s_toast_timer == nullptr) {
             esp_timer_create_args_t timer_args = {};
@@ -478,11 +511,18 @@ bool IsStorageModalVisible()
     return s_storage_modal_state.visible;
 }
 
+bool IsKeyboardVisible()
+{
+    std::lock_guard<std::mutex> lock(s_state_mutex);
+    return s_keyboard_state.visible;
+}
+
 bool IsShutdownPending()
 {
     std::lock_guard<std::mutex> lock(s_state_mutex);
     return s_shutdown_modal_state.visible || s_shutdown_request_in_progress ||
-           s_storage_modal_state.visible || s_select_modal_state.visible;
+           s_storage_modal_state.visible || s_select_modal_state.visible ||
+           s_keyboard_state.visible;
 }
 
 bool IsInputCaptured()
@@ -490,6 +530,7 @@ bool IsInputCaptured()
     std::lock_guard<std::mutex> lock(s_state_mutex);
     return s_shutdown_modal_state.visible || s_shutdown_request_in_progress ||
            s_storage_modal_state.visible || s_select_modal_state.visible ||
+           s_keyboard_state.visible ||
            (s_toast_state.visible && s_toast_state.show_close_button);
 }
 
@@ -508,9 +549,11 @@ bool ResolveTouchTarget(int x, int y, app_interaction::InteractiveTarget* target
     epaper_ui::SelectModalState select_modal_state = {};
     epaper_ui::StorageModalState storage_modal_state = {};
     epaper_ui::ToastState toast_state = {};
+    epaper_ui::KeyboardState keyboard_state = {};
     bool shutdown_visible = false;
     bool storage_visible = false;
     bool select_visible = false;
+    bool keyboard_visible = false;
     bool toast_visible = false;
     int32_t generation = 0;
     {
@@ -521,10 +564,13 @@ bool ResolveTouchTarget(int x, int y, app_interaction::InteractiveTarget* target
         shutdown_visible = s_shutdown_modal_state.visible;
         storage_visible = s_storage_modal_state.visible && !s_shutdown_modal_state.visible;
         select_visible = s_select_modal_state.visible && !s_shutdown_modal_state.visible;
+        keyboard_visible = s_keyboard_state.visible && !s_shutdown_modal_state.visible &&
+                           !storage_visible && !select_visible;
         if (storage_visible) {
             select_visible = false;
         }
         storage_modal_state = s_storage_modal_state;
+        keyboard_state = s_keyboard_state;
         toast_visible = s_toast_state.visible;
         select_modal_state = s_select_modal_state;
         toast_state = s_toast_state;
@@ -554,6 +600,24 @@ bool ResolveTouchTarget(int x, int y, app_interaction::InteractiveTarget* target
                 portrait_width, portrait_height, select_modal_state, x, y, &selected_index)) {
             if (target != nullptr) {
                 *target = MakeSelectModalItemTarget(selected_index, generation);
+            }
+            return true;
+        }
+        return false;
+    }
+
+    if (keyboard_visible) {
+        int flat_key_index = -1;
+        if (epaper_ui::HitTestKeyboardKey(portrait_width,
+                                          portrait_height,
+                                          keyboard_state,
+                                          {},
+                                          x,
+                                          y,
+                                          &flat_key_index) &&
+            flat_key_index >= 0) {
+            if (target != nullptr) {
+                *target = MakeKeyboardKeyTarget(flat_key_index, generation);
             }
             return true;
         }
@@ -655,6 +719,17 @@ bool FocusTouchTarget(const app_interaction::InteractiveTarget& target)
                 s_toast_state.close_button_focused = true;
                 changed = true;
                 break;
+            case app_interaction::Kind::kOverlayKeyboardKey:
+                if (!s_keyboard_state.visible ||
+                    target.primary_index < 0 ||
+                    target.primary_index >=
+                        static_cast<int32_t>(epaper_ui::KeyboardKeyCount(s_keyboard_state.layout)) ||
+                    s_keyboard_state.selected_key_index == target.primary_index) {
+                    return false;
+                }
+                s_keyboard_state.selected_key_index = target.primary_index;
+                changed = true;
+                break;
             case app_interaction::Kind::kNone:
             case app_interaction::Kind::kFooterItem:
             case app_interaction::Kind::kPageAction:
@@ -692,6 +767,10 @@ app_interaction::InputResult ActivateTouchTarget(const app_interaction::Interact
     bool play_click = false;
     display_service::OverlayRefreshPolicy refresh_policy =
         display_service::OverlayRefreshPolicy::kRebuildUnderlay;
+    KeyboardEventHandler keyboard_handler = nullptr;
+    void* keyboard_context = nullptr;
+    epaper_ui::KeyboardState keyboard_callback_state = {};
+    epaper_ui::KeyboardIntent keyboard_intent = epaper_ui::KeyboardIntent::kNone;
 
     {
         std::lock_guard<std::mutex> lock(s_state_mutex);
@@ -785,6 +864,31 @@ app_interaction::InputResult ActivateTouchTarget(const app_interaction::Interact
                 request_refresh = true;
                 play_click = true;
                 break;
+            case app_interaction::Kind::kOverlayKeyboardKey: {
+                if (!s_keyboard_state.visible ||
+                    target.primary_index < 0 ||
+                    target.primary_index >=
+                        static_cast<int32_t>(epaper_ui::KeyboardKeyCount(s_keyboard_state.layout))) {
+                    return result;
+                }
+                s_keyboard_state.selected_key_index = target.primary_index;
+                const epaper_ui::KeyboardActionResult action =
+                    epaper_ui::KeyboardController::ActivateFocusedKey(s_keyboard_state, false);
+                keyboard_callback_state = s_keyboard_state;
+                keyboard_intent = action.intent;
+                keyboard_handler = s_keyboard_event_handler;
+                keyboard_context = s_keyboard_event_context;
+                if (action.intent != epaper_ui::KeyboardIntent::kNone) {
+                    s_keyboard_state = {};
+                    s_keyboard_event_handler = nullptr;
+                    s_keyboard_event_context = nullptr;
+                }
+                result.consumed = true;
+                request_refresh = action.text_changed || action.state_changed ||
+                                  action.intent != epaper_ui::KeyboardIntent::kNone;
+                play_click = true;
+                break;
+            }
             case app_interaction::Kind::kNone:
             case app_interaction::Kind::kFooterItem:
             case app_interaction::Kind::kPageAction:
@@ -816,6 +920,11 @@ app_interaction::InputResult ActivateTouchTarget(const app_interaction::Interact
     } else if (result.consumed &&
                target.kind == app_interaction::Kind::kOverlayToastCloseAction) {
         ESP_LOGI(kTag, "Toast close activated by touch");
+    } else if (result.consumed &&
+               target.kind == app_interaction::Kind::kOverlayKeyboardKey) {
+        ESP_LOGI(kTag, "Keyboard key activated: index=%ld intent=%d",
+                 static_cast<long>(target.primary_index),
+                 static_cast<int>(keyboard_intent));
     }
 
     if (request_refresh) {
@@ -824,6 +933,9 @@ app_interaction::InputResult ActivateTouchTarget(const app_interaction::Interact
             ESP_LOGW(kTag, "Overlay refresh after touch activate failed: %s",
                      esp_err_to_name(err));
         }
+    }
+    if (keyboard_handler != nullptr) {
+        keyboard_handler(keyboard_callback_state, keyboard_intent, keyboard_context);
     }
     return result;
 }
@@ -1180,6 +1292,94 @@ esp_err_t DismissSelectModal()
     return SyncOverlayState(true, refresh_policy);
 }
 
+esp_err_t ShowKeyboard(const epaper_ui::KeyboardState& state,
+                       KeyboardEventHandler handler,
+                       void* context)
+{
+    bool changed = false;
+    display_service::OverlayRefreshPolicy refresh_policy =
+        display_service::OverlayRefreshPolicy::kRebuildUnderlay;
+    {
+        std::lock_guard<std::mutex> lock(s_state_mutex);
+        if (!s_initialized) {
+            return ESP_ERR_INVALID_STATE;
+        }
+        const OverlayRefreshSnapshot before = CaptureOverlayRefreshSnapshotLocked();
+        s_keyboard_state = state;
+        s_keyboard_state.visible = true;
+        epaper_ui::KeyboardController::ClampSelection(s_keyboard_state);
+        s_keyboard_event_handler = handler;
+        s_keyboard_event_context = context;
+        AdvanceOverlayInteractionGenerationLocked();
+        refresh_policy =
+            DetermineOverlayRefreshPolicy(before, CaptureOverlayRefreshSnapshotLocked());
+        changed = true;
+        QueuePendingFeedbackLocked(app_interaction::FeedbackCue::kModalOpen);
+    }
+
+    if (!changed) {
+        return ESP_OK;
+    }
+
+    ESP_LOGI(kTag, "Keyboard overlay shown");
+    return SyncOverlayState(true, refresh_policy);
+}
+
+esp_err_t UpdateKeyboardState(const epaper_ui::KeyboardState& state)
+{
+    bool changed = false;
+    display_service::OverlayRefreshPolicy refresh_policy =
+        display_service::OverlayRefreshPolicy::kReuseUnderlaySnapshot;
+    {
+        std::lock_guard<std::mutex> lock(s_state_mutex);
+        if (!s_initialized) {
+            return ESP_ERR_INVALID_STATE;
+        }
+        const OverlayRefreshSnapshot before = CaptureOverlayRefreshSnapshotLocked();
+        s_keyboard_state = state;
+        epaper_ui::KeyboardController::ClampSelection(s_keyboard_state);
+        refresh_policy =
+            DetermineOverlayRefreshPolicy(before, CaptureOverlayRefreshSnapshotLocked());
+        changed = true;
+    }
+
+    if (!changed) {
+        return ESP_OK;
+    }
+
+    return SyncOverlayState(true, refresh_policy);
+}
+
+esp_err_t DismissKeyboard()
+{
+    bool changed = false;
+    display_service::OverlayRefreshPolicy refresh_policy =
+        display_service::OverlayRefreshPolicy::kRebuildUnderlay;
+    {
+        std::lock_guard<std::mutex> lock(s_state_mutex);
+        if (!s_initialized) {
+            return ESP_ERR_INVALID_STATE;
+        }
+        const OverlayRefreshSnapshot before = CaptureOverlayRefreshSnapshotLocked();
+        if (s_keyboard_state.visible) {
+            s_keyboard_state = {};
+            s_keyboard_event_handler = nullptr;
+            s_keyboard_event_context = nullptr;
+            AdvanceOverlayInteractionGenerationLocked();
+            refresh_policy =
+                DetermineOverlayRefreshPolicy(before, CaptureOverlayRefreshSnapshotLocked());
+            changed = true;
+        }
+    }
+
+    if (!changed) {
+        return ESP_OK;
+    }
+
+    ESP_LOGI(kTag, "Keyboard overlay dismissed");
+    return SyncOverlayState(true, refresh_policy);
+}
+
 bool MoveFocus(int delta)
 {
     if (delta == 0) {
@@ -1196,7 +1396,14 @@ bool MoveFocus(int delta)
         }
 
         const OverlayRefreshSnapshot before = CaptureOverlayRefreshSnapshotLocked();
-        if (s_storage_modal_state.visible && !s_shutdown_modal_state.visible) {
+        if (s_keyboard_state.visible && !s_shutdown_modal_state.visible &&
+            !s_storage_modal_state.visible && !s_select_modal_state.visible) {
+            if (epaper_ui::KeyboardController::MoveFocus(s_keyboard_state, delta > 0 ? 1 : -1)) {
+                refresh_policy =
+                    DetermineOverlayRefreshPolicy(before, CaptureOverlayRefreshSnapshotLocked());
+                changed = true;
+            }
+        } else if (s_storage_modal_state.visible && !s_shutdown_modal_state.visible) {
             if (s_storage_modal_focus.item_count() <= 0) {
                 return false;
             }
@@ -1270,6 +1477,10 @@ app_interaction::InputResult HandleButtonEvent(const button_service::ButtonEvent
     bool dismiss_select_modal = false;
     display_service::OverlayRefreshPolicy refresh_policy =
         display_service::OverlayRefreshPolicy::kRebuildUnderlay;
+    KeyboardEventHandler keyboard_handler = nullptr;
+    void* keyboard_context = nullptr;
+    epaper_ui::KeyboardState keyboard_callback_state = {};
+    epaper_ui::KeyboardIntent keyboard_callback_intent = epaper_ui::KeyboardIntent::kNone;
 
     {
         std::lock_guard<std::mutex> lock(s_state_mutex);
@@ -1281,33 +1492,46 @@ app_interaction::InputResult HandleButtonEvent(const button_service::ButtonEvent
             return result;
         }
         if (!s_shutdown_modal_state.visible && !s_storage_modal_state.visible &&
-            !s_select_modal_state.visible) {
+            !s_select_modal_state.visible && !s_keyboard_state.visible) {
             return result;
         }
 
         const OverlayRefreshSnapshot before = CaptureOverlayRefreshSnapshotLocked();
+        if (s_keyboard_state.visible && !s_shutdown_modal_state.visible &&
+            !s_storage_modal_state.visible && !s_select_modal_state.visible) {
+            result.consumed = true;
+            keyboard_handler = s_keyboard_event_handler;
+            keyboard_context = s_keyboard_event_context;
+            switch (event.event) {
+                case button_service::ButtonEvent::kSingleClick:
+                    if (event.button == button_service::ButtonId::kPowerOk) {
+                        const epaper_ui::KeyboardActionResult action =
+                            epaper_ui::KeyboardController::ActivateFocusedKey(s_keyboard_state, false);
+                        keyboard_callback_state = s_keyboard_state;
+                        keyboard_callback_intent = action.intent;
+                        if (action.intent != epaper_ui::KeyboardIntent::kNone) {
+                            s_keyboard_state = {};
+                            s_keyboard_event_handler = nullptr;
+                            s_keyboard_event_context = nullptr;
+                        }
+                        request_refresh = action.text_changed || action.state_changed ||
+                                          action.intent != epaper_ui::KeyboardIntent::kNone;
+                        play_click = true;
+                    }
+                    break;
+                default:
+                    break;
+            }
+            refresh_policy =
+                DetermineOverlayRefreshPolicy(before, CaptureOverlayRefreshSnapshotLocked());
+            goto done_locked;
+        }
+
         if (s_storage_modal_state.visible && !s_shutdown_modal_state.visible) {
             result.consumed = true;
             switch (event.event) {
                 case button_service::ButtonEvent::kSingleClick:
                     if (event.button == button_service::ButtonId::kPowerOk &&
-                        StorageModalActionCountLocked() > 0) {
-                        const bool confirmed =
-                            s_storage_modal_state.kind ==
-                                epaper_ui::StorageModalKind::kConfirmFormat &&
-                            s_storage_modal_state.selected_action_index == 1;
-                        result.request_format_sd_card = confirmed;
-                        s_storage_modal_state = {};
-                        s_storage_modal_focus.Configure(0);
-                        AdvanceOverlayInteractionGenerationLocked();
-                        request_refresh = true;
-                        play_click = true;
-                        refresh_policy = DetermineOverlayRefreshPolicy(
-                            before, CaptureOverlayRefreshSnapshotLocked());
-                    }
-                    break;
-                case button_service::ButtonEvent::kDoubleClick:
-                    if (event.button == button_service::ButtonId::kDown &&
                         StorageModalActionCountLocked() > 0) {
                         const bool confirmed =
                             s_storage_modal_state.kind ==
@@ -1346,21 +1570,6 @@ app_interaction::InputResult HandleButtonEvent(const button_service::ButtonEvent
                             before, CaptureOverlayRefreshSnapshotLocked());
                     }
                     break;
-                case button_service::ButtonEvent::kDoubleClick:
-                    if (event.button == button_service::ButtonId::kDown &&
-                        s_select_modal_focus.item_count() > 0) {
-                        result.select_modal_submitted = true;
-                        result.select_modal_selected_index = CurrentSelectModalIndexLocked();
-                        s_select_modal_state = {};
-                        s_select_modal_focus.Configure(0);
-                        AdvanceOverlayInteractionGenerationLocked();
-                        request_refresh = true;
-                        play_click = true;
-                        dismiss_select_modal = true;
-                        refresh_policy = DetermineOverlayRefreshPolicy(
-                            before, CaptureOverlayRefreshSnapshotLocked());
-                    }
-                    break;
                 default:
                     break;
             }
@@ -1370,9 +1579,7 @@ app_interaction::InputResult HandleButtonEvent(const button_service::ButtonEvent
         result.consumed = true;
         switch (event.event) {
             case button_service::ButtonEvent::kSingleClick:
-                break;
-            case button_service::ButtonEvent::kDoubleClick:
-                if (event.button == button_service::ButtonId::kDown) {
+                if (event.button == button_service::ButtonId::kPowerOk) {
                     if (s_shutdown_modal_state.selected_action ==
                         epaper_ui::ShutdownModalAction::kConfirm) {
                         s_shutdown_request_in_progress = true;
@@ -1391,6 +1598,7 @@ app_interaction::InputResult HandleButtonEvent(const button_service::ButtonEvent
                         before, CaptureOverlayRefreshSnapshotLocked());
                 }
                 break;
+            case button_service::ButtonEvent::kDoubleClick:
             case button_service::ButtonEvent::kPressDown:
             case button_service::ButtonEvent::kPressUp:
             case button_service::ButtonEvent::kLongPressStart:
@@ -1419,11 +1627,18 @@ done_locked:
     if (dismiss_select_modal) {
         ESP_LOGI(kTag, "Select modal submitted: index=%d", result.select_modal_selected_index);
     }
+    if (keyboard_handler != nullptr &&
+        (request_refresh || keyboard_callback_intent != epaper_ui::KeyboardIntent::kNone)) {
+        ESP_LOGI(kTag, "Keyboard button action intent=%d", static_cast<int>(keyboard_callback_intent));
+    }
     if (request_refresh) {
         const esp_err_t err = SyncOverlayState(true, refresh_policy);
         if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
             ESP_LOGW(kTag, "Overlay refresh after button failed: %s", esp_err_to_name(err));
         }
+    }
+    if (keyboard_handler != nullptr) {
+        keyboard_handler(keyboard_callback_state, keyboard_callback_intent, keyboard_context);
     }
     return result;
 }

@@ -1,14 +1,12 @@
 #include "settings_page_runtime.h"
 
-#include <algorithm>
 #include <climits>
-#include <cstdio>
 #include <mutex>
-#include <string>
-#include <string_view>
 
-#include "epaper_ui/settings_page.h"
 #include "esp_log.h"
+#include "page_navigation/navigation_model.h"
+#include "page_navigation/page_focus_projection.h"
+#include "settings_page_coordinator.h"
 #include "storage_service.h"
 #include "ui_refresh_runtime.h"
 #include "wifi_service.h"
@@ -17,144 +15,87 @@ namespace settings_page_runtime {
 namespace {
 
 constexpr const char* kTag = "SettingsPageRuntime";
-constexpr FocusItem kFocusOrder[] = {
-    FocusItem::kWifiToggle,
-    FocusItem::kAccessPointToggle,
-    FocusItem::kFormatSdButton,
-    FocusItem::kFooterSettings,
-    FocusItem::kFooterHome,
-};
 
 std::mutex s_mutex;
-FocusItem s_focused_item = FocusItem::kNone;
+SettingsPageCoordinator s_coordinator = {};
 int32_t s_interaction_generation = 1;
 ActionHandler s_action_handler = nullptr;
 void* s_action_context = nullptr;
+RefreshHandler s_refresh_handler = nullptr;
+void* s_refresh_context = nullptr;
 
-std::string FormatStorageBytes(uint64_t bytes)
+void AdvanceInteractionGenerationLocked()
 {
-    constexpr uint64_t kKilobyte = 1024ULL;
-    constexpr uint64_t kMegabyte = 1024ULL * kKilobyte;
-    constexpr uint64_t kGigabyte = 1024ULL * kMegabyte;
-
-    char buffer[32] = {};
-    if (bytes >= kGigabyte) {
-        std::snprintf(buffer,
-                      sizeof(buffer),
-                      "%.1f GB free",
-                      static_cast<double>(bytes) / static_cast<double>(kGigabyte));
-    } else if (bytes >= kMegabyte) {
-        std::snprintf(buffer,
-                      sizeof(buffer),
-                      "%.1f MB free",
-                      static_cast<double>(bytes) / static_cast<double>(kMegabyte));
-    } else if (bytes >= kKilobyte) {
-        std::snprintf(buffer,
-                      sizeof(buffer),
-                      "%.1f KB free",
-                      static_cast<double>(bytes) / static_cast<double>(kKilobyte));
+    if (s_interaction_generation == INT32_MAX) {
+        s_interaction_generation = 1;
     } else {
-        std::snprintf(buffer,
-                      sizeof(buffer),
-                      "%llu B free",
-                      static_cast<unsigned long long>(bytes));
-    }
-    return std::string(buffer);
-}
-
-FocusItem FocusItemFromTargetIndex(int32_t index)
-{
-    switch (static_cast<FocusItem>(index)) {
-        case FocusItem::kWifiToggle:
-        case FocusItem::kAccessPointToggle:
-        case FocusItem::kFormatSdButton:
-        case FocusItem::kFooterSettings:
-        case FocusItem::kFooterHome:
-            return static_cast<FocusItem>(index);
-        case FocusItem::kNone:
-        default:
-            return FocusItem::kNone;
+        ++s_interaction_generation;
     }
 }
 
-FocusItem FocusItemFromUiItem(epaper_ui::SettingsPageItemId item)
+footer_runtime::FooterFocusItem FooterItemForSelectedIndex(int selected_index)
 {
-    switch (item) {
-        case epaper_ui::SettingsPageItemId::kWifiToggle:
-            return FocusItem::kWifiToggle;
-        case epaper_ui::SettingsPageItemId::kAccessPointToggle:
-            return FocusItem::kAccessPointToggle;
-        case epaper_ui::SettingsPageItemId::kFormatSdButton:
-            return FocusItem::kFormatSdButton;
-        case epaper_ui::SettingsPageItemId::kNone:
-        default:
-            return FocusItem::kNone;
-    }
-}
-
-footer_runtime::FooterFocusItem FooterItemForFocusItem(FocusItem item)
-{
-    switch (item) {
-        case FocusItem::kFooterSettings:
+    switch (selected_index) {
+        case 1:
             return footer_runtime::FooterFocusItem::kSettings;
-        case FocusItem::kFooterHome:
+        case 2:
+            return footer_runtime::FooterFocusItem::kWifi;
+        case 0:
             return footer_runtime::FooterFocusItem::kHome;
-        case FocusItem::kWifiToggle:
-        case FocusItem::kAccessPointToggle:
-        case FocusItem::kFormatSdButton:
-        case FocusItem::kNone:
         default:
             return footer_runtime::FooterFocusItem::kNone;
     }
 }
 
-FocusItem FocusItemFromFooterItem(footer_runtime::FooterFocusItem item)
+page_navigation::NavigationItemRole FooterRoleForFooterItem(footer_runtime::FooterFocusItem item)
 {
     switch (item) {
         case footer_runtime::FooterFocusItem::kSettings:
-            return FocusItem::kFooterSettings;
-        case footer_runtime::FooterFocusItem::kHome:
-            return FocusItem::kFooterHome;
+            return page_navigation::NavigationItemRole::kFooterSettings;
         case footer_runtime::FooterFocusItem::kWifi:
+            return page_navigation::NavigationItemRole::kFooterWifi;
+        case footer_runtime::FooterFocusItem::kHome:
+            return page_navigation::NavigationItemRole::kFooterHome;
+        case footer_runtime::FooterFocusItem::kNone:
         case footer_runtime::FooterFocusItem::kTime:
         case footer_runtime::FooterFocusItem::kFolder:
         case footer_runtime::FooterFocusItem::kMic:
-        case footer_runtime::FooterFocusItem::kNone:
         default:
-            return FocusItem::kNone;
+            return page_navigation::NavigationItemRole::kUnknown;
+    }
+}
+
+page_navigation::NavigationItemRole RoleForUiItem(epaper_ui::SettingsPageItemId item)
+{
+    switch (item) {
+        case epaper_ui::SettingsPageItemId::kWifiToggle:
+            return page_navigation::NavigationItemRole::kSettingsWifiToggle;
+        case epaper_ui::SettingsPageItemId::kAccessPointToggle:
+            return page_navigation::NavigationItemRole::kSettingsEnableApToggle;
+        case epaper_ui::SettingsPageItemId::kFormatSdButton:
+            return page_navigation::NavigationItemRole::kSettingsFormatSdButton;
+        case epaper_ui::SettingsPageItemId::kNone:
+        default:
+            return page_navigation::NavigationItemRole::kUnknown;
     }
 }
 
 footer_runtime::ProjectionState BuildFooterProjectionStateLocked()
 {
-    footer_runtime::ProjectionState projection = {};
-    projection.focused_item = FooterItemForFocusItem(s_focused_item);
-    return projection;
+    const page_navigation::PageFocusProjection projection =
+        page_navigation::ProjectPageFocus(s_coordinator.navigation_model(),
+                                          page_navigation::NavigationItemSection::kSettingsPageMenu,
+                                          s_coordinator.focus().index(),
+                                          -1,
+                                          -1);
+    footer_runtime::ProjectionState state = {};
+    state.focused_item = FooterItemForSelectedIndex(projection.footer_selected_index);
+    return state;
 }
 
-int FocusOrderIndex(FocusItem item)
+epaper_ui::SettingsPageState BuildStateLocked()
 {
-    constexpr int kFocusCount = static_cast<int>(sizeof(kFocusOrder) / sizeof(kFocusOrder[0]));
-    for (int index = 0; index < kFocusCount; ++index) {
-        if (kFocusOrder[index] == item) {
-            return index;
-        }
-    }
-    return -1;
-}
-
-int WrapFocusIndex(int index)
-{
-    constexpr int kFocusCount = static_cast<int>(sizeof(kFocusOrder) / sizeof(kFocusOrder[0]));
-    if (kFocusCount <= 0) {
-        return -1;
-    }
-
-    int wrapped = index % kFocusCount;
-    if (wrapped < 0) {
-        wrapped += kFocusCount;
-    }
-    return wrapped;
+    return s_coordinator.BuildState(wifi_service::GetUiState(), storage_service::GetSnapshot());
 }
 
 esp_err_t SyncFocusUi(display_service::RefreshMode refresh_mode)
@@ -176,14 +117,19 @@ esp_err_t SyncFocusUi(display_service::RefreshMode refresh_mode)
     return ESP_OK;
 }
 
-ActivationResult ActivateItem(FocusItem item)
+ActivationResult ActivateFocusedRoleLocked()
 {
     ActivationResult result = {};
-    ActionHandler action_handler = nullptr;
-    void* action_context = nullptr;
+    ActionHandler action_handler = s_action_handler;
+    void* action_context = s_action_context;
 
-    switch (item) {
-        case FocusItem::kWifiToggle: {
+    const page_navigation::NavigationItemDescriptor* item =
+        s_coordinator.navigation_model().ItemAt(s_coordinator.focus().index());
+    const page_navigation::NavigationItemRole role =
+        item != nullptr ? item->role : page_navigation::NavigationItemRole::kUnknown;
+
+    switch (role) {
+        case page_navigation::NavigationItemRole::kSettingsWifiToggle: {
             const wifi_service::UiState state = wifi_service::GetUiState();
             wifi_service::SetWifiEnabled(!state.wifi_enabled);
             result.handled = true;
@@ -191,7 +137,7 @@ ActivationResult ActivateItem(FocusItem item)
             result.feedback_cue = app_interaction::FeedbackCue::kClick;
             break;
         }
-        case FocusItem::kAccessPointToggle: {
+        case page_navigation::NavigationItemRole::kSettingsEnableApToggle: {
             const wifi_service::UiState state = wifi_service::GetUiState();
             wifi_service::SetAccessPointEnabled(!state.access_point_mode);
             result.handled = true;
@@ -199,107 +145,47 @@ ActivationResult ActivateItem(FocusItem item)
             result.feedback_cue = app_interaction::FeedbackCue::kClick;
             break;
         }
-        case FocusItem::kFormatSdButton:
-            {
-                std::lock_guard<std::mutex> lock(s_mutex);
-                action_handler = s_action_handler;
-                action_context = s_action_context;
-            }
+        case page_navigation::NavigationItemRole::kSettingsFormatSdButton:
             result.handled = true;
             result.play_feedback = true;
             result.feedback_cue = app_interaction::FeedbackCue::kClick;
             break;
-        case FocusItem::kFooterSettings:
+        case page_navigation::NavigationItemRole::kFooterSettings:
             result.handled = true;
             result.footer_item = footer_runtime::FooterFocusItem::kSettings;
             break;
-        case FocusItem::kFooterHome:
+        case page_navigation::NavigationItemRole::kFooterWifi:
+            result.handled = true;
+            result.footer_item = footer_runtime::FooterFocusItem::kWifi;
+            break;
+        case page_navigation::NavigationItemRole::kFooterHome:
             result.handled = true;
             result.footer_item = footer_runtime::FooterFocusItem::kHome;
             break;
-        case FocusItem::kNone:
+        case page_navigation::NavigationItemRole::kUnknown:
         default:
             break;
     }
 
-    if (item == FocusItem::kFormatSdButton && action_handler != nullptr) {
+    if (role == page_navigation::NavigationItemRole::kSettingsFormatSdButton &&
+        action_handler != nullptr) {
         action_handler(ActionRequest::kShowFormatSdModal, action_context);
     }
 
     return result;
 }
 
-epaper_ui::ToggleVisualState ToggleStateFor(bool enabled, bool focused)
-{
-    if (focused) {
-        return enabled ? epaper_ui::ToggleVisualState::kFocusOn
-                       : epaper_ui::ToggleVisualState::kFocusOff;
-    }
-    return enabled ? epaper_ui::ToggleVisualState::kOn
-                   : epaper_ui::ToggleVisualState::kOff;
-}
-
-epaper_ui::SettingsPageState BuildStateLocked()
-{
-    const wifi_service::UiState wifi_state = wifi_service::GetUiState();
-    const storage_service::Snapshot storage_snapshot = storage_service::GetSnapshot();
-
-    storage_service::StorageStats storage_stats = {};
-    const bool allow_live_storage_stats =
-        !storage_service::IsWriteBusy() &&
-        storage_snapshot.mode != storage_service::Mode::kFormatting;
-    const bool has_storage_stats =
-        allow_live_storage_stats && storage_service::GetStorageStats(&storage_stats);
-
-    epaper_ui::SettingsPageState state = {};
-    state.title_text = "Settings";
-    state.wifi_toggle = {
-        .label_text = "WiFi",
-        .toggle_state = ToggleStateFor(
-            wifi_state.wifi_enabled, s_focused_item == FocusItem::kWifiToggle),
-    };
-    state.access_point_toggle = {
-        .label_text = "Access Point",
-        .toggle_state = ToggleStateFor(
-            wifi_state.access_point_mode, s_focused_item == FocusItem::kAccessPointToggle),
-    };
-
-    state.storage_status.has_sd_card =
-        storage_snapshot.inserted && storage_snapshot.mounted && has_storage_stats;
-    if (state.storage_status.has_sd_card) {
-        state.storage_status.free_space_text = FormatStorageBytes(storage_stats.free_bytes);
-        state.storage_status.used_percent = storage_stats.used_percent;
-    }
-
-    std::string_view format_label = "Format SD";
-    if (storage_snapshot.mode == storage_service::Mode::kFormatting ||
-        (storage_snapshot.operation == storage_service::Operation::kFormatSd &&
-         storage_snapshot.phase == storage_service::OperationPhase::kStarted)) {
-        format_label = "Formatting SD";
-    }
-    state.format_sd_button = {
-        .label_text = format_label,
-        .selected = s_focused_item == FocusItem::kFormatSdButton,
-    };
-    return state;
-}
-
-epaper_ui::SettingsPageState BuildState()
-{
-    std::lock_guard<std::mutex> lock(s_mutex);
-    return BuildStateLocked();
-}
-
-bool ResolveTouchTargetImpl(int x,
-                            int y,
-                            app_interaction::InteractiveTarget* target,
-                            void*)
+bool ResolveTouchTargetImpl(int x, int y, app_interaction::InteractiveTarget* target, void*)
 {
     if (target != nullptr) {
         *target = {};
     }
 
-    const epaper_ui::SettingsPageState state = BuildState();
+    const epaper_ui::SettingsPageState state = [&]() {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        return BuildStateLocked();
+    }();
+
     epaper_ui::SettingsPageItemId item = epaper_ui::SettingsPageItemId::kNone;
     if (!epaper_ui::HitTestSettingsPageItem(display_service::PortraitWidth(),
                                             display_service::PortraitHeight(),
@@ -310,22 +196,18 @@ bool ResolveTouchTargetImpl(int x,
         return false;
     }
 
-    const FocusItem focus_item = FocusItemFromUiItem(item);
-    if (focus_item == FocusItem::kNone) {
+    const page_navigation::NavigationItemRole role = RoleForUiItem(item);
+    const int focus_index = s_coordinator.navigation_model().IndexOfRole(role);
+    if (role == page_navigation::NavigationItemRole::kUnknown || focus_index < 0) {
         return false;
     }
 
-    int32_t generation = 0;
-    {
-        std::lock_guard<std::mutex> lock(s_mutex);
-        generation = s_interaction_generation;
-    }
     if (target != nullptr) {
         *target = {
             .owner = app_interaction::Owner::kPage,
             .kind = app_interaction::Kind::kPageAction,
-            .primary_index = static_cast<int32_t>(focus_item),
-            .secondary_index = generation,
+            .primary_index = focus_index,
+            .secondary_index = s_interaction_generation,
         };
     }
     return true;
@@ -335,11 +217,6 @@ bool FocusTouchTargetImpl(const app_interaction::InteractiveTarget& target, void
 {
     if (target.owner != app_interaction::Owner::kPage ||
         target.kind != app_interaction::Kind::kPageAction) {
-        return false;
-    }
-
-    const FocusItem item = FocusItemFromTargetIndex(target.primary_index);
-    if (item == FocusItem::kNone) {
         return false;
     }
 
@@ -355,10 +232,9 @@ bool FocusTouchTargetImpl(const app_interaction::InteractiveTarget& target, void
                      static_cast<long>(s_interaction_generation));
             return false;
         }
-        if (s_focused_item != item) {
-            s_focused_item = item;
+        changed = s_coordinator.SetFocusIndex(target.primary_index);
+        if (changed) {
             projection = BuildFooterProjectionStateLocked();
-            changed = true;
         }
     }
 
@@ -380,11 +256,7 @@ app_interaction::InputResult ActivateTouchTargetImpl(const app_interaction::Inte
         return result;
     }
 
-    const FocusItem item = FocusItemFromTargetIndex(target.primary_index);
-    if (item == FocusItem::kNone) {
-        return result;
-    }
-
+    ActivationResult activation = {};
     {
         std::lock_guard<std::mutex> lock(s_mutex);
         if (target.secondary_index != s_interaction_generation) {
@@ -395,13 +267,14 @@ app_interaction::InputResult ActivateTouchTargetImpl(const app_interaction::Inte
                      static_cast<long>(s_interaction_generation));
             return result;
         }
+        (void)s_coordinator.SetFocusIndex(target.primary_index);
+        activation = ActivateFocusedRoleLocked();
     }
 
-    const ActivationResult activation = ActivateItem(item);
     result.consumed = activation.handled;
+    result.play_feedback = activation.play_feedback;
+    result.feedback_cue = activation.feedback_cue;
     if (activation.handled) {
-        result.play_feedback = activation.play_feedback;
-        result.feedback_cue = activation.feedback_cue;
         (void)UpdateDisplayStateAndRequestRefresh(display_service::RefreshMode::kPartial);
     }
     return result;
@@ -411,11 +284,23 @@ app_interaction::InputResult ActivateTouchTargetImpl(const app_interaction::Inte
 
 esp_err_t UpdateDisplayState()
 {
-    return display_service::SetSettingsPageState(BuildState());
+    std::lock_guard<std::mutex> lock(s_mutex);
+    return display_service::SetSettingsPageState(BuildStateLocked());
 }
 
 esp_err_t UpdateDisplayStateAndRequestRefresh(display_service::RefreshMode refresh_mode)
 {
+    RefreshHandler refresh_handler = nullptr;
+    void* refresh_context = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        refresh_handler = s_refresh_handler;
+        refresh_context = s_refresh_context;
+    }
+    if (refresh_handler != nullptr) {
+        return refresh_handler(refresh_mode, refresh_context);
+    }
+
     return ui_refresh_runtime::Schedule(
         ui_refresh_runtime::SurfaceKey::kSettingsPage, &UpdateDisplayState, refresh_mode);
 }
@@ -430,16 +315,9 @@ bool MoveFocus(int delta)
     footer_runtime::ProjectionState projection = {};
     {
         std::lock_guard<std::mutex> lock(s_mutex);
-        int current_index = FocusOrderIndex(s_focused_item);
-        if (current_index < 0) {
-            current_index = 0;
-        }
-
-        const int next_index = WrapFocusIndex(current_index + (delta > 0 ? 1 : -1));
-        if (next_index >= 0 && kFocusOrder[next_index] != s_focused_item) {
-            s_focused_item = kFocusOrder[next_index];
+        changed = s_coordinator.MoveFocus(delta);
+        if (changed) {
             projection = BuildFooterProjectionStateLocked();
-            changed = true;
         }
     }
 
@@ -454,13 +332,12 @@ bool MoveFocus(int delta)
 
 ActivationResult ActivateFocusedItem()
 {
-    FocusItem focused_item = FocusItem::kNone;
+    ActivationResult result = {};
     {
         std::lock_guard<std::mutex> lock(s_mutex);
-        focused_item = s_focused_item;
+        result = ActivateFocusedRoleLocked();
     }
 
-    const ActivationResult result = ActivateItem(focused_item);
     if (result.handled && result.footer_item == footer_runtime::FooterFocusItem::kNone) {
         (void)UpdateDisplayStateAndRequestRefresh(display_service::RefreshMode::kPartial);
     }
@@ -475,18 +352,18 @@ footer_runtime::ProjectionState BuildFooterProjectionState()
 
 bool SyncFocusFromFooterProjection()
 {
-    const FocusItem footer_focus =
-        FocusItemFromFooterItem(footer_runtime::GetProjectionState().focused_item);
-    if (footer_focus == FocusItem::kNone) {
+    const page_navigation::NavigationItemRole role =
+        FooterRoleForFooterItem(footer_runtime::GetProjectionState().focused_item);
+    if (role == page_navigation::NavigationItemRole::kUnknown) {
         return false;
     }
 
     bool changed = false;
     {
         std::lock_guard<std::mutex> lock(s_mutex);
-        if (s_focused_item != footer_focus) {
-            s_focused_item = footer_focus;
-            changed = true;
+        const int focus_index = s_coordinator.navigation_model().IndexOfRole(role);
+        if (focus_index >= 0) {
+            changed = s_coordinator.SetFocusIndex(focus_index);
         }
     }
 
@@ -494,7 +371,8 @@ bool SyncFocusFromFooterProjection()
         return false;
     }
 
-    const esp_err_t err = UpdateDisplayStateAndRequestRefresh(display_service::RefreshMode::kPartial);
+    const esp_err_t err =
+        UpdateDisplayStateAndRequestRefresh(display_service::RefreshMode::kPartial);
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(kTag, "Settings page refresh after footer focus sync failed: %s",
                  esp_err_to_name(err));
@@ -507,15 +385,10 @@ void ResetFocus()
     footer_runtime::ProjectionState projection = {};
     {
         std::lock_guard<std::mutex> lock(s_mutex);
-        s_focused_item = FocusItem::kWifiToggle;
-        if (s_interaction_generation == INT32_MAX) {
-            s_interaction_generation = 1;
-        } else {
-            ++s_interaction_generation;
-        }
+        s_coordinator.Show();
+        AdvanceInteractionGenerationLocked();
         projection = BuildFooterProjectionStateLocked();
     }
-
     footer_runtime::SetProjectionState(projection);
 }
 
@@ -524,6 +397,13 @@ void SetActionHandler(ActionHandler handler, void* context)
     std::lock_guard<std::mutex> lock(s_mutex);
     s_action_handler = handler;
     s_action_context = context;
+}
+
+void SetRefreshHandler(RefreshHandler handler, void* context)
+{
+    std::lock_guard<std::mutex> lock(s_mutex);
+    s_refresh_handler = handler;
+    s_refresh_context = context;
 }
 
 page_interaction_runtime::TouchProvider BuildTouchProvider()

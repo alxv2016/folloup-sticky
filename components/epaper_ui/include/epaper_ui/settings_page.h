@@ -20,6 +20,7 @@ enum class SettingsPageItemId : uint8_t {
 };
 
 struct SettingsPageState {
+    int navigation_focus_index = -1;
     std::string_view title_text = "Settings";
     MenuToggleState wifi_toggle = {};
     MenuToggleState access_point_toggle = {};

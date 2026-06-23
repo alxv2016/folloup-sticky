@@ -80,6 +80,8 @@ const char* ButtonEventName(button_service::ButtonEvent event)
             return "PRESS_DOWN";
         case button_service::ButtonEvent::kPressUp:
             return "PRESS_UP";
+        case button_service::ButtonEvent::kPressRepeat:
+            return "PRESS_REPEAT";
         case button_service::ButtonEvent::kSingleClick:
             return "SINGLE_CLICK";
         case button_service::ButtonEvent::kDoubleClick:

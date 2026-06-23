@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "roving_focus.cpp"
+    SRCS "page_focus_projection.cpp" "navigation_input_controller.cpp" "navigation_model.cpp" "roving_focus.cpp"
     INCLUDE_DIRS "include"
 )
 

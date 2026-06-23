@@ -9,11 +9,13 @@
 
 #include "design_tokens.h"
 #include "epaper_ui/font_renderer.h"
+#include "epaper_ui/keyboard.h"
 #include "epaper_ui/lock_screen.h"
 #include "epaper_ui/settings_page.h"
 #include "epaper_ui/shutdown_modal.h"
 #include "epaper_ui/storage_modal.h"
 #include "epaper_ui/toast.h"
+#include "epaper_ui/wifi_page.h"
 #include "epaper_panel.h"
 #include "esp_check.h"
 #include "esp_log.h"
@@ -58,20 +60,36 @@ struct DisplayCommand {
 bool s_initialized = false;
 QueueHandle_t s_command_queue = nullptr;
 TaskHandle_t s_display_task = nullptr;
+std::mutex s_state_mutex;
 std::mutex s_panel_mutex;
 bool s_display_sleeping = false;
 std::atomic<bool> s_refresh_in_progress = false;
-ScreenId s_current_screen = ScreenId::kHome;
+std::atomic<ScreenId> s_current_screen = ScreenId::kHome;
 epaper_ui::StatusBarState s_status_bar_state = {};
 epaper_ui::GlobalFooterState s_global_footer_state = {};
 epaper_ui::SettingsPageState s_settings_page_state = {};
+epaper_ui::WifiPageState s_wifi_page_state = {};
 epaper_ui::LockScreenState s_lock_screen_state = {};
+epaper_ui::KeyboardState s_keyboard_state = {};
 epaper_ui::ShutdownModalState s_shutdown_modal_state = {};
 epaper_ui::StorageModalState s_storage_modal_state = {};
 epaper_ui::SelectModalState s_select_modal_state = {};
 epaper_ui::ToastState s_toast_state = {};
 std::array<uint8_t, STICKY_EPD_BUFFER_LEN> s_underlay_snapshot = {};
 bool s_underlay_snapshot_valid = false;
+
+struct RenderSnapshot {
+    epaper_ui::StatusBarState status_bar = {};
+    epaper_ui::GlobalFooterState global_footer = {};
+    epaper_ui::SettingsPageState settings_page = {};
+    epaper_ui::WifiPageState wifi_page = {};
+    epaper_ui::LockScreenState lock_screen = {};
+    epaper_ui::KeyboardState keyboard = {};
+    epaper_ui::ShutdownModalState shutdown_modal = {};
+    epaper_ui::StorageModalState storage_modal = {};
+    epaper_ui::SelectModalState select_modal = {};
+    epaper_ui::ToastState toast = {};
+};
 
 class RefreshBusyGuard {
 public:
@@ -130,6 +148,23 @@ EpaperPanel& Panel()
 {
     static EpaperPanel panel(STICKY_EPD_WIDTH, STICKY_EPD_HEIGHT, BuildPanelConfig());
     return panel;
+}
+
+RenderSnapshot CaptureRenderSnapshot()
+{
+    std::lock_guard<std::mutex> lock(s_state_mutex);
+    RenderSnapshot snapshot = {};
+    snapshot.status_bar = s_status_bar_state;
+    snapshot.global_footer = s_global_footer_state;
+    snapshot.settings_page = s_settings_page_state;
+    snapshot.wifi_page = s_wifi_page_state;
+    snapshot.lock_screen = s_lock_screen_state;
+    snapshot.keyboard = s_keyboard_state;
+    snapshot.shutdown_modal = s_shutdown_modal_state;
+    snapshot.storage_modal = s_storage_modal_state;
+    snapshot.select_modal = s_select_modal_state;
+    snapshot.toast = s_toast_state;
+    return snapshot;
 }
 
 bool AssetPixelSet(const EmbeddedImageAsset& asset, int x, int y)
@@ -278,32 +313,39 @@ void DrawSplashScreen(uint8_t* framebuffer)
     DrawPortraitMonoAsset(framebuffer, alxv_x, alxv_y, alxv_logo);
 }
 
-void DrawCurrentOverlays(uint8_t* framebuffer)
+void DrawCurrentOverlays(uint8_t* framebuffer, const RenderSnapshot& snapshot)
 {
+    epaper_ui::DrawKeyboard(framebuffer,
+                            STICKY_EPD_WIDTH,
+                            STICKY_EPD_HEIGHT,
+                            kPortraitWidth,
+                            kPortraitHeight,
+                            snapshot.keyboard,
+                            {});
     epaper_ui::DrawToast(framebuffer,
                          STICKY_EPD_WIDTH,
                          STICKY_EPD_HEIGHT,
                          kPortraitWidth,
                          kPortraitHeight,
-                         s_toast_state);
+                         snapshot.toast);
     epaper_ui::DrawStorageModal(framebuffer,
                                 STICKY_EPD_WIDTH,
                                 STICKY_EPD_HEIGHT,
                                 kPortraitWidth,
                                 kPortraitHeight,
-                                s_storage_modal_state);
+                                snapshot.storage_modal);
     epaper_ui::DrawSelectModal(framebuffer,
                                STICKY_EPD_WIDTH,
                                STICKY_EPD_HEIGHT,
                                kPortraitWidth,
                                kPortraitHeight,
-                               s_select_modal_state);
+                               snapshot.select_modal);
     epaper_ui::DrawShutdownModal(framebuffer,
                                  STICKY_EPD_WIDTH,
                                  STICKY_EPD_HEIGHT,
                                  kPortraitWidth,
                                  kPortraitHeight,
-                                 s_shutdown_modal_state);
+                                 snapshot.shutdown_modal);
 }
 
 void CaptureUnderlaySnapshot(const uint8_t* framebuffer)
@@ -317,7 +359,7 @@ void CaptureUnderlaySnapshot(const uint8_t* framebuffer)
     s_underlay_snapshot_valid = true;
 }
 
-void DrawHomeUnderlay(uint8_t* framebuffer)
+void DrawHomeUnderlay(uint8_t* framebuffer, const RenderSnapshot& snapshot)
 {
     EpaperPanel& panel = Panel();
     panel.Clear(true);
@@ -327,16 +369,16 @@ void DrawHomeUnderlay(uint8_t* framebuffer)
                              STICKY_EPD_HEIGHT,
                              kPortraitWidth,
                              kPortraitHeight,
-                             s_status_bar_state);
+                             snapshot.status_bar);
     epaper_ui::DrawGlobalFooter(framebuffer,
                                 STICKY_EPD_WIDTH,
                                 STICKY_EPD_HEIGHT,
                                 kPortraitWidth,
                                 kPortraitHeight,
-                                s_global_footer_state);
+                                snapshot.global_footer);
 }
 
-void DrawLockScreenUnderlay(uint8_t* framebuffer)
+void DrawLockScreenUnderlay(uint8_t* framebuffer, const RenderSnapshot& snapshot)
 {
     EpaperPanel& panel = Panel();
     panel.Clear(true);
@@ -345,11 +387,11 @@ void DrawLockScreenUnderlay(uint8_t* framebuffer)
                               STICKY_EPD_HEIGHT,
                               kPortraitWidth,
                               kPortraitHeight,
-                              s_lock_screen_state,
-                              s_status_bar_state);
+                              snapshot.lock_screen,
+                              snapshot.status_bar);
 }
 
-void DrawSettingsUnderlay(uint8_t* framebuffer)
+void DrawSettingsUnderlay(uint8_t* framebuffer, const RenderSnapshot& snapshot)
 {
     EpaperPanel& panel = Panel();
     panel.Clear(true);
@@ -358,9 +400,23 @@ void DrawSettingsUnderlay(uint8_t* framebuffer)
                                 STICKY_EPD_HEIGHT,
                                 kPortraitWidth,
                                 kPortraitHeight,
-                                s_settings_page_state,
-                                s_status_bar_state,
-                                s_global_footer_state);
+                                snapshot.settings_page,
+                                snapshot.status_bar,
+                                snapshot.global_footer);
+}
+
+void DrawWifiUnderlay(uint8_t* framebuffer, const RenderSnapshot& snapshot)
+{
+    EpaperPanel& panel = Panel();
+    panel.Clear(true);
+    epaper_ui::DrawWifiPage(framebuffer,
+                            STICKY_EPD_WIDTH,
+                            STICKY_EPD_HEIGHT,
+                            kPortraitWidth,
+                            kPortraitHeight,
+                            snapshot.wifi_page,
+                            snapshot.status_bar,
+                            snapshot.global_footer);
 }
 
 void LogMetrics(const EpaperPanelMetrics& metrics)
@@ -400,10 +456,11 @@ const char* OverlayRefreshPolicyName(OverlayRefreshPolicy policy)
 
 esp_err_t ApplyHomeScreen(bool full_refresh)
 {
+    const RenderSnapshot snapshot = CaptureRenderSnapshot();
     EpaperPanel& panel = Panel();
-    DrawHomeUnderlay(panel.framebuffer());
+    DrawHomeUnderlay(panel.framebuffer(), snapshot);
     CaptureUnderlaySnapshot(panel.framebuffer());
-    DrawCurrentOverlays(panel.framebuffer());
+    DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
     DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
     if (bus_guard.err() != ESP_OK) {
@@ -418,16 +475,17 @@ esp_err_t ApplyHomeScreen(bool full_refresh)
     }
 
     LogMetrics(panel.metrics());
-    s_current_screen = ScreenId::kHome;
+    s_current_screen.store(ScreenId::kHome, std::memory_order_relaxed);
     return ESP_OK;
 }
 
 esp_err_t ApplyLockScreen(bool full_refresh)
 {
+    const RenderSnapshot snapshot = CaptureRenderSnapshot();
     EpaperPanel& panel = Panel();
-    DrawLockScreenUnderlay(panel.framebuffer());
+    DrawLockScreenUnderlay(panel.framebuffer(), snapshot);
     CaptureUnderlaySnapshot(panel.framebuffer());
-    DrawCurrentOverlays(panel.framebuffer());
+    DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
     DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
     if (bus_guard.err() != ESP_OK) {
@@ -442,16 +500,17 @@ esp_err_t ApplyLockScreen(bool full_refresh)
     }
 
     LogMetrics(panel.metrics());
-    s_current_screen = ScreenId::kLockScreen;
+    s_current_screen.store(ScreenId::kLockScreen, std::memory_order_relaxed);
     return ESP_OK;
 }
 
 esp_err_t ApplySettings(bool full_refresh)
 {
+    const RenderSnapshot snapshot = CaptureRenderSnapshot();
     EpaperPanel& panel = Panel();
-    DrawSettingsUnderlay(panel.framebuffer());
+    DrawSettingsUnderlay(panel.framebuffer(), snapshot);
     CaptureUnderlaySnapshot(panel.framebuffer());
-    DrawCurrentOverlays(panel.framebuffer());
+    DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
     DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
     if (bus_guard.err() != ESP_OK) {
@@ -466,7 +525,32 @@ esp_err_t ApplySettings(bool full_refresh)
     }
 
     LogMetrics(panel.metrics());
-    s_current_screen = ScreenId::kSettings;
+    s_current_screen.store(ScreenId::kSettings, std::memory_order_relaxed);
+    return ESP_OK;
+}
+
+esp_err_t ApplyWifi(bool full_refresh)
+{
+    const RenderSnapshot snapshot = CaptureRenderSnapshot();
+    EpaperPanel& panel = Panel();
+    DrawWifiUnderlay(panel.framebuffer(), snapshot);
+    CaptureUnderlaySnapshot(panel.framebuffer());
+    DrawCurrentOverlays(panel.framebuffer(), snapshot);
+
+    DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
+    if (bus_guard.err() != ESP_OK) {
+        return bus_guard.err();
+    }
+
+    RefreshBusyGuard refresh_busy;
+    const esp_err_t err = full_refresh ? panel.RefreshFullBase()
+                                       : panel.RefreshPartialFullScreen();
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    LogMetrics(panel.metrics());
+    s_current_screen.store(ScreenId::kWifi, std::memory_order_relaxed);
     return ESP_OK;
 }
 
@@ -493,11 +577,13 @@ esp_err_t ApplyStartupSplash()
 
 esp_err_t RefreshCurrentScreenLocked(bool full_refresh)
 {
-    switch (s_current_screen) {
+    switch (s_current_screen.load(std::memory_order_relaxed)) {
         case ScreenId::kHome:
             return ApplyHomeScreen(full_refresh);
         case ScreenId::kSettings:
             return ApplySettings(full_refresh);
+        case ScreenId::kWifi:
+            return ApplyWifi(full_refresh);
         case ScreenId::kLockScreen:
             return ApplyLockScreen(full_refresh);
         default:
@@ -516,12 +602,13 @@ esp_err_t RefreshOverlayStateLocked(OverlayRefreshPolicy policy)
     }
 
     EpaperPanel& panel = Panel();
+    const RenderSnapshot snapshot = CaptureRenderSnapshot();
     ESP_LOGI(kTag,
              "Overlay refresh path: policy=%s snapshot_valid=%d",
              OverlayRefreshPolicyName(policy),
              s_underlay_snapshot_valid ? 1 : 0);
     std::memcpy(panel.framebuffer(), s_underlay_snapshot.data(), s_underlay_snapshot.size());
-    DrawCurrentOverlays(panel.framebuffer());
+    DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
     DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
     if (bus_guard.err() != ESP_OK) {
@@ -570,7 +657,7 @@ void DisplayTask(void*)
         std::lock_guard<std::mutex> lock(s_panel_mutex);
         if (s_display_sleeping) {
             if (command.type == DisplayCommandType::kSetScreen) {
-                s_current_screen = command.screen;
+                s_current_screen.store(command.screen, std::memory_order_relaxed);
             }
             ESP_LOGI(kTag, "Display command suppressed while display sleeping");
             continue;
@@ -580,6 +667,8 @@ void DisplayTask(void*)
         if (command.type == DisplayCommandType::kSetScreen) {
             if (command.screen == ScreenId::kLockScreen) {
                 err = ApplyLockScreen(command.refresh_mode == RefreshMode::kFull);
+            } else if (command.screen == ScreenId::kWifi) {
+                err = ApplyWifi(command.refresh_mode == RefreshMode::kFull);
             } else if (command.screen == ScreenId::kSettings) {
                 err = ApplySettings(command.refresh_mode == RefreshMode::kFull);
             } else {
@@ -673,8 +762,7 @@ int PortraitHeight()
 
 ScreenId GetCurrentScreen()
 {
-    std::lock_guard<std::mutex> lock(s_panel_mutex);
-    return s_current_screen;
+    return s_current_screen.load(std::memory_order_relaxed);
 }
 
 esp_err_t SetStatusBarState(const epaper_ui::StatusBarState& state)
@@ -683,7 +771,7 @@ esp_err_t SetStatusBarState(const epaper_ui::StatusBarState& state)
         return ESP_ERR_INVALID_STATE;
     }
 
-    std::lock_guard<std::mutex> lock(s_panel_mutex);
+    std::lock_guard<std::mutex> lock(s_state_mutex);
     s_status_bar_state = state;
     return ESP_OK;
 }
@@ -694,7 +782,7 @@ esp_err_t SetGlobalFooterState(const epaper_ui::GlobalFooterState& state)
         return ESP_ERR_INVALID_STATE;
     }
 
-    std::lock_guard<std::mutex> lock(s_panel_mutex);
+    std::lock_guard<std::mutex> lock(s_state_mutex);
     s_global_footer_state = state;
     return ESP_OK;
 }
@@ -705,8 +793,19 @@ esp_err_t SetSettingsPageState(const epaper_ui::SettingsPageState& state)
         return ESP_ERR_INVALID_STATE;
     }
 
-    std::lock_guard<std::mutex> lock(s_panel_mutex);
+    std::lock_guard<std::mutex> lock(s_state_mutex);
     s_settings_page_state = state;
+    return ESP_OK;
+}
+
+esp_err_t SetWifiPageState(const epaper_ui::WifiPageState& state)
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    std::lock_guard<std::mutex> lock(s_state_mutex);
+    s_wifi_page_state = state;
     return ESP_OK;
 }
 
@@ -716,8 +815,19 @@ esp_err_t SetLockScreenState(const epaper_ui::LockScreenState& state)
         return ESP_ERR_INVALID_STATE;
     }
 
-    std::lock_guard<std::mutex> lock(s_panel_mutex);
+    std::lock_guard<std::mutex> lock(s_state_mutex);
     s_lock_screen_state = state;
+    return ESP_OK;
+}
+
+esp_err_t SetKeyboardState(const epaper_ui::KeyboardState& state)
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    std::lock_guard<std::mutex> lock(s_state_mutex);
+    s_keyboard_state = state;
     return ESP_OK;
 }
 
@@ -727,7 +837,7 @@ esp_err_t SetShutdownModalState(const epaper_ui::ShutdownModalState& state)
         return ESP_ERR_INVALID_STATE;
     }
 
-    std::lock_guard<std::mutex> lock(s_panel_mutex);
+    std::lock_guard<std::mutex> lock(s_state_mutex);
     s_shutdown_modal_state = state;
     return ESP_OK;
 }
@@ -738,7 +848,7 @@ esp_err_t SetStorageModalState(const epaper_ui::StorageModalState& state)
         return ESP_ERR_INVALID_STATE;
     }
 
-    std::lock_guard<std::mutex> lock(s_panel_mutex);
+    std::lock_guard<std::mutex> lock(s_state_mutex);
     s_storage_modal_state = state;
     return ESP_OK;
 }
@@ -749,7 +859,7 @@ esp_err_t SetSelectModalState(const epaper_ui::SelectModalState& state)
         return ESP_ERR_INVALID_STATE;
     }
 
-    std::lock_guard<std::mutex> lock(s_panel_mutex);
+    std::lock_guard<std::mutex> lock(s_state_mutex);
     s_select_modal_state = state;
     return ESP_OK;
 }
@@ -760,7 +870,7 @@ esp_err_t SetToastState(const epaper_ui::ToastState& state)
         return ESP_ERR_INVALID_STATE;
     }
 
-    std::lock_guard<std::mutex> lock(s_panel_mutex);
+    std::lock_guard<std::mutex> lock(s_state_mutex);
     s_toast_state = state;
     return ESP_OK;
 }
@@ -786,7 +896,7 @@ esp_err_t RequestOverlayRefresh(OverlayRefreshPolicy policy)
 
     DisplayCommand command = {};
     command.type = DisplayCommandType::kRefreshOverlay;
-    command.screen = s_current_screen;
+    command.screen = s_current_screen.load(std::memory_order_relaxed);
     command.overlay_refresh_policy = policy;
     return xQueueOverwrite(s_command_queue, &command) == pdPASS ? ESP_OK : ESP_FAIL;
 }
@@ -799,7 +909,7 @@ esp_err_t RequestRefreshCurrentScreen(RefreshMode refresh_mode)
 
     DisplayCommand command = {};
     command.type = DisplayCommandType::kRefreshCurrent;
-    command.screen = s_current_screen;
+    command.screen = s_current_screen.load(std::memory_order_relaxed);
     command.refresh_mode = refresh_mode;
     return xQueueOverwrite(s_command_queue, &command) == pdPASS ? ESP_OK : ESP_FAIL;
 }

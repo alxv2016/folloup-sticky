@@ -81,10 +81,14 @@ main/
   main.cpp
   app_shell.h
   app_shell.cpp
+  button_input_runtime.h
+  button_input_runtime.cpp
   device_sleep_runtime.h
   device_sleep_runtime.cpp
   footer_runtime.h
   footer_runtime.cpp
+  input_callback_dispatcher.h
+  input_callback_dispatcher.cpp
   input_focus_runtime.h
   input_focus_runtime.cpp
   lock_screen_runtime.h
@@ -198,7 +202,13 @@ components/
   page_navigation/
     include/
       page_navigation/
+        navigation_input_controller.h
+        navigation_model.h
+        page_focus_projection.h
         roving_focus.h
+    navigation_input_controller.cpp
+    navigation_model.cpp
+    page_focus_projection.cpp
     roving_focus.cpp
   environment_service/
     include/
@@ -425,14 +435,14 @@ Current app-level button interactions are:
   releasing the button stops recording and opens the select modal when a clip is
   ready.
 - holding `UP` while pressing `POWER_OK` opens the shutdown confirmation modal.
-- while the select modal is visible, `UP` and `DOWN` single click move roving
-  focus with wraparound, `POWER_OK` submits the focused item, `DOWN` double
-  click also submits the focused item, and touch focuses the touched item on
-  contact before submitting on release.
-- while the shutdown modal is visible, `UP` and `DOWN` single click move roving
-  focus with wraparound, `DOWN` double click activates the focused action, and
-  touch focuses `Cancel` or `Shut down` on contact before activating on
+- while the select modal is visible, `UP` and `DOWN` press down plus gated
+  hold-repeat move roving focus with wraparound, `POWER_OK` submits the focused
+  item, and touch focuses the touched item on contact before submitting on
   release.
+- while the shutdown modal is visible, `UP` and `DOWN` press down plus gated
+  hold-repeat move roving focus with wraparound, `POWER_OK` activates the
+  focused action, and touch focuses `Cancel` or `Shut down` on contact before
+  activating on release.
 - when no overlay captures input, footer targets participate in the same touch
   model: touch-down focuses the footer item immediately and touch-up activates
   the armed footer target.
@@ -456,8 +466,15 @@ Ownership is intentionally split as:
 
 - `components/page_navigation/roving_focus`: reusable wraparound index
   primitive with no modal, display, or app-shell ownership baked in
-- `main/input_focus_runtime.cpp`: app-owned button routing, touch contact
-  state, and app-wide precedence for overlay, footer, and page targets
+- `components/page_navigation/navigation_input_controller.*`: shared press
+  generation and hold-repeat gating for navigation buttons
+- `main/input_callback_dispatcher.*`: dedicated latest-wins input callback task
+  for app-owned button routing
+- `main/button_input_runtime.*`: app-wide hardware-button dispatch policy that
+  converts raw button events into shared navigation press/hold behavior before
+  they reach page or overlay code
+- `main/input_focus_runtime.cpp`: app-owned focus routing, touch contact state,
+  and app-wide precedence for overlay, footer, and page targets
 - `main/page_interaction_runtime.cpp`: registration point for future page
   runtimes/coordinators to provide `resolve -> focus -> activate` touch hooks
 - `main/overlay_runtime.cpp`: retained overlay state, focus-sync, submit, and
@@ -480,6 +497,16 @@ Future pages should keep page-local selected indexes as render projections of
 page-owned focus truth rather than inventing separate touch-only selection
 state. Composite page controls should plug into this same contract instead of
 adding a second touch interaction path.
+
+Shared button-navigation rules are:
+
+- navigation timing is not page-owned
+- navigation `press down` and gated hold-repeat behavior route through the
+  shared input runtime first
+- stale queued navigation callbacks should be superseded by the newest callback
+  for the same button lane
+- page modules own `MoveFocus(...)`, activate semantics, and retained page-state
+  construction only
 
 The current app-wide touch lifecycle is:
 
@@ -879,12 +906,11 @@ Current app-shell usage on top of those low-level events is:
 - `POWER_OK` double click: toggle the lock screen
 - hold `POWER_OK`: arm/start/finish the recording-session flow
 - `UP` held plus `POWER_OK` press down: open the shutdown confirmation modal
-- select modal visible: `UP` and `DOWN` single click move shared roving focus,
-  `POWER_OK` submits, `DOWN` double click submits, and touch updates focus then
-  submits
-- shutdown modal visible: `UP` and `DOWN` single click move shared roving
-  focus, `DOWN` double click activates the focused action, and touch can
-  directly hit either modal button
+- select modal visible: `UP` and `DOWN` press down plus gated hold-repeat move
+  shared roving focus, `POWER_OK` submits, and touch updates focus then submits
+- shutdown modal visible: `UP` and `DOWN` press down plus gated hold-repeat
+  move shared roving focus, `POWER_OK` activates the focused action, and touch
+  can directly hit either modal button
 
 The app shell does not own modal focus routing directly. It hands button events
 to `main/input_focus_runtime.cpp`, which gives overlay focus traps first chance

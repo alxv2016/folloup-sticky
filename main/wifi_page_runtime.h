@@ -1,5 +1,5 @@
-#ifndef SETTINGS_PAGE_RUNTIME_H_
-#define SETTINGS_PAGE_RUNTIME_H_
+#ifndef WIFI_PAGE_RUNTIME_H_
+#define WIFI_PAGE_RUNTIME_H_
 
 #include <cstdint>
 
@@ -10,25 +10,21 @@
 #include "footer_runtime.h"
 #include "page_interaction_runtime.h"
 
-namespace settings_page_runtime {
+namespace wifi_page_runtime {
+
+using RefreshHandler = esp_err_t (*)(display_service::RefreshMode refresh_mode, void* context);
 
 enum class FocusItem : uint8_t {
     kNone = 0,
-    kWifiToggle,
-    kAccessPointToggle,
-    kFormatSdButton,
-    kFooterSettings,
+    kNetworkList,
+    kPasswordInput,
+    kPasswordVisibility,
+    kScanButton,
+    kConnectButton,
     kFooterWifi,
+    kFooterSettings,
     kFooterHome,
 };
-
-enum class ActionRequest : uint8_t {
-    kNone = 0,
-    kShowFormatSdModal,
-};
-
-using ActionHandler = void (*)(ActionRequest request, void* context);
-using RefreshHandler = esp_err_t (*)(display_service::RefreshMode refresh_mode, void* context);
 
 struct ActivationResult {
     bool handled = false;
@@ -41,14 +37,18 @@ esp_err_t UpdateDisplayState();
 esp_err_t UpdateDisplayStateAndRequestRefresh(
     display_service::RefreshMode refresh_mode = display_service::RefreshMode::kPartial);
 bool MoveFocus(int delta);
+bool EnterNetworkList();
+bool CommitNetworkListSelectionAndExit();
+bool ExitNetworkListWithoutSelection();
 ActivationResult ActivateFocusedItem();
+bool SecondaryActivateFocusedItem();
 footer_runtime::ProjectionState BuildFooterProjectionState();
 bool SyncFocusFromFooterProjection();
 void ResetFocus();
-void SetActionHandler(ActionHandler handler, void* context);
 void SetRefreshHandler(RefreshHandler handler, void* context);
+esp_err_t SyncFromService(bool request_refresh_if_active);
 page_interaction_runtime::TouchProvider BuildTouchProvider();
 
-}  // namespace settings_page_runtime
+}  // namespace wifi_page_runtime
 
-#endif  // SETTINGS_PAGE_RUNTIME_H_
+#endif  // WIFI_PAGE_RUNTIME_H_

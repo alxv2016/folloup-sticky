@@ -18,6 +18,8 @@ ProjectionState s_projection_state = {};
 int32_t s_interaction_generation = 1;
 ActivateHandler s_activate_handler = nullptr;
 void* s_activate_context = nullptr;
+RefreshHandler s_refresh_handler = nullptr;
+void* s_refresh_context = nullptr;
 
 const EmbeddedImageAsset* FooterIcon(FooterFocusItem item)
 {
@@ -218,6 +220,13 @@ void SetActivateHandler(ActivateHandler handler, void* context)
     s_activate_context = context;
 }
 
+void SetRefreshHandler(RefreshHandler handler, void* context)
+{
+    std::lock_guard<std::mutex> lock(s_state_mutex);
+    s_refresh_handler = handler;
+    s_refresh_context = context;
+}
+
 void SetLayoutState(const LayoutState& state)
 {
     std::lock_guard<std::mutex> lock(s_state_mutex);
@@ -324,7 +333,18 @@ bool FocusTouchTarget(const app_interaction::InteractiveTarget& target)
         return false;
     }
 
-    const esp_err_t err = UpdateDisplayStateAndRequestRefresh(display_service::RefreshMode::kPartial);
+    RefreshHandler refresh_handler = nullptr;
+    void* refresh_context = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(s_state_mutex);
+        refresh_handler = s_refresh_handler;
+        refresh_context = s_refresh_context;
+    }
+
+    const esp_err_t err =
+        refresh_handler != nullptr
+            ? refresh_handler(display_service::RefreshMode::kPartial, refresh_context)
+            : UpdateDisplayStateAndRequestRefresh(display_service::RefreshMode::kPartial);
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(kTag, "Footer refresh after touch focus failed: %s", esp_err_to_name(err));
     }

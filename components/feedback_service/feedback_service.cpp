@@ -7,6 +7,7 @@ namespace feedback_service {
 namespace {
 
 constexpr const char* kTag = "FeedbackService";
+constexpr bool kBuzzerFeedbackEnabled = false;
 
 buzzer_service::Pattern PatternForEvent(FeedbackEvent event)
 {
@@ -74,6 +75,11 @@ const char* FeedbackEventName(FeedbackEvent event)
 
 esp_err_t Init()
 {
+    if (!kBuzzerFeedbackEnabled) {
+        ESP_LOGI(kTag, "Feedback service initialized with buzzer disabled");
+        return ESP_OK;
+    }
+
     const esp_err_t err = buzzer_service::Init();
     if (err != ESP_OK) {
         ESP_LOGW(kTag, "Buzzer service init failed: %s", esp_err_to_name(err));
@@ -86,6 +92,10 @@ esp_err_t Init()
 
 esp_err_t Play(FeedbackEvent event)
 {
+    if (!kBuzzerFeedbackEnabled) {
+        return ESP_OK;
+    }
+
     const esp_err_t err = buzzer_service::PlayPattern(PatternForEvent(event));
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(kTag, "Feedback event %s failed: %s",

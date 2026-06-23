@@ -2,9 +2,12 @@
 
 #include <mutex>
 
+#include "display_service.h"
 #include "esp_log.h"
 #include "footer_runtime.h"
 #include "page_interaction_runtime.h"
+#include "settings_page_runtime.h"
+#include "wifi_page_runtime.h"
 
 namespace input_focus_runtime {
 namespace {
@@ -26,7 +29,8 @@ bool IsNavigationMoveEvent(const button_service::ButtonEventInfo& event, int* de
         *delta = 0;
     }
 
-    if (event.event != button_service::ButtonEvent::kSingleClick) {
+    if (event.event != button_service::ButtonEvent::kPressDown &&
+        event.event != button_service::ButtonEvent::kPressRepeat) {
         return false;
     }
 
@@ -91,15 +95,35 @@ bool ResolveTouchTarget(const touch_service::TouchEventInfo& event,
 
 app_interaction::InputResult HandleButtonEvent(const button_service::ButtonEventInfo& event)
 {
+    app_interaction::InputResult result = {};
     int delta = 0;
     if (IsNavigationMoveEvent(event, &delta) && overlay_runtime::IsInputCaptured()) {
-        app_interaction::InputResult result = {};
         result.consumed = true;
         if (overlay_runtime::MoveFocus(delta)) {
             result.play_feedback = true;
             result.feedback_cue = app_interaction::FeedbackCue::kClick;
         }
         return result;
+    }
+
+    if (IsNavigationMoveEvent(event, &delta)) {
+        bool moved = false;
+        switch (display_service::GetCurrentScreen()) {
+            case display_service::ScreenId::kSettings:
+                moved = settings_page_runtime::MoveFocus(delta);
+                break;
+            case display_service::ScreenId::kWifi:
+                moved = wifi_page_runtime::MoveFocus(delta);
+                break;
+            default:
+                break;
+        }
+        if (moved) {
+            result.consumed = true;
+            result.play_feedback = true;
+            result.feedback_cue = app_interaction::FeedbackCue::kClick;
+            return result;
+        }
     }
 
     return overlay_runtime::HandleButtonEvent(event);

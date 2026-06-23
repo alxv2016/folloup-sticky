@@ -38,6 +38,8 @@ const char* EventName(button_event_t event)
             return "PRESS_DOWN";
         case BUTTON_PRESS_UP:
             return "PRESS_UP";
+        case BUTTON_PRESS_REPEAT:
+            return "PRESS_REPEAT";
         case BUTTON_SINGLE_CLICK:
             return "SINGLE_CLICK";
         case BUTTON_DOUBLE_CLICK:
@@ -63,6 +65,9 @@ bool ToButtonEvent(button_event_t event, ButtonEvent* out_event)
             return true;
         case BUTTON_PRESS_UP:
             *out_event = ButtonEvent::kPressUp;
+            return true;
+        case BUTTON_PRESS_REPEAT:
+            *out_event = ButtonEvent::kPressRepeat;
             return true;
         case BUTTON_SINGLE_CLICK:
             *out_event = ButtonEvent::kSingleClick;
@@ -152,6 +157,7 @@ esp_err_t CreateButton(ButtonContext* context)
     const button_event_t events[] = {
         BUTTON_PRESS_DOWN,
         BUTTON_PRESS_UP,
+        BUTTON_PRESS_REPEAT,
         BUTTON_SINGLE_CLICK,
         BUTTON_DOUBLE_CLICK,
         BUTTON_LONG_PRESS_START,

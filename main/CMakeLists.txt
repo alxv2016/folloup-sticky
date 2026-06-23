@@ -1,4 +1,4 @@
-idf_component_register(SRCS "main.cpp"
+idf_component_register(SRCS "button_input_runtime.cpp" "input_callback_dispatcher.cpp" "wifi_page_runtime.cpp" "settings_page_runtime.cpp" "settings_page_coordinator.cpp" "main.cpp"
                             "app_shell.cpp"
                             "device_sleep_runtime.cpp"
                             "footer_runtime.cpp"
@@ -6,8 +6,12 @@ idf_component_register(SRCS "main.cpp"
                             "lock_screen_runtime.cpp"
                             "overlay_runtime.cpp"
                             "page_interaction_runtime.cpp"
-                            "settings_page_runtime.cpp"
+                            "settings_page_coordinator.cpp"
+                           
+                            "wifi_page_coordinator.cpp"
+                           
                             "status_bar_runtime.cpp"
+                            "ui_refresh_dispatcher.cpp"
                             "ui_refresh_runtime.cpp"
                        INCLUDE_DIRS "."
                        REQUIRES app_update button_service display_service feedback_service

@@ -16,6 +16,7 @@ enum class ButtonId {
 enum class ButtonEvent {
     kPressDown,
     kPressUp,
+    kPressRepeat,
     kSingleClick,
     kDoubleClick,
     kLongPressStart,

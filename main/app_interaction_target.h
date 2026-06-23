@@ -18,6 +18,7 @@ enum class Kind : uint8_t {
     kOverlaySelectModalItem,
     kOverlayShutdownAction,
     kOverlayToastCloseAction,
+    kOverlayKeyboardKey,
     kFooterItem,
     kPageAction,
     kPageComposite,

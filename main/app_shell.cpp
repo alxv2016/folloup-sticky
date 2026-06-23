@@ -5,6 +5,7 @@
 #include <mutex>
 #include <string>
 
+#include "button_input_runtime.h"
 #include "button_service.h"
 #include "device_sleep_service.h"
 #include "device_sleep_runtime.h"
@@ -36,8 +37,10 @@
 #include "timezone_service.h"
 #include "touch_service.h"
 #include "transcription_service.h"
+#include "ui_refresh_dispatcher.h"
 #include "ui_refresh_runtime.h"
 #include "wifi_service.h"
+#include "wifi_page_runtime.h"
 
 namespace app_shell {
 namespace {
@@ -50,6 +53,9 @@ constexpr uint32_t kAutoSleepLightSleepTimeoutSeconds =
     CONFIG_FOLLOWUP_AUTO_SLEEP_LIGHT_SLEEP_TIMEOUT_SECONDS;
 constexpr uint32_t kShutdownTaskStackWords = 3072;
 constexpr TickType_t kPowerButtonReleaseSettleDelay = pdMS_TO_TICKS(500);
+constexpr uint32_t kUiRefreshSettingsScreen = 1;
+constexpr uint32_t kUiRefreshWifiScreen = 2;
+constexpr uint32_t kUiRefreshFooterOnly = 3;
 
 TaskHandle_t s_shutdown_task = nullptr;
 std::atomic<bool> s_power_button_display_wake_only_active = false;
@@ -119,9 +125,108 @@ void SyncStatusBarState(const char* source)
     }
 }
 
+esp_err_t HandleSettingsScreenRefresh(display_service::RefreshMode refresh_mode, void*)
+{
+    ui_refresh_dispatcher::DispatchLatest(kUiRefreshSettingsScreen, [refresh_mode]() {
+        if (!s_startup_complete.load(std::memory_order_relaxed) ||
+            display_service::GetCurrentScreen() != display_service::ScreenId::kSettings) {
+            return;
+        }
+
+        const esp_err_t settings_err = settings_page_runtime::UpdateDisplayState();
+        if (settings_err != ESP_OK && settings_err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(kTag, "Settings page state apply failed: %s",
+                     esp_err_to_name(settings_err));
+            return;
+        }
+
+        const esp_err_t footer_err = footer_runtime::UpdateDisplayState();
+        if (footer_err != ESP_OK && footer_err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(kTag, "Settings footer state apply failed: %s",
+                     esp_err_to_name(footer_err));
+            return;
+        }
+
+        const esp_err_t refresh_err =
+            display_service::RequestRefreshCurrentScreen(refresh_mode);
+        if (refresh_err != ESP_OK && refresh_err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(kTag, "Settings screen refresh request failed: %s",
+                     esp_err_to_name(refresh_err));
+        }
+    });
+    return ESP_OK;
+}
+
+esp_err_t HandleWifiScreenRefresh(display_service::RefreshMode refresh_mode, void*)
+{
+    ui_refresh_dispatcher::DispatchLatest(kUiRefreshWifiScreen, [refresh_mode]() {
+        if (!s_startup_complete.load(std::memory_order_relaxed) ||
+            display_service::GetCurrentScreen() != display_service::ScreenId::kWifi) {
+            return;
+        }
+
+        const esp_err_t wifi_err = wifi_page_runtime::UpdateDisplayState();
+        if (wifi_err != ESP_OK && wifi_err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(kTag, "WiFi page state apply failed: %s", esp_err_to_name(wifi_err));
+            return;
+        }
+
+        const esp_err_t footer_err = footer_runtime::UpdateDisplayState();
+        if (footer_err != ESP_OK && footer_err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(kTag, "WiFi footer state apply failed: %s",
+                     esp_err_to_name(footer_err));
+            return;
+        }
+
+        const esp_err_t refresh_err =
+            display_service::RequestRefreshCurrentScreen(refresh_mode);
+        if (refresh_err != ESP_OK && refresh_err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(kTag, "WiFi screen refresh request failed: %s",
+                     esp_err_to_name(refresh_err));
+        }
+    });
+    return ESP_OK;
+}
+
+esp_err_t HandleFooterFocusRefresh(display_service::RefreshMode refresh_mode, void*)
+{
+    const display_service::ScreenId screen = display_service::GetCurrentScreen();
+    if (screen == display_service::ScreenId::kSettings ||
+        screen == display_service::ScreenId::kWifi) {
+        // Page runtimes mirror footer projection immediately after touch handling,
+        // so defer the repaint and let the page+footer composite refresh happen once.
+        return ESP_OK;
+    }
+
+    ui_refresh_dispatcher::DispatchLatest(kUiRefreshFooterOnly, [refresh_mode]() {
+        if (!s_startup_complete.load(std::memory_order_relaxed)) {
+            return;
+        }
+
+        const esp_err_t footer_err = footer_runtime::UpdateDisplayState();
+        if (footer_err != ESP_OK && footer_err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(kTag, "Footer state apply failed: %s", esp_err_to_name(footer_err));
+            return;
+        }
+
+        const esp_err_t refresh_err =
+            display_service::RequestRefreshCurrentScreen(refresh_mode);
+        if (refresh_err != ESP_OK && refresh_err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(kTag, "Footer screen refresh request failed: %s",
+                     esp_err_to_name(refresh_err));
+        }
+    });
+    return ESP_OK;
+}
+
 bool IsSettingsScreenActive()
 {
     return display_service::GetCurrentScreen() == display_service::ScreenId::kSettings;
+}
+
+bool IsWifiScreenActive()
+{
+    return display_service::GetCurrentScreen() == display_service::ScreenId::kWifi;
 }
 
 footer_runtime::LayoutState FooterLayoutForScreen(display_service::ScreenId screen)
@@ -129,15 +234,19 @@ footer_runtime::LayoutState FooterLayoutForScreen(display_service::ScreenId scre
     footer_runtime::LayoutState layout = {};
     layout.visible = true;
     layout.show_settings = true;
-    layout.show_home = screen == display_service::ScreenId::kSettings;
+    layout.show_wifi = true;
+    layout.show_home = screen == display_service::ScreenId::kSettings ||
+                       screen == display_service::ScreenId::kWifi;
     layout.show_mic = true;
     return layout;
 }
 
-footer_runtime::ProjectionState FooterProjectionForScreen(display_service::ScreenId)
+footer_runtime::ProjectionState FooterProjectionForScreen(display_service::ScreenId screen)
 {
-    footer_runtime::ProjectionState projection = {};
-    return projection;
+    if (screen == display_service::ScreenId::kWifi) {
+        return wifi_page_runtime::BuildFooterProjectionState();
+    }
+    return {};
 }
 
 void ConfigurePageInteractionForScreen(display_service::ScreenId screen)
@@ -145,6 +254,11 @@ void ConfigurePageInteractionForScreen(display_service::ScreenId screen)
     if (screen == display_service::ScreenId::kSettings) {
         page_interaction_runtime::RegisterTouchProvider(
             settings_page_runtime::BuildTouchProvider());
+        return;
+    }
+    if (screen == display_service::ScreenId::kWifi) {
+        page_interaction_runtime::RegisterTouchProvider(
+            wifi_page_runtime::BuildTouchProvider());
         return;
     }
 
@@ -162,6 +276,15 @@ esp_err_t SyncSettingsPageState(bool request_refresh_if_active)
             : settings_page_runtime::UpdateDisplayState();
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(kTag, "Settings page state sync failed: %s", esp_err_to_name(err));
+    }
+    return err;
+}
+
+esp_err_t SyncWifiPageState(bool request_refresh_if_active)
+{
+    const esp_err_t err = wifi_page_runtime::SyncFromService(request_refresh_if_active);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "WiFi page state sync failed: %s", esp_err_to_name(err));
     }
     return err;
 }
@@ -217,6 +340,25 @@ esp_err_t ShowSettingsScreen(display_service::RefreshMode refresh_mode)
                                              refresh_mode);
 }
 
+esp_err_t ShowWifiScreen(display_service::RefreshMode refresh_mode)
+{
+    SyncStatusBarState("show_wifi_screen");
+    wifi_page_runtime::ResetFocus();
+    ConfigurePageInteractionForScreen(display_service::ScreenId::kWifi);
+    footer_runtime::SetLayoutState(FooterLayoutForScreen(display_service::ScreenId::kWifi));
+    footer_runtime::SetProjectionState(wifi_page_runtime::BuildFooterProjectionState());
+    const esp_err_t footer_err = footer_runtime::UpdateDisplayState();
+    if (footer_err != ESP_OK && footer_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Footer sync before WiFi screen failed: %s",
+                 esp_err_to_name(footer_err));
+    }
+    const esp_err_t wifi_err = wifi_page_runtime::SyncFromService(false);
+    if (wifi_err != ESP_OK && wifi_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "WiFi page sync before show failed: %s", esp_err_to_name(wifi_err));
+    }
+    return display_service::SetCurrentScreen(display_service::ScreenId::kWifi, refresh_mode);
+}
+
 app_interaction::InputResult HandleFooterActivate(footer_runtime::FooterFocusItem item, void*)
 {
     app_interaction::InputResult result = {};
@@ -237,6 +379,10 @@ app_interaction::InputResult HandleFooterActivate(footer_runtime::FooterFocusIte
             err = ShowSettingsScreen(display_service::RefreshMode::kFull);
             break;
         case footer_runtime::FooterFocusItem::kWifi:
+            result.play_feedback = true;
+            result.feedback_cue = app_interaction::FeedbackCue::kClick;
+            err = ShowWifiScreen(display_service::RefreshMode::kFull);
+            break;
         case footer_runtime::FooterFocusItem::kTime:
         case footer_runtime::FooterFocusItem::kFolder:
         case footer_runtime::FooterFocusItem::kMic:
@@ -260,16 +406,6 @@ bool HandleSettingsScreenButtonEvent(const button_service::ButtonEventInfo& even
 
     switch (event.event) {
         case button_service::ButtonEvent::kSingleClick:
-            if (event.button == button_service::ButtonId::kUp ||
-                event.button == button_service::ButtonId::kDown) {
-                const int delta =
-                    event.button == button_service::ButtonId::kUp ? -1 : 1;
-                if (settings_page_runtime::MoveFocus(delta)) {
-                    PlayInteractionFeedback(
-                        MakeFeedbackResult(app_interaction::FeedbackCue::kClick));
-                }
-                return true;
-            }
             if (event.button == button_service::ButtonId::kPowerOk) {
                 const settings_page_runtime::ActivationResult activation =
                     settings_page_runtime::ActivateFocusedItem();
@@ -285,30 +421,66 @@ bool HandleSettingsScreenButtonEvent(const button_service::ButtonEventInfo& even
                         HandleFooterActivate(activation.footer_item, nullptr);
                     PlayInteractionFeedback(footer_result);
                 }
+                FlushOverlayFeedback();
                 return true;
             }
             break;
         case button_service::ButtonEvent::kDoubleClick:
-            if (event.button == button_service::ButtonId::kDown) {
-                const settings_page_runtime::ActivationResult activation =
-                    settings_page_runtime::ActivateFocusedItem();
+            break;
+        case button_service::ButtonEvent::kPressDown:
+        case button_service::ButtonEvent::kPressUp:
+        case button_service::ButtonEvent::kPressRepeat:
+        case button_service::ButtonEvent::kLongPressStart:
+        case button_service::ButtonEvent::kLongPressUp:
+            if (event.button == button_service::ButtonId::kPowerOk) {
+                return true;
+            }
+            break;
+        default:
+            break;
+    }
+
+    return false;
+}
+
+bool HandleWifiScreenButtonEvent(const button_service::ButtonEventInfo& event)
+{
+    if (!IsWifiScreenActive()) {
+        return false;
+    }
+
+    switch (event.event) {
+        case button_service::ButtonEvent::kSingleClick:
+            if (event.button == button_service::ButtonId::kPowerOk) {
+                const wifi_page_runtime::ActivationResult activation =
+                    wifi_page_runtime::ActivateFocusedItem();
                 if (!activation.handled) {
                     return true;
                 }
                 if (activation.play_feedback) {
-                    PlayInteractionFeedback(
-                        MakeFeedbackResult(activation.feedback_cue));
+                    PlayInteractionFeedback(MakeFeedbackResult(activation.feedback_cue));
                 }
                 if (activation.footer_item != footer_runtime::FooterFocusItem::kNone) {
                     const app_interaction::InputResult footer_result =
                         HandleFooterActivate(activation.footer_item, nullptr);
                     PlayInteractionFeedback(footer_result);
                 }
+                FlushOverlayFeedback();
+                return true;
+            }
+            break;
+        case button_service::ButtonEvent::kDoubleClick:
+            if (event.button == button_service::ButtonId::kUp) {
+                if (wifi_page_runtime::ExitNetworkListWithoutSelection()) {
+                    PlayInteractionFeedback(
+                        MakeFeedbackResult(app_interaction::FeedbackCue::kClick));
+                }
                 return true;
             }
             break;
         case button_service::ButtonEvent::kPressDown:
         case button_service::ButtonEvent::kPressUp:
+        case button_service::ButtonEvent::kPressRepeat:
         case button_service::ButtonEvent::kLongPressStart:
         case button_service::ButtonEvent::kLongPressUp:
             if (event.button == button_service::ButtonId::kPowerOk) {
@@ -355,6 +527,8 @@ const char* ButtonEventName(button_service::ButtonEvent event)
             return "PRESS_DOWN";
         case button_service::ButtonEvent::kPressUp:
             return "PRESS_UP";
+        case button_service::ButtonEvent::kPressRepeat:
+            return "PRESS_REPEAT";
         case button_service::ButtonEvent::kSingleClick:
             return "SINGLE_CLICK";
         case button_service::ButtonEvent::kDoubleClick:
@@ -405,7 +579,7 @@ recording_session_service::Context BuildRecordingSessionContext()
     context.lock_screen_active = lock_screen_runtime::IsActive();
     context.overlay_visible =
         overlay_runtime::IsShutdownModalVisible() || overlay_runtime::IsStorageModalVisible() ||
-        overlay_runtime::IsSelectModalVisible();
+        overlay_runtime::IsSelectModalVisible() || overlay_runtime::IsKeyboardVisible();
     return context;
 }
 
@@ -722,9 +896,10 @@ void HandleWifiEvent(const wifi_service::Event& event, void*)
     }
 
     (void)SyncSettingsPageState(true);
+    (void)SyncWifiPageState(true);
 }
 
-void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
+void HandleDispatchedButtonEvent(const button_service::ButtonEventInfo& event)
 {
     ESP_LOGI(kTag, "Button intent: button=%s event=%s pressed_ms=%lu",
              ButtonIdName(event.button), ButtonEventName(event.event),
@@ -785,6 +960,7 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
                                                               std::memory_order_relaxed);
                 break;
             case button_service::ButtonEvent::kPressDown:
+            case button_service::ButtonEvent::kPressRepeat:
             case button_service::ButtonEvent::kLongPressStart:
             default:
                 break;
@@ -833,6 +1009,10 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
         return;
     }
 
+    if (HandleWifiScreenButtonEvent(event)) {
+        return;
+    }
+
     if (event.button == button_service::ButtonId::kPowerOk) {
         const recording_session_service::Context recording_context =
             BuildRecordingSessionContext();
@@ -857,27 +1037,25 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
 
     switch (event.event) {
         case button_service::ButtonEvent::kSingleClick:
-            if (event.button == button_service::ButtonId::kUp) {
+            if (lock_screen_runtime::IsActive() &&
+                event.button == button_service::ButtonId::kUp) {
                 PlayInteractionFeedback(
                     MakeFeedbackResult(app_interaction::FeedbackCue::kClick));
-                if (lock_screen_runtime::IsActive()) {
-                    const esp_err_t err =
-                        lock_screen_runtime::RequestRefresh(display_service::RefreshMode::kPartial);
-                    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-                        ESP_LOGW(kTag, "Lock screen partial refresh failed: %s",
-                                 esp_err_to_name(err));
-                    }
+                const esp_err_t err =
+                    lock_screen_runtime::RequestRefresh(display_service::RefreshMode::kPartial);
+                if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+                    ESP_LOGW(kTag, "Lock screen partial refresh failed: %s",
+                             esp_err_to_name(err));
                 }
-            } else if (event.button == button_service::ButtonId::kDown) {
+            } else if (lock_screen_runtime::IsActive() &&
+                       event.button == button_service::ButtonId::kDown) {
                 PlayInteractionFeedback(
                     MakeFeedbackResult(app_interaction::FeedbackCue::kClick));
-                if (lock_screen_runtime::IsActive()) {
-                    const esp_err_t err =
-                        lock_screen_runtime::RequestRefresh(display_service::RefreshMode::kFull);
-                    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-                        ESP_LOGW(kTag, "Lock screen full refresh failed: %s",
-                                 esp_err_to_name(err));
-                    }
+                const esp_err_t err =
+                    lock_screen_runtime::RequestRefresh(display_service::RefreshMode::kFull);
+                if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+                    ESP_LOGW(kTag, "Lock screen full refresh failed: %s",
+                             esp_err_to_name(err));
                 }
             }
             break;
@@ -893,7 +1071,8 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
                                             : feedback_service::FeedbackEvent::kLock);
                 }
             } else if (event.button == button_service::ButtonId::kDown) {
-                if (!lock_screen_runtime::IsActive()) {
+                if (!lock_screen_runtime::IsActive() &&
+                    display_service::GetCurrentScreen() == display_service::ScreenId::kHome) {
                     const esp_err_t err = ShowSettingsScreen(display_service::RefreshMode::kFull);
                     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
                         ESP_LOGW(kTag, "DOWN double-click settings navigation failed: %s",
@@ -915,6 +1094,15 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
             break;
     }
 
+}
+
+void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
+{
+    button_input_runtime::HandleHardwareEvent(
+        event,
+        [](const button_service::ButtonEventInfo& dispatched_event) {
+            HandleDispatchedButtonEvent(dispatched_event);
+        });
 }
 
 void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
@@ -943,6 +1131,7 @@ void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
 
     const app_interaction::InputResult touch_result = input_focus_runtime::HandleTouchEvent(event);
     PlayInteractionFeedback(touch_result);
+    FlushOverlayFeedback();
     if (touch_result.select_modal_submitted) {
         (void)recording_session_service::SubmitTagSelection(
             touch_result.select_modal_selected_index);
@@ -969,6 +1158,8 @@ void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
     if (touch_result.consumed) {
         if (IsSettingsScreenActive()) {
             (void)settings_page_runtime::SyncFocusFromFooterProjection();
+        } else if (IsWifiScreenActive()) {
+            (void)wifi_page_runtime::SyncFocusFromFooterProjection();
         }
         return;
     }
@@ -1035,6 +1226,11 @@ void StartShutdownTask()
 void InitButtonService()
 {
     button_service::SetEventHandler(HandleButtonEvent, nullptr);
+    const esp_err_t input_runtime_err = button_input_runtime::Init();
+    if (input_runtime_err != ESP_OK) {
+        ESP_LOGW(kTag, "Button input runtime init failed: %s",
+                 esp_err_to_name(input_runtime_err));
+    }
     const esp_err_t err = button_service::Init();
     if (err != ESP_OK) {
         ESP_LOGW(kTag, "Button service init failed: %s", esp_err_to_name(err));
@@ -1064,6 +1260,11 @@ void InitUiRefreshRuntime()
     if (err != ESP_OK) {
         ESP_LOGW(kTag, "UI refresh runtime init failed: %s", esp_err_to_name(err));
     }
+}
+
+void InitUiRefreshDispatcher()
+{
+    ui_refresh_dispatcher::Init();
 }
 
 void InitLockScreenRuntime()
@@ -1155,7 +1356,10 @@ void InitRecordingSessionService()
 void InitFooterRuntime()
 {
     footer_runtime::SetActivateHandler(HandleFooterActivate, nullptr);
+    footer_runtime::SetRefreshHandler(HandleFooterFocusRefresh, nullptr);
     settings_page_runtime::SetActionHandler(HandleSettingsPageAction, nullptr);
+    settings_page_runtime::SetRefreshHandler(HandleSettingsScreenRefresh, nullptr);
+    wifi_page_runtime::SetRefreshHandler(HandleWifiScreenRefresh, nullptr);
     ConfigurePageInteractionForScreen(display_service::ScreenId::kHome);
     footer_runtime::SetLayoutState(FooterLayoutForScreen(display_service::ScreenId::kHome));
     footer_runtime::SetProjectionState(FooterProjectionForScreen(display_service::ScreenId::kHome));
@@ -1168,6 +1372,11 @@ void InitFooterRuntime()
     if (settings_err != ESP_OK && settings_err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(kTag, "Settings page runtime init failed: %s",
                  esp_err_to_name(settings_err));
+    }
+
+    const esp_err_t wifi_err = wifi_page_runtime::SyncFromService(false);
+    if (wifi_err != ESP_OK && wifi_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "WiFi page runtime init failed: %s", esp_err_to_name(wifi_err));
     }
 }
 
@@ -1237,6 +1446,7 @@ void Run()
     InitStorageService();
     InitDisplayService();
     InitUiRefreshRuntime();
+    InitUiRefreshDispatcher();
     InitLockScreenRuntime();
     InitOverlayRuntime();
     PlayFeedback(feedback_service::FeedbackEvent::kStartup);
