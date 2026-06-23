@@ -3,51 +3,30 @@
 
 #include <cstdint>
 
-#include "app_interaction_result.h"
 #include "app_interaction_target.h"
 #include "display_service.h"
 #include "esp_err.h"
 #include "footer_runtime.h"
-#include "page_interaction_runtime.h"
+#include "page_action_result.h"
+#include "settings_page_interactions.h"
 
 namespace settings_page_runtime {
-
-enum class FocusItem : uint8_t {
-    kNone = 0,
-    kWifiToggle,
-    kAccessPointToggle,
-    kFormatSdButton,
-    kFooterSettings,
-    kFooterWifi,
-    kFooterHome,
-};
-
-enum class ActionRequest : uint8_t {
-    kNone = 0,
-    kShowFormatSdModal,
-};
-
-using ActionHandler = void (*)(ActionRequest request, void* context);
-using RefreshHandler = esp_err_t (*)(display_service::RefreshMode refresh_mode, void* context);
-
-struct ActivationResult {
-    bool handled = false;
-    bool play_feedback = false;
-    app_interaction::FeedbackCue feedback_cue = app_interaction::FeedbackCue::kNone;
-    footer_runtime::FooterFocusItem footer_item = footer_runtime::FooterFocusItem::kNone;
-};
 
 esp_err_t UpdateDisplayState();
 esp_err_t UpdateDisplayStateAndRequestRefresh(
     display_service::RefreshMode refresh_mode = display_service::RefreshMode::kPartial);
-bool MoveFocus(int delta);
-ActivationResult ActivateFocusedItem();
+esp_err_t UpdateDisplayStateAndRequestRefresh(
+    const display_service::RefreshRequest& refresh_request);
+page_actions::FocusMoveOutcome MoveFocus(int delta);
+settings_page_interactions::ActivateResult ActivateFocusedItem();
+bool ResolveTouchTarget(int x, int y, app_interaction::InteractiveTarget* target);
+page_actions::FocusUpdateOutcome FocusTouchTarget(
+    const app_interaction::InteractiveTarget& target);
+settings_page_interactions::ActivateResult ActivateTouchTarget(
+    const app_interaction::InteractiveTarget& target);
 footer_runtime::ProjectionState BuildFooterProjectionState();
-bool SyncFocusFromFooterProjection();
+page_actions::FocusUpdateOutcome FocusFooterItem(footer_runtime::FooterFocusItem item);
 void ResetFocus();
-void SetActionHandler(ActionHandler handler, void* context);
-void SetRefreshHandler(RefreshHandler handler, void* context);
-page_interaction_runtime::TouchProvider BuildTouchProvider();
 
 }  // namespace settings_page_runtime
 

@@ -2,8 +2,9 @@
 
 namespace page_navigation {
 
-NavigationInputController::NavigationInputController(uint32_t hold_repeat_interval_ms)
-    : hold_repeat_interval_ms_(hold_repeat_interval_ms) {
+NavigationInputController::NavigationInputController(uint32_t hold_start_ms,
+                                                     uint32_t hold_repeat_interval_ms)
+    : hold_start_ms_(hold_start_ms), hold_repeat_interval_ms_(hold_repeat_interval_ms) {
     for (auto& pressed : pressed_) {
         pressed.store(false);
     }
@@ -11,7 +12,6 @@ NavigationInputController::NavigationInputController(uint32_t hold_repeat_interv
         generation.store(0);
     }
     last_hold_pressed_time_ms_.fill(0);
-    hold_blocked_.fill(false);
 }
 
 void NavigationInputController::BeginPress(size_t slot) {
@@ -37,14 +37,6 @@ void NavigationInputController::ResetHold(size_t slot) {
         return;
     }
     last_hold_pressed_time_ms_[slot] = 0;
-    hold_blocked_[slot] = false;
-}
-
-void NavigationInputController::SetHoldBlocked(size_t slot, bool blocked) {
-    if (!IsValidSlot(slot)) {
-        return;
-    }
-    hold_blocked_[slot] = blocked;
 }
 
 uint32_t NavigationInputController::CurrentGeneration(size_t slot) const {
@@ -63,7 +55,7 @@ bool NavigationInputController::IsCurrentPress(size_t slot, uint32_t generation)
 
 bool NavigationInputController::ShouldHandleHold(size_t slot, uint32_t generation,
                                                  uint32_t pressed_time_ms) {
-    if (!IsCurrentPress(slot, generation) || hold_blocked_[slot]) {
+    if (!IsCurrentPress(slot, generation) || pressed_time_ms < hold_start_ms_) {
         return false;
     }
 

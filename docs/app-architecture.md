@@ -91,12 +91,22 @@ main/
   input_callback_dispatcher.cpp
   input_focus_runtime.h
   input_focus_runtime.cpp
+  input_runtime_setup.h
+  input_runtime_setup.cpp
   lock_screen_runtime.h
   lock_screen_runtime.cpp
   status_bar_runtime.h
   status_bar_runtime.cpp
+  page_action_result.h
   overlay_runtime.h
   overlay_runtime.cpp
+  page_input_runtime.h
+  page_input_runtime.cpp
+  shared_page_interactions.h
+  settings_page_interactions.h
+  settings_page_interactions.cpp
+  wifi_page_interactions.h
+  wifi_page_interactions.cpp
   page_interaction_runtime.h
   page_interaction_runtime.cpp
   ui_refresh_runtime.h
@@ -374,8 +384,18 @@ The current app-runtime helpers under `main/` are:
   `epaper_ui::GlobalFooterState`
 - `overlay_runtime`: own retained shutdown/select/storage/toast overlay state,
   hit testing, and overlay presentation hooks
+- `input_runtime_setup`: own app-facing button/touch binding setup plus the
+  shared inputs-enabled gate before events enter app routing
 - `input_focus_runtime`: own overlay-first button routing for roving focus
   movement plus app-wide touch contact precedence
+- `page_input_runtime`: own active page input routing for the current
+  page-owned screens, including focus movement, page-local button activation,
+  footer projection hooks, touch-provider registration, and applying neutral
+  page interaction results into app-facing behavior
+- `settings_page_interactions` / `wifi_page_interactions`: own page-local
+  focus and activate semantics for the current page-owned screens so the
+  shared page-input layer applies intent/results instead of open-coding page
+  behavior inline inside each runtime
 - `page_interaction_runtime`: own the registration contract future page
   runtimes/coordinators use to plug page targets into the shared touch
   interaction path
@@ -445,7 +465,9 @@ Current app-level button interactions are:
   activating on release.
 - when no overlay captures input, footer targets participate in the same touch
   model: touch-down focuses the footer item immediately and touch-up activates
-  the armed footer target.
+  the armed footer target. On page-owned screens, that touch-down focus is
+  translated straight into page-local focus truth before footer projection is
+  repainted.
 
 Shutdown still runs through the deferred AppShell shutdown task so the
 power-latch release sequence does not execute inside the button callback. The
@@ -462,6 +484,14 @@ Current input precedence and focus ownership are:
 - footer targets when no overlay captures input
 - registered page targets after footer under the shared page-touch contract
 
+Current focus-surface inventory is:
+
+- `Home`: footer path only
+- `Settings`: shared page-focus path
+- `WiFi`: shared page-focus path, with page-owned list sub-focus for networks
+- `Lock screen`: no focusable page or footer surface today
+- shutdown/storage/select/keyboard/toast overlays: overlay path
+
 Ownership is intentionally split as:
 
 - `components/page_navigation/roving_focus`: reusable wraparound index
@@ -470,22 +500,33 @@ Ownership is intentionally split as:
   generation and hold-repeat gating for navigation buttons
 - `main/input_callback_dispatcher.*`: dedicated latest-wins input callback task
   for app-owned button routing
+- `main/input_runtime_setup.*`: app-owned raw button/touch binding setup plus a
+  shared inputs-enabled gate before app routing begins
 - `main/button_input_runtime.*`: app-wide hardware-button dispatch policy that
   converts raw button events into shared navigation press/hold behavior before
   they reach page or overlay code
 - `main/input_focus_runtime.cpp`: app-owned focus routing, touch contact state,
   and app-wide precedence for overlay, footer, and page targets
+- `main/page_input_runtime.*`: active page input routing for current page-owned
+  screens so `app_shell` and `input_focus_runtime` do not hard-code page
+  behavior directly, and so neutral page interaction results are applied in
+  one place instead of inside individual page runtimes
+- `main/settings_page_interactions.*` and `main/wifi_page_interactions.*`:
+  focused interaction helpers that translate current page focus into neutral
+  page outcomes plus follow-on intents, while leaving service effects and
+  orchestration callbacks outside the coordinator
 - `main/page_interaction_runtime.cpp`: registration point for future page
   runtimes/coordinators to provide `resolve -> focus -> activate` touch hooks
 - `main/overlay_runtime.cpp`: retained overlay state, focus-sync, submit, and
   dismiss behavior for shutdown/select/toast overlays
 - `main/footer_runtime.cpp`: presentation-only projection of footer layout and
-  eventual shared page focus into the e-paper footer contract, plus footer
-  touch resolve/focus/activate hooks
+  shared page focus into the e-paper footer contract, plus footer
+  touch resolve/focus/activate hooks for footer-owned surfaces such as `Home`
 - `main/app_shell.cpp`: orchestration only; wires button/touch events into the
   focused runtime helpers and composes higher-level product policy
 
-The current shared page-touch contract for future page ports is:
+The current shared page-touch contract for current and future page-owned
+screens is:
 
 - `resolve_touch_target(x, y, target)`: identify whether a page-owned
   interactive target was touched
@@ -493,16 +534,32 @@ The current shared page-touch contract for future page ports is:
 - `activate_touch_target(target)`: perform page-owned activation on touch
   release
 
+Today that contract is implemented by the current page-owned screens:
+
+- `Settings`
+- `WiFi`
+
 Future pages should keep page-local selected indexes as render projections of
 page-owned focus truth rather than inventing separate touch-only selection
 state. Composite page controls should plug into this same contract instead of
 adding a second touch interaction path.
+
+Page-owned screens also own footer focus truth whenever their footer buttons are
+part of the same navigation model. Touch-down on `Settings` or `WiFi` footer
+targets is translated into the page coordinator's focus index first, and the
+footer is then repainted as a projection of that page-local state. The footer
+runtime keeps standalone focus ownership only on footer-owned surfaces such as
+`Home`.
 
 Shared button-navigation rules are:
 
 - navigation timing is not page-owned
 - navigation `press down` and gated hold-repeat behavior route through the
   shared input runtime first
+- shared hold-repeat uses an explicit first-repeat gate before interval-based
+  repeats so the timing stays stable even if raw repeat callbacks jitter
+- on the active WiFi network list, hold-repeat uses page jumps sized to the
+  currently visible row capacity, while press-down still advances by one row
 - stale queued navigation callbacks should be superseded by the newest callback
   for the same button lane
 - page modules own `MoveFocus(...)`, activate semantics, and retained page-state
@@ -1198,6 +1255,10 @@ Current decoupled refresh rule:
 - schedule keyed UI presentation work through `main/ui_refresh_runtime.cpp`
 - let `ui_refresh_runtime` coalesce stale intermediate updates and keep the
   latest state for each keyed surface while the panel is busy
+- carry refresh scope through that queue as a `display_service::RefreshRequest`
+  so focus-only updates can stay bounded
+- keep page-owned focus refresh on that same queue instead of bouncing through
+  an extra app-shell UI dispatcher layer
 - keep `display_service` as the sole owner of framebuffer mutation and panel
   refresh execution
 
@@ -1207,6 +1268,37 @@ The current keyed surfaces are:
 - lock screen
 - status bar
 - footer
+- settings page
+- WiFi page
+
+Current refresh-scope categories are:
+
+- focus-only bounded repaint: old focus visual bounds union new focus visual
+  bounds, currently used on `Settings` and `WiFi`
+- larger bounded page repaint: used when a focus move also changes a larger
+  viewport region such as the visible WiFi network-list window
+- whole-screen partial refresh: used for general state churn, overlay reuse
+  paths, and safe fallbacks when region redraw is not appropriate
+- full base refresh: used for explicit full refresh requests, wake recovery,
+  and other panel-reset cases
+
+The current focus fast-lane is:
+
+- page input mutates page-owned focus truth first
+- the page runtime computes dirty bounds for pure focus motion plus whether the
+  visible footer projection actually changed
+- `ui_refresh_runtime` coalesces the latest `RefreshRequest` for that page
+- when footer projection changed, the queued page apply updates page state and
+  footer state together once before the refresh request reaches the panel queue
+- `display_service` redraws the active screen and executes a region partial
+  refresh when the request is bounded and no overlay is visible
+- if any overlay is visible, the display path falls back to the broader
+  underlay rebuild / full-screen partial route so retained overlay correctness
+  wins over smaller repaint scope
+- page-entry transitions still stay synchronous in `app_shell` rather than
+  going through the latest-wins queue, because the app shell must preserve
+  deterministic ordering for touch-provider setup, footer layout, runtime state
+  sync, and screen switch
 
 The long-term direction is to replace the remaining demo bridge with real view
 renderers and rename the display API away from `DemoSelection` toward a

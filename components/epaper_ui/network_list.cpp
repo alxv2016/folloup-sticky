@@ -274,6 +274,34 @@ UiRect NetworkListBounds(int origin_x, int origin_y, const NetworkListStyle& sty
             panel.height + (status.IsEmpty() ? 0 : ClampPositive(style.section_gap) + status.height)};
 }
 
+UiRect NetworkListVisualBounds(int origin_x,
+                               int origin_y,
+                               const NetworkListState& state,
+                               const NetworkListStyle& style)
+{
+    const UiRect panel = NetworkListPanelBounds(origin_x, origin_y, style);
+    UiRect visual_bounds = panel;
+    if (ShowFocusRing(state)) {
+        const int ring_padding = FocusPadding(style);
+        visual_bounds = {panel.x - ring_padding,
+                         panel.y - ring_padding,
+                         panel.width + (2 * ring_padding),
+                         panel.height + (2 * ring_padding)};
+    }
+    return UnionRect(visual_bounds, NetworkListStatusBounds(origin_x, origin_y, state, style));
+}
+
+int NetworkListFirstVisibleRow(int origin_x,
+                               int origin_y,
+                               const NetworkListState& state,
+                               const NetworkListStyle& style)
+{
+    const UiRect viewport = NetworkListViewportBounds(origin_x, origin_y, style);
+    int first = 0;
+    VisibleRange(state, style, viewport, &first, nullptr);
+    return first;
+}
+
 UiRect NetworkListRowBounds(int origin_x,
                             int origin_y,
                             const NetworkListState& state,

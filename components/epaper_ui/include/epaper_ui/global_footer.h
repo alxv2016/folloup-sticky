@@ -48,6 +48,10 @@ UiRect GlobalFooterItemBounds(int portrait_width,
                               int portrait_height,
                               const GlobalFooterState& state,
                               GlobalFooterItemId item);
+UiRect GlobalFooterItemVisualBounds(int portrait_width,
+                                    int portrait_height,
+                                    const GlobalFooterState& state,
+                                    GlobalFooterItemId item);
 bool HitTestGlobalFooterItem(int portrait_width,
                              int portrait_height,
                              const GlobalFooterState& state,

@@ -53,7 +53,7 @@ enum class DisplayCommandType {
 struct DisplayCommand {
     DisplayCommandType type = DisplayCommandType::kSetScreen;
     ScreenId screen = ScreenId::kHome;
-    RefreshMode refresh_mode = RefreshMode::kPartial;
+    RefreshRequest refresh_request = {};
     OverlayRefreshPolicy overlay_refresh_policy = OverlayRefreshPolicy::kRebuildUnderlay;
 };
 
@@ -442,6 +442,17 @@ const char* RefreshModeName(RefreshMode refresh_mode)
     }
 }
 
+const char* RefreshScopeName(RefreshScope scope)
+{
+    switch (scope) {
+        case RefreshScope::kRegion:
+            return "region";
+        case RefreshScope::kScreen:
+        default:
+            return "screen";
+    }
+}
+
 const char* OverlayRefreshPolicyName(OverlayRefreshPolicy policy)
 {
     switch (policy) {
@@ -453,6 +464,8 @@ const char* OverlayRefreshPolicyName(OverlayRefreshPolicy policy)
             return "unknown";
     }
 }
+
+esp_err_t RefreshCurrentScreenLocked(bool full_refresh);
 
 esp_err_t ApplyHomeScreen(bool full_refresh)
 {
@@ -554,6 +567,77 @@ esp_err_t ApplyWifi(bool full_refresh)
     return ESP_OK;
 }
 
+bool HasVisibleOverlay(const RenderSnapshot& snapshot)
+{
+    return snapshot.keyboard.visible || snapshot.shutdown_modal.visible ||
+           snapshot.storage_modal.visible || snapshot.select_modal.visible ||
+           snapshot.toast.visible;
+}
+
+epaper_ui::UiRect ClampPortraitRect(const epaper_ui::UiRect& rect)
+{
+    if (rect.IsEmpty()) {
+        return {};
+    }
+
+    const int x0 = std::clamp(rect.x, 0, kPortraitWidth);
+    const int y0 = std::clamp(rect.y, 0, kPortraitHeight);
+    const int x1 = std::clamp(rect.right(), 0, kPortraitWidth);
+    const int y1 = std::clamp(rect.bottom(), 0, kPortraitHeight);
+    if (x1 <= x0 || y1 <= y0) {
+        return {};
+    }
+    return {x0, y0, x1 - x0, y1 - y0};
+}
+
+esp_err_t RefreshCurrentScreenRegionLocked(const epaper_ui::UiRect& dirty_rect)
+{
+    const epaper_ui::UiRect clamped_rect = ClampPortraitRect(dirty_rect);
+    if (clamped_rect.IsEmpty()) {
+        return ESP_OK;
+    }
+
+    const RenderSnapshot snapshot = CaptureRenderSnapshot();
+    if (HasVisibleOverlay(snapshot)) {
+        return RefreshCurrentScreenLocked(false);
+    }
+
+    EpaperPanel& panel = Panel();
+    switch (s_current_screen.load(std::memory_order_relaxed)) {
+        case ScreenId::kHome:
+            DrawHomeUnderlay(panel.framebuffer(), snapshot);
+            break;
+        case ScreenId::kSettings:
+            DrawSettingsUnderlay(panel.framebuffer(), snapshot);
+            break;
+        case ScreenId::kWifi:
+            DrawWifiUnderlay(panel.framebuffer(), snapshot);
+            break;
+        case ScreenId::kLockScreen:
+            DrawLockScreenUnderlay(panel.framebuffer(), snapshot);
+            break;
+        default:
+            DrawHomeUnderlay(panel.framebuffer(), snapshot);
+            break;
+    }
+    CaptureUnderlaySnapshot(panel.framebuffer());
+    DrawCurrentOverlays(panel.framebuffer(), snapshot);
+
+    DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
+    if (bus_guard.err() != ESP_OK) {
+        return bus_guard.err();
+    }
+
+    RefreshBusyGuard refresh_busy;
+    const esp_err_t err = panel.RefreshPartialFullScreen();
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    LogMetrics(panel.metrics());
+    return ESP_OK;
+}
+
 esp_err_t ApplyStartupSplash()
 {
     EpaperPanel& panel = Panel();
@@ -644,16 +728,17 @@ void DisplayTask(void*)
     DisplayCommand command = {};
     command.type = DisplayCommandType::kSetScreen;
     command.screen = ScreenId::kHome;
-    command.refresh_mode = RefreshMode::kPartial;
+    command.refresh_request.refresh_mode = RefreshMode::kPartial;
     while (true) {
         if (xQueueReceive(s_command_queue, &command, portMAX_DELAY) != pdTRUE) {
             continue;
         }
 
-        ESP_LOGI(kTag, "Display command requested: type=%d screen=%d mode=%s",
+        ESP_LOGI(kTag, "Display command requested: type=%d screen=%d mode=%s scope=%s",
                  static_cast<int>(command.type),
                  static_cast<int>(command.screen),
-                 RefreshModeName(command.refresh_mode));
+                 RefreshModeName(command.refresh_request.refresh_mode),
+                 RefreshScopeName(command.refresh_request.scope));
         std::lock_guard<std::mutex> lock(s_panel_mutex);
         if (s_display_sleeping) {
             if (command.type == DisplayCommandType::kSetScreen) {
@@ -666,22 +751,26 @@ void DisplayTask(void*)
         esp_err_t err = ESP_OK;
         if (command.type == DisplayCommandType::kSetScreen) {
             if (command.screen == ScreenId::kLockScreen) {
-                err = ApplyLockScreen(command.refresh_mode == RefreshMode::kFull);
+                err = ApplyLockScreen(command.refresh_request.refresh_mode == RefreshMode::kFull);
             } else if (command.screen == ScreenId::kWifi) {
-                err = ApplyWifi(command.refresh_mode == RefreshMode::kFull);
+                err = ApplyWifi(command.refresh_request.refresh_mode == RefreshMode::kFull);
             } else if (command.screen == ScreenId::kSettings) {
-                err = ApplySettings(command.refresh_mode == RefreshMode::kFull);
+                err = ApplySettings(command.refresh_request.refresh_mode == RefreshMode::kFull);
             } else {
-                err = ApplyHomeScreen(command.refresh_mode == RefreshMode::kFull);
+                err = ApplyHomeScreen(command.refresh_request.refresh_mode == RefreshMode::kFull);
             }
         } else if (command.type == DisplayCommandType::kRefreshOverlay) {
             err = RefreshOverlayStateLocked(command.overlay_refresh_policy);
         } else {
-            err = RefreshCurrentScreenLocked(command.refresh_mode == RefreshMode::kFull);
+            err = command.refresh_request.scope == RefreshScope::kRegion &&
+                          command.refresh_request.refresh_mode == RefreshMode::kPartial
+                      ? RefreshCurrentScreenRegionLocked(command.refresh_request.dirty_rect)
+                      : RefreshCurrentScreenLocked(
+                            command.refresh_request.refresh_mode == RefreshMode::kFull);
         }
         if (err != ESP_OK) {
             ESP_LOGW(kTag, "Display refresh failed (mode=%s): %s",
-                     RefreshModeName(command.refresh_mode), esp_err_to_name(err));
+                     RefreshModeName(command.refresh_request.refresh_mode), esp_err_to_name(err));
         }
     }
 }
@@ -884,7 +973,7 @@ esp_err_t SetCurrentScreen(ScreenId screen, RefreshMode refresh_mode)
     DisplayCommand command = {};
     command.type = DisplayCommandType::kSetScreen;
     command.screen = screen;
-    command.refresh_mode = refresh_mode;
+    command.refresh_request.refresh_mode = refresh_mode;
     return xQueueOverwrite(s_command_queue, &command) == pdPASS ? ESP_OK : ESP_FAIL;
 }
 
@@ -901,7 +990,7 @@ esp_err_t RequestOverlayRefresh(OverlayRefreshPolicy policy)
     return xQueueOverwrite(s_command_queue, &command) == pdPASS ? ESP_OK : ESP_FAIL;
 }
 
-esp_err_t RequestRefreshCurrentScreen(RefreshMode refresh_mode)
+esp_err_t RequestRefreshCurrentScreen(const RefreshRequest& refresh_request)
 {
     if (!s_initialized || s_command_queue == nullptr) {
         return ESP_ERR_INVALID_STATE;
@@ -910,11 +999,18 @@ esp_err_t RequestRefreshCurrentScreen(RefreshMode refresh_mode)
     DisplayCommand command = {};
     command.type = DisplayCommandType::kRefreshCurrent;
     command.screen = s_current_screen.load(std::memory_order_relaxed);
-    command.refresh_mode = refresh_mode;
+    command.refresh_request = refresh_request;
     return xQueueOverwrite(s_command_queue, &command) == pdPASS ? ESP_OK : ESP_FAIL;
 }
 
-esp_err_t RefreshCurrentScreen(RefreshMode refresh_mode)
+esp_err_t RequestRefreshCurrentScreen(RefreshMode refresh_mode)
+{
+    return RequestRefreshCurrentScreen(RefreshRequest{
+        .refresh_mode = refresh_mode,
+    });
+}
+
+esp_err_t RefreshCurrentScreen(const RefreshRequest& refresh_request)
 {
     if (!s_initialized) {
         return ESP_ERR_INVALID_STATE;
@@ -925,7 +1021,19 @@ esp_err_t RefreshCurrentScreen(RefreshMode refresh_mode)
         return ESP_OK;
     }
 
-    return RefreshCurrentScreenLocked(refresh_mode == RefreshMode::kFull);
+    if (refresh_request.scope == RefreshScope::kRegion &&
+        refresh_request.refresh_mode == RefreshMode::kPartial) {
+        return RefreshCurrentScreenRegionLocked(refresh_request.dirty_rect);
+    }
+
+    return RefreshCurrentScreenLocked(refresh_request.refresh_mode == RefreshMode::kFull);
+}
+
+esp_err_t RefreshCurrentScreen(RefreshMode refresh_mode)
+{
+    return RefreshCurrentScreen(RefreshRequest{
+        .refresh_mode = refresh_mode,
+    });
 }
 
 esp_err_t EnterDisplaySleep()

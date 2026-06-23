@@ -95,6 +95,20 @@ UiRect PasswordInputFieldBounds(int origin_x,
             ClampPositive(style.field_height)};
 }
 
+UiRect PasswordInputVisualBounds(int origin_x,
+                                 int origin_y,
+                                 const PasswordInputState& state,
+                                 const PasswordInputStyle& style)
+{
+    const UiRect bounds = PasswordInputBounds(origin_x, origin_y, state, style);
+    const UiRect field = PasswordInputFieldBounds(origin_x, origin_y, state, style);
+    if (!state.focused) {
+        return bounds;
+    }
+
+    return UnionRect(bounds, Expand(field, FocusPadding(style)));
+}
+
 UiRect PasswordInputVisibilityButtonBounds(int origin_x,
                                            int origin_y,
                                            const PasswordInputState& state,

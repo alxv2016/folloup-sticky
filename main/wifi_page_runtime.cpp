@@ -10,6 +10,7 @@
 #include "page_navigation/navigation_model.h"
 #include "page_navigation/page_focus_projection.h"
 #include "ui_refresh_runtime.h"
+#include "wifi_page_interactions.h"
 #include "wifi_page_coordinator.h"
 #include "wifi_service.h"
 
@@ -21,8 +22,6 @@ constexpr const char* kTag = "WifiPageRuntime";
 std::mutex s_mutex;
 WifiPageCoordinator s_coordinator = {};
 int32_t s_interaction_generation = 1;
-RefreshHandler s_refresh_handler = nullptr;
-void* s_refresh_context = nullptr;
 
 void AdvanceInteractionGenerationLocked()
 {
@@ -84,6 +83,38 @@ page_navigation::NavigationItemRole RoleForUiItem(epaper_ui::WifiPageItemId item
     }
 }
 
+epaper_ui::WifiPageItemId ItemForRole(page_navigation::NavigationItemRole role)
+{
+    switch (role) {
+        case page_navigation::NavigationItemRole::kWifiPageNetworkList:
+            return epaper_ui::WifiPageItemId::kNetworkList;
+        case page_navigation::NavigationItemRole::kWifiPagePasswordInput:
+            return epaper_ui::WifiPageItemId::kPasswordInput;
+        case page_navigation::NavigationItemRole::kWifiPagePasswordVisibilityButton:
+            return epaper_ui::WifiPageItemId::kPasswordVisibilityButton;
+        case page_navigation::NavigationItemRole::kWifiPageScanButton:
+            return epaper_ui::WifiPageItemId::kScanButton;
+        case page_navigation::NavigationItemRole::kWifiPageConnectButton:
+            return epaper_ui::WifiPageItemId::kConnectButton;
+        default:
+            return epaper_ui::WifiPageItemId::kNone;
+    }
+}
+
+epaper_ui::GlobalFooterItemId FooterUiItemForRole(page_navigation::NavigationItemRole role)
+{
+    switch (role) {
+        case page_navigation::NavigationItemRole::kFooterHome:
+            return epaper_ui::GlobalFooterItemId::kHome;
+        case page_navigation::NavigationItemRole::kFooterSettings:
+            return epaper_ui::GlobalFooterItemId::kSettings;
+        case page_navigation::NavigationItemRole::kFooterWifi:
+            return epaper_ui::GlobalFooterItemId::kWifi;
+        default:
+            return epaper_ui::GlobalFooterItemId::kNone;
+    }
+}
+
 footer_runtime::ProjectionState BuildFooterProjectionStateLocked()
 {
     const page_navigation::PageFocusProjection projection =
@@ -97,24 +128,115 @@ footer_runtime::ProjectionState BuildFooterProjectionStateLocked()
     return state;
 }
 
+bool FooterProjectionChangedForFocusIndexes(int old_focus_index, int new_focus_index)
+{
+    const page_navigation::PageFocusProjection old_projection =
+        page_navigation::ProjectPageFocus(s_coordinator.navigation_model(),
+                                          page_navigation::NavigationItemSection::kWifiPageControls,
+                                          old_focus_index,
+                                          -1,
+                                          -1);
+    const page_navigation::PageFocusProjection new_projection =
+        page_navigation::ProjectPageFocus(s_coordinator.navigation_model(),
+                                          page_navigation::NavigationItemSection::kWifiPageControls,
+                                          new_focus_index,
+                                          -1,
+                                          -1);
+    return FooterItemForSelectedIndex(old_projection.footer_selected_index) !=
+           FooterItemForSelectedIndex(new_projection.footer_selected_index);
+}
+
 epaper_ui::WifiPageState BuildStateLocked()
 {
     return s_coordinator.BuildState();
 }
 
-esp_err_t SyncFocusUi(display_service::RefreshMode refresh_mode, bool include_footer)
+epaper_ui::UiRect FocusVisualBoundsForState(int focus_index,
+                                            const epaper_ui::WifiPageState& page_state,
+                                            const epaper_ui::GlobalFooterState& footer_state)
 {
-    RefreshHandler refresh_handler = nullptr;
-    void* refresh_context = nullptr;
-    {
-        std::lock_guard<std::mutex> lock(s_mutex);
-        refresh_handler = s_refresh_handler;
-        refresh_context = s_refresh_context;
-    }
-    if (refresh_handler != nullptr) {
-        return refresh_handler(refresh_mode, refresh_context);
+    const page_navigation::NavigationItemDescriptor* item =
+        s_coordinator.navigation_model().ItemAt(focus_index);
+    if (item == nullptr) {
+        return {};
     }
 
+    if (item->role == page_navigation::NavigationItemRole::kWifiPageNetworkList &&
+        page_state.network_list.active) {
+        const epaper_ui::UiRect row_bounds =
+            epaper_ui::WifiPageNetworkRowBounds(display_service::PortraitWidth(),
+                                                display_service::PortraitHeight(),
+                                                page_state,
+                                                page_state.network_list.focused_network_index);
+        if (!row_bounds.IsEmpty()) {
+            return row_bounds;
+        }
+    }
+
+    const epaper_ui::WifiPageItemId page_item = ItemForRole(item->role);
+    if (page_item != epaper_ui::WifiPageItemId::kNone) {
+        return epaper_ui::WifiPageItemVisualBounds(display_service::PortraitWidth(),
+                                                   display_service::PortraitHeight(),
+                                                   page_state,
+                                                   page_item);
+    }
+
+    const epaper_ui::GlobalFooterItemId footer_item = FooterUiItemForRole(item->role);
+    if (footer_item != epaper_ui::GlobalFooterItemId::kNone) {
+        return epaper_ui::GlobalFooterItemVisualBounds(display_service::PortraitWidth(),
+                                                       display_service::PortraitHeight(),
+                                                       footer_state,
+                                                       footer_item);
+    }
+    return {};
+}
+
+bool NetworkViewportChanged(const epaper_ui::WifiPageState& old_state,
+                            const epaper_ui::WifiPageState& new_state)
+{
+    if (!old_state.network_list.active || !new_state.network_list.active) {
+        return false;
+    }
+
+    return epaper_ui::WifiPageFirstVisibleNetworkRow(display_service::PortraitWidth(),
+                                                     display_service::PortraitHeight(),
+                                                     old_state) !=
+           epaper_ui::WifiPageFirstVisibleNetworkRow(display_service::PortraitWidth(),
+                                                     display_service::PortraitHeight(),
+                                                     new_state);
+}
+
+epaper_ui::UiRect BuildFocusDirtyRect(int old_focus_index,
+                                      const epaper_ui::WifiPageState& old_state,
+                                      int new_focus_index,
+                                      const epaper_ui::WifiPageState& new_state)
+{
+    const epaper_ui::GlobalFooterState footer_state = footer_runtime::BuildState();
+    const bool old_network_focus = s_coordinator.navigation_model().IsRoleSelected(
+        old_focus_index, page_navigation::NavigationItemRole::kWifiPageNetworkList);
+    const bool new_network_focus = s_coordinator.navigation_model().IsRoleSelected(
+        new_focus_index, page_navigation::NavigationItemRole::kWifiPageNetworkList);
+
+    if ((old_network_focus || new_network_focus) && NetworkViewportChanged(old_state, new_state)) {
+        return epaper_ui::WifiPageItemVisualBounds(display_service::PortraitWidth(),
+                                                   display_service::PortraitHeight(),
+                                                   new_state,
+                                                   epaper_ui::WifiPageItemId::kNetworkList);
+    }
+
+    return epaper_ui::UnionRect(FocusVisualBoundsForState(old_focus_index, old_state, footer_state),
+                                FocusVisualBoundsForState(new_focus_index, new_state, footer_state));
+}
+
+int VisibleNetworkRowCapacityLocked()
+{
+    return epaper_ui::WifiPageVisibleNetworkRowCapacity(display_service::PortraitWidth(),
+                                                        display_service::PortraitHeight(),
+                                                        BuildStateLocked());
+}
+
+esp_err_t SyncFocusUi(display_service::RefreshMode refresh_mode, bool include_footer)
+{
     const esp_err_t page_err = UpdateDisplayStateAndRequestRefresh(refresh_mode);
     if (page_err != ESP_OK && page_err != ESP_ERR_INVALID_STATE) {
         return page_err;
@@ -152,7 +274,7 @@ void KeyboardStateChanged(const epaper_ui::KeyboardState& keyboard_state,
     (void)UpdateDisplayStateAndRequestRefresh(display_service::RefreshMode::kPartial);
 }
 
-esp_err_t ShowPasswordKeyboard()
+esp_err_t ShowPasswordKeyboardImpl()
 {
     epaper_ui::KeyboardState keyboard_state = {};
     {
@@ -172,81 +294,7 @@ esp_err_t ShowPasswordKeyboard()
     return overlay_runtime::ShowKeyboard(keyboard_state, &KeyboardStateChanged, nullptr);
 }
 
-ActivationResult ActivateFocusedRoleLocked()
-{
-    ActivationResult result = {};
-    const page_navigation::NavigationItemDescriptor* item =
-        s_coordinator.navigation_model().ItemAt(s_coordinator.focus().index());
-    const page_navigation::NavigationItemRole role =
-        item != nullptr ? item->role : page_navigation::NavigationItemRole::kUnknown;
-
-    switch (role) {
-        case page_navigation::NavigationItemRole::kWifiPageNetworkList:
-            result.handled = true;
-            result.play_feedback = true;
-            result.feedback_cue = app_interaction::FeedbackCue::kClick;
-            if (s_coordinator.network_list_active()) {
-                (void)s_coordinator.CommitFocusedNetworkSelection();
-                (void)s_coordinator.ExitNetworkList();
-            } else if (s_coordinator.HasNetworks()) {
-                (void)s_coordinator.EnterNetworkList();
-            }
-            break;
-        case page_navigation::NavigationItemRole::kWifiPagePasswordInput:
-            result.handled = true;
-            result.play_feedback = true;
-            result.feedback_cue = app_interaction::FeedbackCue::kClick;
-            break;
-        case page_navigation::NavigationItemRole::kWifiPagePasswordVisibilityButton:
-            (void)s_coordinator.TogglePasswordVisibility();
-            result.handled = true;
-            result.play_feedback = true;
-            result.feedback_cue = app_interaction::FeedbackCue::kClick;
-            break;
-        case page_navigation::NavigationItemRole::kWifiPageScanButton:
-            (void)wifi_service::StartNetworkScan();
-            result.handled = true;
-            result.play_feedback = true;
-            result.feedback_cue = app_interaction::FeedbackCue::kClick;
-            break;
-        case page_navigation::NavigationItemRole::kWifiPageConnectButton: {
-            const std::string ssid = s_coordinator.SelectedNetworkSsid();
-            if (!ssid.empty()) {
-                if (s_coordinator.SelectedNetworkIsCurrent()) {
-                    (void)wifi_service::DisconnectFromNetwork(false);
-                } else {
-                    (void)wifi_service::ConnectToNetwork(
-                        ssid,
-                        s_coordinator.password_input_state().value_text,
-                        true);
-                }
-            }
-            result.handled = true;
-            result.play_feedback = true;
-            result.feedback_cue = app_interaction::FeedbackCue::kClick;
-            break;
-        }
-        case page_navigation::NavigationItemRole::kFooterSettings:
-            result.handled = true;
-            result.footer_item = footer_runtime::FooterFocusItem::kSettings;
-            break;
-        case page_navigation::NavigationItemRole::kFooterWifi:
-            result.handled = true;
-            result.footer_item = footer_runtime::FooterFocusItem::kWifi;
-            break;
-        case page_navigation::NavigationItemRole::kFooterHome:
-            result.handled = true;
-            result.footer_item = footer_runtime::FooterFocusItem::kHome;
-            break;
-        case page_navigation::NavigationItemRole::kUnknown:
-        default:
-            break;
-    }
-
-    return result;
-}
-
-bool ResolveTouchTargetImpl(int x, int y, app_interaction::InteractiveTarget* target, void*)
+bool ResolveTouchTargetImpl(int x, int y, app_interaction::InteractiveTarget* target)
 {
     if (target != nullptr) {
         *target = {};
@@ -302,23 +350,27 @@ bool ResolveTouchTargetImpl(int x, int y, app_interaction::InteractiveTarget* ta
     return true;
 }
 
-bool FocusTouchTargetImpl(const app_interaction::InteractiveTarget& target, void*)
+page_actions::FocusUpdateOutcome FocusTouchTargetImpl(
+    const app_interaction::InteractiveTarget& target)
 {
+    page_actions::FocusUpdateOutcome result = {};
     if (target.owner != app_interaction::Owner::kPage) {
-        return false;
+        return result;
     }
 
     bool changed = false;
-    bool footer_changed = false;
-    footer_runtime::ProjectionState projection = {};
+    int old_focus_index = -1;
+    int new_focus_index = -1;
+    epaper_ui::WifiPageState old_state = {};
+    epaper_ui::WifiPageState new_state = {};
     {
         std::lock_guard<std::mutex> lock(s_mutex);
         if (target.secondary_index != s_interaction_generation) {
-            return false;
+            return result;
         }
+        old_focus_index = s_coordinator.focus().index();
+        old_state = BuildStateLocked();
 
-        const footer_runtime::ProjectionState previous_projection =
-            BuildFooterProjectionStateLocked();
         if (target.kind == app_interaction::Kind::kPageListRow) {
             changed = s_coordinator.FocusNetworkRow(target.primary_index);
         } else if (target.kind == app_interaction::Kind::kPageAction) {
@@ -330,36 +382,33 @@ bool FocusTouchTargetImpl(const app_interaction::InteractiveTarget& target, void
                 (void)s_coordinator.ExitNetworkList();
             }
         } else {
-            return false;
+            return result;
         }
-
-        if (changed) {
-            projection = BuildFooterProjectionStateLocked();
-            footer_changed = projection.focused_item != previous_projection.focused_item;
-        }
+        new_focus_index = s_coordinator.focus().index();
+        new_state = BuildStateLocked();
     }
 
     if (!changed) {
-        return false;
+        return result;
     }
 
-    if (footer_changed) {
-        footer_runtime::SetProjectionState(projection);
-    }
-    (void)SyncFocusUi(display_service::RefreshMode::kPartial, footer_changed);
-    return true;
+    result.handled = true;
+    result.apply_page_state = true;
+    result.sync_footer_projection =
+        FooterProjectionChangedForFocusIndexes(old_focus_index, new_focus_index);
+    result.dirty_rect = BuildFocusDirtyRect(old_focus_index, old_state, new_focus_index, new_state);
+    result.use_partial_region = !result.dirty_rect.IsEmpty();
+    return result;
 }
 
-app_interaction::InputResult ActivateTouchTargetImpl(const app_interaction::InteractiveTarget& target,
-                                                     void*)
+wifi_page_interactions::ActivateResult ActivateTouchTargetImpl(
+    const app_interaction::InteractiveTarget& target)
 {
-    app_interaction::InputResult result = {};
+    wifi_page_interactions::ActivateResult result = {};
     if (target.owner != app_interaction::Owner::kPage) {
         return result;
     }
 
-    bool show_keyboard = false;
-    ActivationResult activation = {};
     {
         std::lock_guard<std::mutex> lock(s_mutex);
         if (target.secondary_index != s_interaction_generation) {
@@ -367,15 +416,8 @@ app_interaction::InputResult ActivateTouchTargetImpl(const app_interaction::Inte
         }
 
         if (target.kind == app_interaction::Kind::kPageListRow) {
-            if (!s_coordinator.FocusNetworkRow(target.primary_index) ||
-                !s_coordinator.SelectNetworkRow(target.primary_index)) {
-                return result;
-            }
-            activation = {
-                .handled = true,
-                .play_feedback = true,
-                .feedback_cue = app_interaction::FeedbackCue::kClick,
-            };
+            result = wifi_page_interactions::HandleNetworkRowActivate(s_coordinator,
+                                                                      target.primary_index);
         } else if (target.kind == app_interaction::Kind::kPageAction) {
             const page_navigation::NavigationItemDescriptor* item =
                 s_coordinator.navigation_model().ItemAt(target.primary_index);
@@ -383,28 +425,11 @@ app_interaction::InputResult ActivateTouchTargetImpl(const app_interaction::Inte
                 return result;
             }
             (void)s_coordinator.SetFocusIndex(target.primary_index);
-            if (item->role == page_navigation::NavigationItemRole::kWifiPagePasswordInput) {
-                show_keyboard = true;
-                activation = {
-                    .handled = true,
-                    .play_feedback = true,
-                    .feedback_cue = app_interaction::FeedbackCue::kClick,
-                };
-            } else {
-                activation = ActivateFocusedRoleLocked();
-            }
+            result = wifi_page_interactions::HandlePrimaryActivate(s_coordinator);
         } else {
             return result;
         }
     }
-
-    result.consumed = activation.handled;
-    result.play_feedback = activation.play_feedback;
-    result.feedback_cue = activation.feedback_cue;
-    if (show_keyboard) {
-        (void)ShowPasswordKeyboard();
-    }
-    (void)UpdateDisplayStateAndRequestRefresh(display_service::RefreshMode::kPartial);
     return result;
 }
 
@@ -418,50 +443,43 @@ esp_err_t UpdateDisplayState()
 
 esp_err_t UpdateDisplayStateAndRequestRefresh(display_service::RefreshMode refresh_mode)
 {
-    RefreshHandler refresh_handler = nullptr;
-    void* refresh_context = nullptr;
-    {
-        std::lock_guard<std::mutex> lock(s_mutex);
-        refresh_handler = s_refresh_handler;
-        refresh_context = s_refresh_context;
-    }
-    if (refresh_handler != nullptr) {
-        return refresh_handler(refresh_mode, refresh_context);
-    }
-
-    return ui_refresh_runtime::Schedule(
-        ui_refresh_runtime::SurfaceKey::kWifiPage, &UpdateDisplayState, refresh_mode);
+    return UpdateDisplayStateAndRequestRefresh(display_service::RefreshRequest{
+        .refresh_mode = refresh_mode,
+    });
 }
 
-bool MoveFocus(int delta)
+esp_err_t UpdateDisplayStateAndRequestRefresh(
+    const display_service::RefreshRequest& refresh_request)
 {
-    if (delta == 0) {
-        return false;
-    }
+    return ui_refresh_runtime::Schedule(
+        ui_refresh_runtime::SurfaceKey::kWifiPage, &UpdateDisplayState, refresh_request);
+}
 
-    bool changed = false;
-    bool footer_changed = false;
-    footer_runtime::ProjectionState projection = {};
+page_actions::FocusMoveOutcome MoveFocus(int delta, bool page_jump)
+{
+    page_actions::FocusMoveOutcome result = {};
+    int old_focus_index = -1;
+    int new_focus_index = -1;
+    epaper_ui::WifiPageState old_state = {};
+    epaper_ui::WifiPageState new_state = {};
     {
         std::lock_guard<std::mutex> lock(s_mutex);
-        const footer_runtime::ProjectionState previous_projection =
-            BuildFooterProjectionStateLocked();
-        changed = s_coordinator.MoveFocus(delta);
-        if (changed) {
-            projection = BuildFooterProjectionStateLocked();
-            footer_changed = projection.focused_item != previous_projection.focused_item;
+        old_focus_index = s_coordinator.focus().index();
+        old_state = BuildStateLocked();
+        result = wifi_page_interactions::HandleMoveFocus(
+            s_coordinator, delta, page_jump, page_jump ? VisibleNetworkRowCapacityLocked() : 0);
+        if (!result.handled) {
+            return result;
         }
+        new_focus_index = s_coordinator.focus().index();
+        new_state = BuildStateLocked();
     }
 
-    if (!changed) {
-        return false;
-    }
-
-    if (footer_changed) {
-        footer_runtime::SetProjectionState(projection);
-    }
-    (void)SyncFocusUi(display_service::RefreshMode::kPartial, footer_changed);
-    return true;
+    result.dirty_rect = BuildFocusDirtyRect(old_focus_index, old_state, new_focus_index, new_state);
+    result.sync_footer_projection =
+        FooterProjectionChangedForFocusIndexes(old_focus_index, new_focus_index);
+    result.use_partial_region = !result.dirty_rect.IsEmpty();
+    return result;
 }
 
 bool EnterNetworkList()
@@ -507,56 +525,16 @@ bool ExitNetworkListWithoutSelection()
     return changed;
 }
 
-ActivationResult ActivateFocusedItem()
+wifi_page_interactions::ActivateResult ActivateFocusedItem()
 {
-    ActivationResult result = {};
-    bool show_keyboard = false;
-    {
-        std::lock_guard<std::mutex> lock(s_mutex);
-        const page_navigation::NavigationItemDescriptor* item =
-            s_coordinator.navigation_model().ItemAt(s_coordinator.focus().index());
-        if (item != nullptr &&
-            item->role == page_navigation::NavigationItemRole::kWifiPagePasswordInput) {
-            show_keyboard = true;
-            result = {
-                .handled = true,
-                .play_feedback = true,
-                .feedback_cue = app_interaction::FeedbackCue::kClick,
-            };
-        } else {
-            result = ActivateFocusedRoleLocked();
-        }
-    }
-
-    if (show_keyboard) {
-        (void)ShowPasswordKeyboard();
-    }
-    if (result.handled && result.footer_item == footer_runtime::FooterFocusItem::kNone) {
-        (void)UpdateDisplayStateAndRequestRefresh(display_service::RefreshMode::kPartial);
-    }
-    return result;
+    std::lock_guard<std::mutex> lock(s_mutex);
+    return wifi_page_interactions::HandlePrimaryActivate(s_coordinator);
 }
 
-bool SecondaryActivateFocusedItem()
+wifi_page_interactions::SecondaryActivateResult SecondaryActivateFocusedItem()
 {
-    bool changed = false;
-    {
-        std::lock_guard<std::mutex> lock(s_mutex);
-        const page_navigation::NavigationItemDescriptor* item =
-            s_coordinator.navigation_model().ItemAt(s_coordinator.focus().index());
-        if (item == nullptr) {
-            return false;
-        }
-        if (item->role == page_navigation::NavigationItemRole::kWifiPagePasswordVisibilityButton) {
-            (void)s_coordinator.TogglePasswordVisibility();
-            changed = true;
-        }
-    }
-
-    if (changed) {
-        (void)UpdateDisplayStateAndRequestRefresh(display_service::RefreshMode::kPartial);
-    }
-    return changed;
+    std::lock_guard<std::mutex> lock(s_mutex);
+    return wifi_page_interactions::HandleSecondaryActivate(s_coordinator);
 }
 
 footer_runtime::ProjectionState BuildFooterProjectionState()
@@ -565,34 +543,42 @@ footer_runtime::ProjectionState BuildFooterProjectionState()
     return BuildFooterProjectionStateLocked();
 }
 
-bool SyncFocusFromFooterProjection()
+page_actions::FocusUpdateOutcome FocusFooterItem(footer_runtime::FooterFocusItem item)
 {
+    page_actions::FocusUpdateOutcome result = {};
     const page_navigation::NavigationItemRole role =
-        FooterRoleForFooterItem(footer_runtime::GetProjectionState().focused_item);
+        FooterRoleForFooterItem(item);
     if (role == page_navigation::NavigationItemRole::kUnknown) {
-        return false;
+        return result;
     }
 
-    bool changed = false;
+    int old_focus_index = -1;
+    int new_focus_index = -1;
+    epaper_ui::WifiPageState old_state = {};
+    epaper_ui::WifiPageState new_state = {};
     {
         std::lock_guard<std::mutex> lock(s_mutex);
         const int focus_index = s_coordinator.navigation_model().IndexOfRole(role);
-        if (focus_index >= 0) {
-            changed = s_coordinator.SetFocusIndex(focus_index);
+        if (focus_index < 0) {
+            return result;
         }
+        old_focus_index = s_coordinator.focus().index();
+        old_state = BuildStateLocked();
+        if (!s_coordinator.SetFocusIndex(focus_index)) {
+            return result;
+        }
+        new_focus_index = s_coordinator.focus().index();
+        new_state = BuildStateLocked();
     }
 
-    if (!changed) {
-        return false;
-    }
-
-    const esp_err_t err =
-        UpdateDisplayStateAndRequestRefresh(display_service::RefreshMode::kPartial);
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        ESP_LOGW(kTag, "WiFi page refresh after footer focus sync failed: %s",
-                 esp_err_to_name(err));
-    }
-    return true;
+    result.handled = true;
+    result.apply_page_state = true;
+    result.sync_footer_projection =
+        FooterProjectionChangedForFocusIndexes(old_focus_index, new_focus_index);
+    result.dirty_rect =
+        BuildFocusDirtyRect(old_focus_index, old_state, new_focus_index, new_state);
+    result.use_partial_region = !result.dirty_rect.IsEmpty();
+    return result;
 }
 
 void ResetFocus()
@@ -605,13 +591,6 @@ void ResetFocus()
         projection = BuildFooterProjectionStateLocked();
     }
     footer_runtime::SetProjectionState(projection);
-}
-
-void SetRefreshHandler(RefreshHandler handler, void* context)
-{
-    std::lock_guard<std::mutex> lock(s_mutex);
-    s_refresh_handler = handler;
-    s_refresh_context = context;
 }
 
 esp_err_t SyncFromService(bool request_refresh_if_active)
@@ -631,14 +610,26 @@ esp_err_t SyncFromService(bool request_refresh_if_active)
     return err;
 }
 
-page_interaction_runtime::TouchProvider BuildTouchProvider()
+esp_err_t ShowPasswordKeyboard()
 {
-    return {
-        .resolve_touch_target = &ResolveTouchTargetImpl,
-        .focus_touch_target = &FocusTouchTargetImpl,
-        .activate_touch_target = &ActivateTouchTargetImpl,
-        .context = nullptr,
-    };
+    return ShowPasswordKeyboardImpl();
+}
+
+bool ResolveTouchTarget(int x, int y, app_interaction::InteractiveTarget* target)
+{
+    return ResolveTouchTargetImpl(x, y, target);
+}
+
+page_actions::FocusUpdateOutcome FocusTouchTarget(
+    const app_interaction::InteractiveTarget& target)
+{
+    return FocusTouchTargetImpl(target);
+}
+
+wifi_page_interactions::ActivateResult ActivateTouchTarget(
+    const app_interaction::InteractiveTarget& target)
+{
+    return ActivateTouchTargetImpl(target);
 }
 
 }  // namespace wifi_page_runtime

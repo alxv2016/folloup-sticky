@@ -27,6 +27,17 @@ enum class RefreshMode {
     kFull,
 };
 
+enum class RefreshScope {
+    kScreen,
+    kRegion,
+};
+
+struct RefreshRequest {
+    RefreshMode refresh_mode = RefreshMode::kPartial;
+    RefreshScope scope = RefreshScope::kScreen;
+    epaper_ui::UiRect dirty_rect = {};
+};
+
 enum class OverlayRefreshPolicy {
     kRebuildUnderlay,
     kReuseUnderlaySnapshot,
@@ -51,7 +62,10 @@ esp_err_t SetCurrentScreen(ScreenId screen,
                            RefreshMode refresh_mode = RefreshMode::kPartial);
 esp_err_t RequestOverlayRefresh(
     OverlayRefreshPolicy policy = OverlayRefreshPolicy::kRebuildUnderlay);
+esp_err_t RequestRefreshCurrentScreen(
+    const RefreshRequest& refresh_request);
 esp_err_t RequestRefreshCurrentScreen(RefreshMode refresh_mode = RefreshMode::kPartial);
+esp_err_t RefreshCurrentScreen(const RefreshRequest& refresh_request);
 esp_err_t RefreshCurrentScreen(RefreshMode refresh_mode = RefreshMode::kPartial);
 esp_err_t EnterDisplaySleep();
 esp_err_t EnterLightSleep();

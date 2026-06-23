@@ -176,22 +176,6 @@ epaper_ui::UiRect ShadowedRect(epaper_ui::UiRect rect, int shadow_offset)
     return rect;
 }
 
-epaper_ui::UiRect UnionRect(epaper_ui::UiRect lhs, epaper_ui::UiRect rhs)
-{
-    if (lhs.IsEmpty()) {
-        return rhs;
-    }
-    if (rhs.IsEmpty()) {
-        return lhs;
-    }
-
-    const int left = std::min(lhs.x, rhs.x);
-    const int top = std::min(lhs.y, rhs.y);
-    const int right = std::max(lhs.right(), rhs.right());
-    const int bottom = std::max(lhs.bottom(), rhs.bottom());
-    return {left, top, right - left, bottom - top};
-}
-
 bool RectEquals(const epaper_ui::UiRect& lhs, const epaper_ui::UiRect& rhs)
 {
     return lhs.x == rhs.x && lhs.y == rhs.y && lhs.width == rhs.width && lhs.height == rhs.height;
@@ -210,20 +194,20 @@ OverlayRefreshSnapshot CaptureOverlayRefreshSnapshotLocked()
     snapshot.toast_visible = s_toast_state.visible;
 
     if (snapshot.toast_visible) {
-        snapshot.bounds = UnionRect(
+        snapshot.bounds = epaper_ui::UnionRect(
             snapshot.bounds,
             ShadowedRect(epaper_ui::ToastPanelBounds(portrait_width, portrait_height, s_toast_state),
                          design::toast::kShadowOffset));
     }
     if (snapshot.keyboard_visible) {
-        snapshot.bounds = UnionRect(
+        snapshot.bounds = epaper_ui::UnionRect(
             snapshot.bounds,
             ShadowedRect(
                 epaper_ui::KeyboardPanelBounds(portrait_width, portrait_height, s_keyboard_state, {}),
                 design::modal::kShadowOffset));
     }
     if (snapshot.storage_visible) {
-        snapshot.bounds = UnionRect(
+        snapshot.bounds = epaper_ui::UnionRect(
             snapshot.bounds,
             ShadowedRect(
                 epaper_ui::StorageModalPanelBounds(
@@ -231,7 +215,7 @@ OverlayRefreshSnapshot CaptureOverlayRefreshSnapshotLocked()
                 design::modal::kShadowOffset));
     }
     if (snapshot.select_visible) {
-        snapshot.bounds = UnionRect(
+        snapshot.bounds = epaper_ui::UnionRect(
             snapshot.bounds,
             ShadowedRect(
                 epaper_ui::SelectModalPanelBounds(
@@ -239,7 +223,7 @@ OverlayRefreshSnapshot CaptureOverlayRefreshSnapshotLocked()
                 design::modal::kShadowOffset));
     }
     if (snapshot.shutdown_visible) {
-        snapshot.bounds = UnionRect(
+        snapshot.bounds = epaper_ui::UnionRect(
             snapshot.bounds,
             ShadowedRect(epaper_ui::ShutdownModalCardBounds(portrait_width, portrait_height),
                          design::modal::kShadowOffset));

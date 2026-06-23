@@ -1,278 +1,331 @@
-# Followup Input Alignment Plan
+# Followup Sticky Focus Refactor Plan
 
-This document tracks the refactor work needed to align this repo's input and
-input-driven refresh strategy with the current `followup` implementation.
+This document tracks the refactor work needed to make `folloup-sticky` feel as
+snappy as `crosspoint-reader` during focus movement through menus, buttons, and
+long lists.
 
-It is intentionally phase-based. A phase is not complete until:
+The implementation reference for this plan is the current behavior and code
+pattern in:
+
+- `/Users/tieuvong/Development/crosspoint-reader/src/MappedInputManager.cpp`
+- `/Users/tieuvong/Development/crosspoint-reader/src/util/ButtonNavigator.cpp`
+- `/Users/tieuvong/Development/crosspoint-reader/src/activities/ActivityManager.cpp`
+- `/Users/tieuvong/Development/crosspoint-reader/src/activities/home/HomeActivity.cpp`
+- `/Users/tieuvong/Development/crosspoint-reader/src/activities/home/FileBrowserActivity.cpp`
+- `/Users/tieuvong/Development/crosspoint-reader/src/components/themes/BaseTheme.cpp`
+- `/Users/tieuvong/Development/crosspoint-reader/lib/GfxRenderer/GfxRenderer.h`
+- `/Users/tieuvong/Development/crosspoint-reader/lib/hal/HalDisplay.h`
+- `/Users/tieuvong/Development/crosspoint-reader/lib/hal/HalDisplay.cpp`
+
+The target interaction pattern is:
+
+1. Input changes focus locally and immediately.
+2. Focus state is cheap and screen-owned on the hot path.
+3. One focus move produces one paint request.
+4. Pure focus motion repaints only the old and new visual focus bounds.
+5. The panel refresh path stays as short as possible.
+
+## Phase Rules
+
+A phase is not complete until:
 
 - every requirement in that phase is checked off
-- you run a build and we record the result
-- we validate the runtime behavior against `followup`
+- you run a build and report whether it is clean
+- I re-evaluate the implementation against the `crosspoint-reader` reference
+  files above and confirm the phase still matches the intended logic pattern
 - you explicitly give the go-ahead to close the phase
 
 Until then, leave the phase completion box unchecked.
 
 ## Scope
 
-The target alignment is based on the current `followup` input and refresh
-strategy, especially:
+This plan covers app/runtime focus handling, focus-driven repaint behavior,
+refresh dispatch, and final parity checks against `crosspoint-reader`.
 
-- repo-wide page focus and activation handling
-- shared overlay/footer/page input precedence
-- shared latest-wins UI presentation dispatch
-- page-state snapshotting before presentation
-- refresh behavior that distinguishes redraw scope from panel refresh scope
-- visual-bounds-aware focus repaint behavior
+Out of scope:
 
-## Current Gaps
+- board wiring changes
+- touch or panel driver rewrites
+- low-level e-paper command sequencing redesign
+- unrelated product feature work
 
-- This repo only has the newer page input model wired for `Settings` and
-  `WiFi`; `followup` applies it across the focusable page set.
-- This repo still splits UI work across `ui_refresh_runtime` and
-  `ui_refresh_dispatcher`; `followup` uses one shared freshness-biased
-  presentation lane for pages and overlays.
-- This repo keeps more page activation and service mutation logic inside page
-  runtimes; `followup` separates more of that behavior into interaction layers
-  with clearer intent/result boundaries.
-- This repo does not yet have `followup`'s explicit redraw-scope planning and
-  visual-bounds refresh rules for focus styling.
-- Cross-surface page/footer coordination is more manual here than in
-  `followup`'s shared snapshot/presentation flow.
+If any phase appears to require driver-level changes, stop and record that gap
+before continuing.
 
 ## Tracking Rules
 
-- [x] Gap analysis captured and translated into a working refactor plan.
 - [ ] Keep this document updated as the source of truth for phase status.
-- [ ] Do not check off a phase completion item until build, behavior
-  validation, and your approval are all done.
+- [ ] Do not check off a phase completion box until build, crosspoint-pattern
+  review, and your approval are all done.
 
-## Phase 1: Expand Shared Input Coverage
+## Phase 1: Local Focus First
 
-Goal: move from a `Settings`/`WiFi`-only shared input path to a repo-wide input
-architecture that matches `followup`'s page coverage.
+Goal: make page focus movement follow the `crosspoint-reader` hot path where a
+screen-owned focus index changes immediately on input before any heavier
+coordination happens.
 
 ### Requirements
 
-- [ ] Inventory every current and planned focusable screen in this repo and map
-  each one to its target input owner.
-- [ ] Define the page-by-page migration order from current screen-specific input
-  handling to shared page focus handling.
-- [ ] Extend shared button focus routing beyond `Settings` and `WiFi` so active
-  page focus movement is not hard-coded to only those screens.
-- [ ] Extend the shared touch contract beyond `Settings` and `WiFi` so page
-  touch providers are not limited to those two screens.
-- [ ] Preserve overlay-first, then footer, then page precedence during the
-  migration.
-- [ ] Preserve the current touch lifecycle: touch-down focuses immediately,
-  touch-move may retarget, touch-up activates only the armed target.
-- [ ] Keep `app_shell` as orchestration-only while moving page-specific input
-  decisions into focused helpers.
-- [ ] Update `docs/app-architecture.md` once the repo-wide ownership model is
-  real, not aspirational.
+- [x] Inventory every current focusable screen in `folloup-sticky` and mark
+  whether it should use the shared page-focus path, footer path, or overlay
+  path.
+- [x] For page-owned screens, make local page focus the hot-path truth for
+  button navigation, matching the spirit of `selectorIndex` updates in
+  `crosspoint-reader` `HomeActivity` and `FileBrowserActivity`.
+- [x] Ensure a button focus move does not require service reads, full page
+  rebuild decisions, or unrelated cross-surface work before the local focus
+  state changes.
+- [x] Align hold behavior with the `crosspoint-reader` navigation pattern from
+  `ButtonNavigator.cpp`: predictable first repeat, predictable repeat interval,
+  and no accidental double-trigger on release after hold-repeat.
+- [x] For long lists, define where hold-repeat should page-jump instead of
+  stepping one row at a time, following the `FileBrowserActivity` pattern.
+- [x] Preserve overlay-first, then footer, then page input precedence while
+  still keeping the page-owned focus mutation path short.
+- [x] Prevent secondary touch-only selection state from appearing on any page;
+  touch-down focus and button-driven focus must point at the same focus truth.
+- [x] Update `docs/app-architecture.md` once the final focus ownership for this
+  phase is real.
+
+### Current Inventory
+
+| Surface | Focus path | Notes |
+| --- | --- | --- |
+| `Home` screen | Footer path | No page-owned focus provider is registered today; footer owns the interactive focusable targets on this surface. |
+| `Settings` screen | Shared page-focus path | `SettingsPageCoordinator` owns the hot-path focus index and projects footer focus from page focus. |
+| `WiFi` screen | Shared page-focus path | `WifiPageCoordinator` owns page focus; the network list keeps a page-owned sub-focus for long-list interaction. |
+| `Lock screen` | None today | No roving focus surface is exposed here outside global button shortcuts. |
+| Shutdown modal | Overlay path | Overlay-owned roving focus. |
+| Storage modal | Overlay path | Overlay-owned modal actions. |
+| Select modal | Overlay path | Overlay-owned roving focus. |
+| Keyboard overlay | Overlay path | Overlay-owned key focus and submit/dismiss flow. |
+| Toast close action | Overlay path | Overlay-owned close affordance when visible. |
+
+### Phase 1 Progress Notes
+
+- Footer touch precedence is unchanged, but page-owned screens no longer create
+  a temporary footer-only focus state on touch-down before syncing page focus
+  afterward.
+- `Settings` and `WiFi` now map footer touch focus directly into their
+  coordinator-owned focus truth, then project the footer from that page-owned
+  focus.
+- Shared navigation hold timing now has an explicit first-repeat gate so the
+  hot path does not depend purely on raw callback cadence.
+- While the WiFi network list is active, button press-down still steps one row
+  at a time, and hold-repeat now page-jumps by the current visible row
+  capacity to match the `crosspoint-reader` long-list pattern.
 
 ### Validation
 
-- [ ] Build completed successfully for Phase 1.
-- [ ] Button focus movement works on every migrated page and matches
-  `followup`'s shared navigation behavior.
-- [ ] Touch precedence logs and behavior match overlay, footer, then page
-  ownership across every migrated page.
-- [ ] No page introduces a second touch-only selection state outside the shared
-  focus truth model.
+- [x] Build completed successfully for Phase 1.
+- [ ] Button focus movement on migrated screens follows the intended
+  `crosspoint-reader` pattern of local state mutation first, then refresh.
+- [ ] Hold behavior and release behavior feel consistent with the reference
+  `ButtonNavigator.cpp` flow.
+- [x] After the clean build, I re-evaluated the current implementation against
+  the `crosspoint-reader` input and focus references and confirmed coverage.
 - [ ] You reviewed the result and gave the go-ahead.
 
 ### Phase Completion
 
 - [ ] Phase 1 complete.
 
-## Phase 2: Separate Page Interaction Semantics From Page Runtime State
+## Phase 2: Focus Bounds Only
 
-Goal: align page interaction structure with `followup` so page runtimes own
-state and rendering inputs, while interaction helpers own focus/activate
-semantics and intent shaping.
+Goal: change focus-driven repaint from coarse page refreshes to visual-bounds
+repaint rules so pure focus motion repaints only what changed.
 
 ### Requirements
 
-- [ ] Define the target split between coordinator/runtime state,
-  interaction-intent helpers, and app-level orchestration callbacks.
-- [ ] Move page activation semantics out of runtime-heavy code paths where the
-  behavior belongs in focused interaction helpers.
-- [ ] Normalize per-page focus-move result shapes so pages can report handled
-  state, refresh needs, feedback cues, and follow-on intents consistently.
-- [ ] Normalize per-page activate result shapes so page activation can trigger
-  navigation, modal opens, service actions, or page-local changes through a
-  common pattern.
-- [ ] Normalize footer activation handling so page modules do not re-implement
-  divergent footer action rules.
-- [ ] Keep page-local state construction inside page/coordinator code rather
-  than moving service reads into rendering primitives.
-- [ ] Keep product feedback mapping centralized so page helpers emit neutral
-  cues instead of directly owning buzzer policy.
+- [x] Add component-owned visual bounds helpers for every focusable control
+  whose focus styling extends beyond its nominal layout box.
+- [x] For pure focus moves, compute the repaint region as the union of the old
+  focused visual bounds and the new focused visual bounds.
+- [x] Ensure focus repaint clears old focus styling and paints new focus
+  styling across full visual bounds, including rings, gaps, rounded corners,
+  shadows, or highlighted value pills.
+- [x] Route pure focus-motion refreshes through region partial refresh instead
+  of whole-screen partial refresh whenever the visual change is bounded.
+- [x] Keep larger refresh triggers for page entry, page identity changes, list
+  viewport changes, large content reloads, sleep/wake recovery, and forced full
+  refreshes.
+- [x] Preserve the stricter overlay rule already present in
+  `folloup-sticky`: overlay visibility changes or underlay restoration paths
+  must rebuild correctly rather than using a too-small dirty region.
+- [x] Document the redraw-scope categories introduced in this phase and where
+  that scope decision lives.
+
+### Phase 2 Progress Notes
+
+- `epaper_ui` now exposes component-owned visual-bounds helpers for the current
+  focusable `Settings` and `WiFi` controls, including footer items, the WiFi
+  password field, and the active network-list row.
+- Pure focus updates now compute a dirty region as the union of old and new
+  visual focus bounds instead of blindly repainting the whole screen.
+- `page_actions::FocusUpdateOutcome` and `FocusMoveOutcome` now carry bounded
+  repaint metadata so the page input path can distinguish focus-only region
+  repaint from broader page refreshes.
+- `display_service::RefreshRequest` now carries refresh mode plus refresh
+  scope, and `ui_refresh_runtime` preserves that scope while coalescing
+  latest-wins page refreshes.
+- When no overlay is visible, `display_service` may execute a raw-coordinate
+  region partial refresh for bounded focus motion on `Settings` and `WiFi`.
+- Overlay-visible refreshes still intentionally fall back to the safer broader
+  underlay rebuild path instead of attempting too-small dirty-region restores.
+- WiFi network-list viewport changes remain a larger repaint case: focus motion
+  inside the list uses a bounded row union when the viewport is stable, but it
+  falls back to the full list region when scrolling changes the visible window.
 
 ### Validation
 
-- [ ] Build completed successfully for Phase 2.
-- [ ] Migrated pages expose interaction behavior through consistent helper
-  contracts rather than bespoke runtime branches.
-- [ ] Activation behavior matches `followup` for the equivalent pages and
-  controls.
-- [ ] Feedback behavior still routes through app-owned policy rather than page
-  helpers directly.
+- [x] Build completed successfully for Phase 2.
+- [ ] Rapid focus changes do not leave stale pixels behind in any migrated
+  control family.
+- [x] Pure focus motion no longer falls back to full-screen partial refresh
+  unless the control family explicitly requires it.
+- [x] After the clean build, I re-evaluated the current repaint logic against
+  the `crosspoint-reader` pattern of “minimal work for focus motion” and
+  confirmed the intended behavior is covered.
 - [ ] You reviewed the result and gave the go-ahead.
 
 ### Phase Completion
 
 - [ ] Phase 2 complete.
 
-## Phase 3: Unify UI Presentation Dispatch
+## Phase 3: Fast Refresh Lane
 
-Goal: replace the current split between `ui_refresh_runtime` and
-`ui_refresh_dispatcher` with one shared freshness-biased presentation model that
-matches `followup`.
+Goal: keep the existing freshness-biased architecture where it helps, but make
+focus updates travel through the shortest possible render and panel path.
 
 ### Requirements
 
-- [ ] Document the target end state for shared UI presentation ownership before
-  changing the implementation.
-- [ ] Consolidate page and overlay presentation work onto one shared latest-wins
-  dispatch path.
-- [ ] Preserve keyed coalescing so stale intermediate updates are dropped while
-  the panel is busy.
-- [ ] Move page-state capture onto the shared refresh worker so capture and
-  presentation are consistently decoupled from input/service callback tasks.
-- [ ] Ensure the worker captures the latest state under the owning mutex, then
-  releases the mutex before presenting to `display_service`.
-- [ ] Keep synchronous page-entry routing outside the freshness-biased lane so
-  page transition ordering stays deterministic.
-- [ ] Route `Settings` and `WiFi` through the same shared model used for the
-  rest of the migrated pages.
-- [ ] Route repeated overlay churn through that same freshness-biased model.
-- [ ] Remove transitional refresh plumbing once the replacement path is proven.
+- [x] Define a refresh-scope model that distinguishes focus-only region repaint,
+  bounded page repaint, whole-screen partial refresh, and full base refresh.
+- [x] Keep a latest-wins presentation path for stale update coalescing, but
+  ensure pure focus-motion updates do not rebuild more page state than needed.
+- [x] Remove direct display work from input callback paths while still allowing
+  focus updates to reach the panel through the shortest safe route.
+- [x] Carry dirty-region and refresh-scope information through the UI refresh
+  path so display execution can choose region partial vs full-screen partial.
+- [x] Keep synchronous page-entry routing outside the latest-wins queue when
+  deterministic screen transition ordering matters.
+- [x] Ensure footer sync only triggers repaint when footer-visible focus state
+  actually changed.
+- [ ] Reuse retained underlay or retained page content where appropriate so the
+  renderer restores unchanged pixels instead of rebuilding the whole visible
+  page on every focus move.
+- [x] Update architecture docs to describe the final refresh ownership and
+  focus fast-lane accurately.
+
+### Phase 3 Progress Notes
+
+- `ui_refresh_runtime` is now the single latest-wins queue for page, footer,
+  status, lock-screen, and overlay refresh scheduling; the older app-shell
+  `ui_refresh_dispatcher` hop has been removed.
+- `Settings` and `WiFi` page focus updates now queue one async composite apply
+  only when the visible footer projection actually changes; otherwise they only
+  queue the page-owned state apply.
+- Page-owned focus updates still carry dirty-region and refresh-scope metadata
+  through `ui_refresh_runtime` into `display_service`, but they no longer rely
+  on per-page app-shell refresh handlers to reach the display queue.
+- Synchronous page-entry routing remains outside the latest-wins queue in
+  `app_shell` so screen transitions still set up touch provider, footer layout,
+  page state, and current screen in deterministic order.
+- Footer projection sync is now computed from old vs new page focus projection
+  instead of being treated as an automatic side effect of every page focus
+  change.
 
 ### Validation
 
-- [ ] Build completed successfully for Phase 3.
-- [ ] Repeated focus moves do not block on direct display work from the input
-  callback path.
-- [ ] Stale page and overlay updates are coalesced the way `followup` expects.
-- [ ] Mutex hold time around page-state capture is measurably shorter or at
-  least structurally aligned with the `followup` model.
+- [x] Build completed successfully for Phase 3.
+- [ ] Repeated focus moves do not block on unnecessary page rebuild or display
+  queue churn.
+- [ ] Stale intermediate focus updates are coalesced correctly while the panel
+  is busy.
+- [x] After the clean build, I re-evaluated the render and refresh path against
+  the `crosspoint-reader` reference chain of “focus move -> one paint request ->
+  fast refresh” and confirmed the pattern is covered.
 - [ ] You reviewed the result and gave the go-ahead.
 
 ### Phase Completion
 
 - [ ] Phase 3 complete.
 
-## Phase 4: Align Refresh Planning And Visual Bounds Rules
+## Phase 4: Crosspoint Parity Sweep
 
-Goal: port the missing refresh-planning behavior that `followup` uses for
-input-driven focus updates and overlay interactions.
+Goal: confirm the repo now covers the intended `crosspoint-reader` logic and
+interaction pattern closely enough to close the focus refactor.
 
 ### Requirements
 
-- [ ] Define the redraw-scope model this repo needs to support, based on the
-  current `followup` categories.
-- [ ] Identify the current framebuffer or retained-view boundaries where redraw
-  scope classification should live.
-- [ ] Add component-owned visual bounds helpers for controls whose focused
-  styling extends beyond nominal layout bounds.
-- [ ] Ensure focus moves erase old focused styling and paint new focused styling
-  across the full visual bounds, not just nominal control boxes.
-- [ ] Keep normal active-page updates on the same panel refresh mode that
-  `followup` uses unless hardware evidence forces a different choice.
-- [ ] Preserve larger rebuild triggers for page entry, page identity changes,
-  major content reloads, overlay visibility transitions, sleep/wake recovery,
-  and forced full refreshes.
-- [ ] Preserve the stricter overlay rule: visibility changes and underlay
-  restoration paths must rebuild correctly.
-- [ ] Update architecture and refresh documentation once the actual runtime rule
-  is implemented.
+- [x] Re-compare every migrated focusable screen against the referenced
+  `crosspoint-reader` logic for input mapping, hold behavior, local focus
+  mutation, and refresh triggering.
+- [x] Verify long-list behavior against the `crosspoint-reader` list/menu
+  pattern and document any intentional deviations.
+- [x] Verify the final panel refresh mode choices still match the intent of
+  this plan and record any screen families that must remain coarser than the
+  reference pattern.
+- [x] Remove or document any transitional refresh plumbing, duplicate routing,
+  or stale focus-projection work that is no longer needed.
+- [x] Update `docs/app-architecture.md` and any adjacent docs so they describe
+  actual runtime behavior rather than transition scaffolding.
+- [x] Record every intentional deviation from `crosspoint-reader` and the
+  product or hardware reason it remains.
+
+### Phase 4 Progress Notes
+
+- `Settings` page parity check: button focus mutation is page-owned and local
+  before refresh scheduling, matching the `HomeActivity` pattern of mutating
+  `selectorIndex` first and requesting one update afterward.
+- `WiFi` page parity check: active network-list hold-repeat now follows the
+  `FileBrowserActivity` page-jump pattern, while single press-down still steps
+  by one row for precise selection.
+- Shared hold behavior parity check: `navigation_input_controller` now mirrors
+  the `ButtonNavigator` shape of press-driven navigation plus gated continuous
+  repeats, and it suppresses the release-side double-trigger after repeats.
+- Refresh-lane parity check: pure focus motion now routes through one latest-
+  wins queue and one display refresh request rather than the earlier
+  `ui_refresh_runtime` plus app-shell dispatcher double hop.
+- Transitional refresh scaffolding removed in this phase: page/footer refresh
+  handlers in `app_shell` and the separate `ui_refresh_dispatcher` worker.
+
+### Current Intentional Deviations
+
+- Overlay precedence remains stricter than `crosspoint-reader` because retained
+  modal and keyboard overlays must trap input and may force broader underlay
+  rebuilds to preserve e-paper correctness.
+- Synchronous page-entry routing remains in `app_shell` rather than the latest-
+  wins queue because this firmware must order touch-provider setup, footer
+  layout, runtime state sync, and screen switch deterministically.
+- Overlay-visible focus churn still falls back to the safer broader refresh
+  path instead of region refresh because retained overlay restoration is more
+  important than matching the narrowest possible repaint scope.
+- WiFi list viewport changes still repaint the whole list region when the
+  visible window scrolls, because the content shift is larger than a simple
+  old/new focus highlight swap.
 
 ### Validation
 
-- [ ] Build completed successfully for Phase 4.
-- [ ] Focus rings, gaps, rounded corners, and outlined content do not leave
-  stale pixels during rapid focus changes.
-- [ ] Overlay show/hide and same-visibility churn behave like `followup`
-  without underlay corruption.
-- [ ] Panel refresh mode choices and redraw scope classification match the
-  intended `followup` behavior on-device.
+- [x] Build completed successfully for Phase 4.
+- [ ] End-to-end focus behavior has been re-checked against the
+  `crosspoint-reader` reference and no untracked logic gaps remain.
+- [ ] Remaining differences, if any, are intentional and documented.
+- [x] After the clean build, I performed the final `crosspoint-reader`
+  re-evaluation for this phase and confirmed whether the logic pattern is fully
+  covered.
 - [ ] You reviewed the result and gave the go-ahead.
 
 ### Phase Completion
 
 - [ ] Phase 4 complete.
 
-## Phase 5: Align Service-Driven UI Updates
-
-Goal: make service-originated UI updates use the same shared freshness-biased
-presentation model as input-driven page changes.
-
-### Requirements
-
-- [ ] Inventory every service callback that can mutate visible page or overlay
-  state.
-- [ ] Route service-driven page refreshes through the shared latest-wins
-  presentation path.
-- [ ] Route service-driven overlay churn through the shared latest-wins
-  presentation path.
-- [ ] Ensure repeated service updates do not queue stale page snapshots behind a
-  busy panel.
-- [ ] Keep page-local refresh entry points narrow so service code does not take
-  over page composition ownership.
-- [ ] Preserve screen-active guards so inactive pages are not pointlessly
-  presented.
-
-### Validation
-
-- [ ] Build completed successfully for Phase 5.
-- [ ] Repeated service updates coalesce correctly instead of flooding the
-  display path.
-- [ ] Active-page and active-overlay updates match `followup`'s freshness
-  behavior.
-- [ ] Inactive pages do not perform unnecessary presentation work.
-- [ ] You reviewed the result and gave the go-ahead.
-
-### Phase Completion
-
-- [ ] Phase 5 complete.
-
-## Phase 6: Final Alignment Sweep
-
-Goal: close remaining deltas, verify docs, and confirm this repo is aligned
-enough with `followup` to treat the refactor as done.
-
-### Requirements
-
-- [ ] Re-compare the final implementation against `followup`'s current input
-  and UI refresh behavior.
-- [ ] Audit for leftover transitional paths, duplicated dispatchers, or
-  screen-specific exceptions that no longer need to exist.
-- [ ] Update `docs/app-architecture.md` to describe the final input and refresh
-  ownership accurately.
-- [ ] Update any adjacent docs touched by the refactor so they describe actual
-  runtime behavior, not interim scaffolding.
-- [ ] Capture any intentional deviations from `followup` and the reason they
-  remain.
-
-### Validation
-
-- [ ] Build completed successfully for Phase 6.
-- [ ] End-to-end runtime behavior is validated against the intended `followup`
-  model.
-- [ ] Remaining differences, if any, are intentional and documented.
-- [ ] You reviewed the result and gave the go-ahead.
-
-### Phase Completion
-
-- [ ] Phase 6 complete.
-
 ## Exit Criteria
 
 - [ ] All phase completion boxes are checked.
 - [ ] The build has passed for every completed phase.
-- [ ] On-device or equivalent runtime validation has been recorded for every
-  phase.
-- [ ] This repo's input strategy is fully aligned with `followup`, or every
-  remaining deviation is explicitly accepted and documented.
+- [ ] I re-evaluated the `crosspoint-reader` reference after each clean build
+  before any phase was closed.
+- [ ] Every remaining deviation from the reference pattern is explicit and
+  accepted.
 - [ ] You approved the final state.

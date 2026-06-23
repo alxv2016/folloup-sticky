@@ -17,7 +17,7 @@ constexpr uint32_t kUiRefreshTaskStackWords = 4096;
 
 struct PendingSurface {
     ApplyCallback apply_callback = nullptr;
-    display_service::RefreshMode refresh_mode = display_service::RefreshMode::kPartial;
+    display_service::RefreshRequest refresh_request = {};
     display_service::OverlayRefreshPolicy overlay_refresh_policy =
         display_service::OverlayRefreshPolicy::kRebuildUnderlay;
     bool request_overlay_refresh = false;
@@ -80,6 +80,25 @@ display_service::RefreshMode MergeRefreshMode(display_service::RefreshMode curre
                : display_service::RefreshMode::kPartial;
 }
 
+display_service::RefreshRequest MergeRefreshRequest(
+    const display_service::RefreshRequest& current,
+    const display_service::RefreshRequest& incoming)
+{
+    display_service::RefreshRequest merged = {};
+    merged.refresh_mode = MergeRefreshMode(current.refresh_mode, incoming.refresh_mode);
+    if (merged.refresh_mode == display_service::RefreshMode::kFull ||
+        current.scope == display_service::RefreshScope::kScreen ||
+        incoming.scope == display_service::RefreshScope::kScreen) {
+        merged.scope = display_service::RefreshScope::kScreen;
+        merged.dirty_rect = {};
+        return merged;
+    }
+
+    merged.scope = display_service::RefreshScope::kRegion;
+    merged.dirty_rect = epaper_ui::UnionRect(current.dirty_rect, incoming.dirty_rect);
+    return merged;
+}
+
 display_service::OverlayRefreshPolicy MergeOverlayRefreshPolicy(
     display_service::OverlayRefreshPolicy current,
     display_service::OverlayRefreshPolicy incoming)
@@ -111,8 +130,7 @@ void UiRefreshTask(void*)
             bool any_pending = false;
             bool any_overlay_refresh = false;
             bool any_screen_refresh = false;
-            display_service::RefreshMode merged_refresh_mode =
-                display_service::RefreshMode::kPartial;
+            display_service::RefreshRequest merged_refresh_request = {};
             display_service::OverlayRefreshPolicy merged_overlay_refresh_policy =
                 display_service::OverlayRefreshPolicy::kReuseUnderlaySnapshot;
 
@@ -128,16 +146,21 @@ void UiRefreshTask(void*)
                     merged_overlay_refresh_policy = MergeOverlayRefreshPolicy(
                         merged_overlay_refresh_policy, surface.overlay_refresh_policy);
                 } else {
-                    any_screen_refresh = true;
-                    merged_refresh_mode =
-                        MergeRefreshMode(merged_refresh_mode, surface.refresh_mode);
+                    if (any_screen_refresh) {
+                        merged_refresh_request = MergeRefreshRequest(merged_refresh_request,
+                                                                     surface.refresh_request);
+                    } else {
+                        merged_refresh_request = surface.refresh_request;
+                        any_screen_refresh = true;
+                    }
                 }
 
                 if (surface.apply_callback == nullptr) {
                     ESP_LOGD(kTag,
-                             "Queued refresh-only dispatch: surface=%zu mode=%d overlay=%d",
+                             "Queued refresh-only dispatch: surface=%zu mode=%d scope=%d overlay=%d",
                              index,
-                             static_cast<int>(surface.refresh_mode),
+                             static_cast<int>(surface.refresh_request.refresh_mode),
+                             static_cast<int>(surface.refresh_request.scope),
                              surface.request_overlay_refresh ? 1 : 0);
                     continue;
                 }
@@ -147,7 +170,7 @@ void UiRefreshTask(void*)
                     ESP_LOGD(kTag,
                              "Applied UI surface refresh: surface=%zu mode=%d",
                              index,
-                             static_cast<int>(surface.refresh_mode));
+                             static_cast<int>(surface.refresh_request.refresh_mode));
                     continue;
                 }
 
@@ -155,7 +178,7 @@ void UiRefreshTask(void*)
                     ESP_LOGW(kTag,
                              "UI surface apply failed: surface=%zu mode=%d err=%s",
                              index,
-                             static_cast<int>(surface.refresh_mode),
+                             static_cast<int>(surface.refresh_request.refresh_mode),
                              esp_err_to_name(err));
                 }
             }
@@ -167,11 +190,12 @@ void UiRefreshTask(void*)
             if (display_service::IsInitialized()) {
                 esp_err_t err = ESP_OK;
                 if (any_screen_refresh) {
-                    err = display_service::RequestRefreshCurrentScreen(merged_refresh_mode);
+                    err = display_service::RequestRefreshCurrentScreen(merged_refresh_request);
                     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
                         ESP_LOGW(kTag,
-                                 "UI screen refresh request failed: mode=%d err=%s",
-                                 static_cast<int>(merged_refresh_mode),
+                                 "UI screen refresh request failed: mode=%d scope=%d err=%s",
+                                 static_cast<int>(merged_refresh_request.refresh_mode),
+                                 static_cast<int>(merged_refresh_request.scope),
                                  esp_err_to_name(err));
                     }
                 } else if (any_overlay_refresh) {
@@ -229,6 +253,18 @@ esp_err_t Schedule(SurfaceKey key,
                    ApplyCallback apply_callback,
                    display_service::RefreshMode refresh_mode)
 {
+    return Schedule(
+        key,
+        apply_callback,
+        display_service::RefreshRequest{
+            .refresh_mode = refresh_mode,
+        });
+}
+
+esp_err_t Schedule(SurfaceKey key,
+                   ApplyCallback apply_callback,
+                   const display_service::RefreshRequest& refresh_request)
+{
     TaskHandle_t task = nullptr;
     {
         std::lock_guard<std::mutex> lock(s_mutex);
@@ -238,9 +274,9 @@ esp_err_t Schedule(SurfaceKey key,
 
         PendingSurface& pending = s_pending[SurfaceIndex(key)];
         pending.apply_callback = apply_callback;
-        pending.refresh_mode = pending.pending
-                                   ? MergeRefreshMode(pending.refresh_mode, refresh_mode)
-                                   : refresh_mode;
+        pending.refresh_request =
+            pending.pending ? MergeRefreshRequest(pending.refresh_request, refresh_request)
+                            : refresh_request;
         pending.overlay_refresh_policy = display_service::OverlayRefreshPolicy::kRebuildUnderlay;
         pending.request_overlay_refresh = false;
         pending.pending = true;
@@ -248,9 +284,10 @@ esp_err_t Schedule(SurfaceKey key,
     }
 
     ESP_LOGD(kTag,
-             "Queued UI refresh: surface=%s mode=%d apply=%d",
+             "Queued UI refresh: surface=%s mode=%d scope=%d apply=%d",
              SurfaceName(key),
-             static_cast<int>(refresh_mode),
+             static_cast<int>(refresh_request.refresh_mode),
+             static_cast<int>(refresh_request.scope),
              apply_callback != nullptr ? 1 : 0);
     xTaskNotifyGive(task);
     return ESP_OK;
@@ -269,7 +306,7 @@ esp_err_t ScheduleOverlay(SurfaceKey key,
 
         PendingSurface& pending = s_pending[SurfaceIndex(key)];
         pending.apply_callback = apply_callback;
-        pending.refresh_mode = display_service::RefreshMode::kPartial;
+        pending.refresh_request = {};
         pending.overlay_refresh_policy = pending.pending && pending.request_overlay_refresh
                                              ? MergeOverlayRefreshPolicy(
                                                    pending.overlay_refresh_policy, policy)
@@ -290,7 +327,16 @@ esp_err_t ScheduleOverlay(SurfaceKey key,
 
 esp_err_t RequestRefresh(SurfaceKey key, display_service::RefreshMode refresh_mode)
 {
-    return Schedule(key, nullptr, refresh_mode);
+    return RequestRefresh(
+        key,
+        display_service::RefreshRequest{
+            .refresh_mode = refresh_mode,
+        });
+}
+
+esp_err_t RequestRefresh(SurfaceKey key, const display_service::RefreshRequest& refresh_request)
+{
+    return Schedule(key, nullptr, refresh_request);
 }
 
 }  // namespace ui_refresh_runtime

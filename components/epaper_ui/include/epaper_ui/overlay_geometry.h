@@ -30,6 +30,22 @@ struct UiRect {
     }
 };
 
+inline UiRect UnionRect(const UiRect& lhs, const UiRect& rhs)
+{
+    if (lhs.IsEmpty()) {
+        return rhs;
+    }
+    if (rhs.IsEmpty()) {
+        return lhs;
+    }
+
+    const int x0 = lhs.x < rhs.x ? lhs.x : rhs.x;
+    const int y0 = lhs.y < rhs.y ? lhs.y : rhs.y;
+    const int x1 = lhs.right() > rhs.right() ? lhs.right() : rhs.right();
+    const int y1 = lhs.bottom() > rhs.bottom() ? lhs.bottom() : rhs.bottom();
+    return {x0, y0, x1 - x0, y1 - y0};
+}
+
 }  // namespace epaper_ui
 
 #endif  // EPAPER_UI_OVERLAY_GEOMETRY_H_

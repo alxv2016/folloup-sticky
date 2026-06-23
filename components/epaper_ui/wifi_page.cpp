@@ -113,6 +113,39 @@ UiRect WifiPageItemBounds(int portrait_width,
     }
 }
 
+UiRect WifiPageItemVisualBounds(int portrait_width,
+                                int portrait_height,
+                                const WifiPageState& state,
+                                WifiPageItemId item)
+{
+    const Layout layout = BuildLayout(portrait_width, portrait_height, state);
+    switch (item) {
+        case WifiPageItemId::kNetworkList: {
+            const NetworkListStyle style =
+                BuildNetworkListStyle(layout.network_list.width, layout.network_list.height);
+            return NetworkListVisualBounds(layout.network_list.x,
+                                           layout.network_list.y,
+                                           state.network_list,
+                                           style);
+        }
+        case WifiPageItemId::kPasswordInput:
+        case WifiPageItemId::kPasswordVisibilityButton: {
+            PasswordInputStyle style = {};
+            style.width = layout.password_input.width;
+            return PasswordInputVisualBounds(layout.password_input.x,
+                                             layout.password_input.y,
+                                             state.password_input,
+                                             style);
+        }
+        case WifiPageItemId::kScanButton:
+        case WifiPageItemId::kConnectButton:
+            return WifiPageItemBounds(portrait_width, portrait_height, state, item);
+        case WifiPageItemId::kNone:
+        default:
+            return {};
+    }
+}
+
 UiRect WifiPageNetworkRowBounds(int portrait_width,
                                 int portrait_height,
                                 const WifiPageState& state,
@@ -126,6 +159,19 @@ UiRect WifiPageNetworkRowBounds(int portrait_width,
                                 state.network_list,
                                 style,
                                 row_index);
+}
+
+int WifiPageFirstVisibleNetworkRow(int portrait_width,
+                                   int portrait_height,
+                                   const WifiPageState& state)
+{
+    const Layout layout = BuildLayout(portrait_width, portrait_height, state);
+    const NetworkListStyle style =
+        BuildNetworkListStyle(layout.network_list.width, layout.network_list.height);
+    return NetworkListFirstVisibleRow(layout.network_list.x,
+                                      layout.network_list.y,
+                                      state.network_list,
+                                      style);
 }
 
 bool HitTestWifiPageItem(int portrait_width,
@@ -175,6 +221,22 @@ bool HitTestWifiPageNetworkRow(int portrait_width,
                                  x,
                                  y,
                                  row_index);
+}
+
+int WifiPageVisibleNetworkRowCapacity(int portrait_width,
+                                      int portrait_height,
+                                      const WifiPageState& state)
+{
+    const Layout layout = BuildLayout(portrait_width, portrait_height, state);
+    const NetworkListStyle style =
+        BuildNetworkListStyle(layout.network_list.width, layout.network_list.height);
+    const UiRect viewport =
+        NetworkListViewportBounds(layout.network_list.x, layout.network_list.y, style);
+    const int row_height = std::max(0, style.item.height);
+    if (viewport.IsEmpty() || row_height <= 0) {
+        return 0;
+    }
+    return std::max(1, viewport.height / row_height);
 }
 
 void DrawWifiPage(uint8_t* framebuffer,

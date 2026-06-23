@@ -32,6 +32,10 @@ UiRect SettingsPageItemBounds(int portrait_width,
                               int portrait_height,
                               const SettingsPageState& state,
                               SettingsPageItemId item);
+UiRect SettingsPageItemVisualBounds(int portrait_width,
+                                    int portrait_height,
+                                    const SettingsPageState& state,
+                                    SettingsPageItemId item);
 bool HitTestSettingsPageItem(int portrait_width,
                              int portrait_height,
                              const SettingsPageState& state,

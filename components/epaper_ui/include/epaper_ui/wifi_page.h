@@ -36,10 +36,17 @@ UiRect WifiPageItemBounds(int portrait_width,
                           int portrait_height,
                           const WifiPageState& state,
                           WifiPageItemId item);
+UiRect WifiPageItemVisualBounds(int portrait_width,
+                                int portrait_height,
+                                const WifiPageState& state,
+                                WifiPageItemId item);
 UiRect WifiPageNetworkRowBounds(int portrait_width,
                                 int portrait_height,
                                 const WifiPageState& state,
                                 int row_index);
+int WifiPageFirstVisibleNetworkRow(int portrait_width,
+                                   int portrait_height,
+                                   const WifiPageState& state);
 bool HitTestWifiPageItem(int portrait_width,
                          int portrait_height,
                          const WifiPageState& state,
@@ -52,6 +59,9 @@ bool HitTestWifiPageNetworkRow(int portrait_width,
                                int x,
                                int y,
                                int* row_index);
+int WifiPageVisibleNetworkRowCapacity(int portrait_width,
+                                      int portrait_height,
+                                      const WifiPageState& state);
 void DrawWifiPage(uint8_t* framebuffer,
                   int raw_width,
                   int raw_height,

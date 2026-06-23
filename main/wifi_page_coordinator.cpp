@@ -7,6 +7,40 @@ namespace {
 constexpr const char* kPasswordLabel = "Password";
 constexpr const char* kPasswordPlaceholder = "Enter password";
 
+int NextPageIndex(int current_index, int total_items, int items_per_page)
+{
+    if (total_items <= 0 || items_per_page <= 0) {
+        return 0;
+    }
+    if (total_items <= items_per_page) {
+        return page_navigation::RovingFocus::WrapIndex(current_index + 1, total_items);
+    }
+
+    const int last_page_index = (total_items - 1) / items_per_page;
+    const int current_page_index = current_index / items_per_page;
+    if (current_page_index < last_page_index) {
+        return (current_page_index + 1) * items_per_page;
+    }
+    return 0;
+}
+
+int PreviousPageIndex(int current_index, int total_items, int items_per_page)
+{
+    if (total_items <= 0 || items_per_page <= 0) {
+        return 0;
+    }
+    if (total_items <= items_per_page) {
+        return page_navigation::RovingFocus::WrapIndex(current_index - 1, total_items);
+    }
+
+    const int last_page_index = (total_items - 1) / items_per_page;
+    const int current_page_index = current_index / items_per_page;
+    if (current_page_index > 0) {
+        return (current_page_index - 1) * items_per_page;
+    }
+    return last_page_index * items_per_page;
+}
+
 }  // namespace
 
 WifiPageCoordinator::WifiPageCoordinator()
@@ -115,6 +149,27 @@ bool WifiPageCoordinator::MoveFocus(int delta)
         return network_focus_.Move(delta);
     }
     return focus_.Move(delta);
+}
+
+bool WifiPageCoordinator::MoveFocusByPage(int delta, int page_size)
+{
+    if (delta == 0) {
+        return false;
+    }
+    if (!network_list_active_ || page_size <= 0) {
+        return MoveFocus(delta);
+    }
+
+    const int total_items = NetworkCount();
+    if (total_items <= 0) {
+        return false;
+    }
+
+    const int current_index = network_focus_.index() >= 0 ? network_focus_.index() : 0;
+    const int next_index =
+        delta > 0 ? NextPageIndex(current_index, total_items, page_size)
+                  : PreviousPageIndex(current_index, total_items, page_size);
+    return network_focus_.SetIndex(next_index);
 }
 
 bool WifiPageCoordinator::SetFocusIndex(int index)

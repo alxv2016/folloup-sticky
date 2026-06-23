@@ -5,9 +5,8 @@
 #include "display_service.h"
 #include "esp_log.h"
 #include "footer_runtime.h"
+#include "page_input_runtime.h"
 #include "page_interaction_runtime.h"
-#include "settings_page_runtime.h"
-#include "wifi_page_runtime.h"
 
 namespace input_focus_runtime {
 namespace {
@@ -107,22 +106,11 @@ app_interaction::InputResult HandleButtonEvent(const button_service::ButtonEvent
     }
 
     if (IsNavigationMoveEvent(event, &delta)) {
-        bool moved = false;
-        switch (display_service::GetCurrentScreen()) {
-            case display_service::ScreenId::kSettings:
-                moved = settings_page_runtime::MoveFocus(delta);
-                break;
-            case display_service::ScreenId::kWifi:
-                moved = wifi_page_runtime::MoveFocus(delta);
-                break;
-            default:
-                break;
-        }
-        if (moved) {
-            result.consumed = true;
-            result.play_feedback = true;
-            result.feedback_cue = app_interaction::FeedbackCue::kClick;
-            return result;
+        const page_input_runtime::FocusMoveResult move_result =
+            page_input_runtime::MoveFocusForCurrentScreen(
+                delta, event.event == button_service::ButtonEvent::kPressRepeat);
+        if (move_result.handled) {
+            return move_result.interaction_result;
         }
     }
 
@@ -177,7 +165,10 @@ app_interaction::InputResult HandleTouchEvent(const touch_service::TouchEventInf
                     if (resolved_target.owner == app_interaction::Owner::kOverlay) {
                         focus_changed = overlay_runtime::FocusTouchTarget(resolved_target);
                     } else if (resolved_target.owner == app_interaction::Owner::kFooter) {
-                        focus_changed = footer_runtime::FocusTouchTarget(resolved_target);
+                        focus_changed =
+                            page_input_runtime::FocusFooterTouchTargetForCurrentScreen(
+                                resolved_target) ||
+                            footer_runtime::FocusTouchTarget(resolved_target);
                     } else if (resolved_target.owner == app_interaction::Owner::kPage) {
                         focus_changed = page_interaction_runtime::FocusTouchTarget(resolved_target);
                     }

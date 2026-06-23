@@ -63,9 +63,17 @@ struct NetworkListStyle {
 };
 
 UiRect NetworkListBounds(int origin_x, int origin_y, const NetworkListStyle& style);
+UiRect NetworkListVisualBounds(int origin_x,
+                               int origin_y,
+                               const NetworkListState& state,
+                               const NetworkListStyle& style);
 UiRect NetworkListPanelBounds(int origin_x, int origin_y, const NetworkListStyle& style);
 UiRect NetworkListViewportBounds(int origin_x, int origin_y, const NetworkListStyle& style);
 UiRect NetworkListStatusBounds(int origin_x,
+                               int origin_y,
+                               const NetworkListState& state,
+                               const NetworkListStyle& style);
+int NetworkListFirstVisibleRow(int origin_x,
                                int origin_y,
                                const NetworkListState& state,
                                const NetworkListStyle& style);

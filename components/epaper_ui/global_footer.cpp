@@ -227,6 +227,14 @@ UiRect GlobalFooterItemBounds(int portrait_width,
     return FooterButtonBounds(portrait_width, portrait_height, state, item);
 }
 
+UiRect GlobalFooterItemVisualBounds(int portrait_width,
+                                    int portrait_height,
+                                    const GlobalFooterState& state,
+                                    GlobalFooterItemId item)
+{
+    return GlobalFooterItemBounds(portrait_width, portrait_height, state, item);
+}
+
 bool HitTestGlobalFooterItem(int portrait_width,
                              int portrait_height,
                              const GlobalFooterState& state,

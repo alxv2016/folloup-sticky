@@ -18,6 +18,7 @@ public:
                             const wifi_service::ScanSnapshot& scan_snapshot);
     void Show();
     bool MoveFocus(int delta);
+    bool MoveFocusByPage(int delta, int page_size);
     bool SetFocusIndex(int index);
     bool EnterNetworkList();
     bool ExitNetworkList();

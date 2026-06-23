@@ -39,10 +39,8 @@ struct ProjectionState {
 };
 
 using ActivateHandler = app_interaction::InputResult (*)(FooterFocusItem item, void* context);
-using RefreshHandler = esp_err_t (*)(display_service::RefreshMode refresh_mode, void* context);
 
 void SetActivateHandler(ActivateHandler handler, void* context);
-void SetRefreshHandler(RefreshHandler handler, void* context);
 void SetLayoutState(const LayoutState& state);
 void SetProjectionState(const ProjectionState& state);
 LayoutState GetLayoutState();

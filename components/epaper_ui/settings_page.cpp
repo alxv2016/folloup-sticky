@@ -89,6 +89,14 @@ UiRect SettingsPageItemBounds(int portrait_width,
     }
 }
 
+UiRect SettingsPageItemVisualBounds(int portrait_width,
+                                    int portrait_height,
+                                    const SettingsPageState& state,
+                                    SettingsPageItemId item)
+{
+    return SettingsPageItemBounds(portrait_width, portrait_height, state, item);
+}
+
 bool HitTestSettingsPageItem(int portrait_width,
                              int portrait_height,
                              const SettingsPageState& state,

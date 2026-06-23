@@ -56,6 +56,10 @@ UiRect PasswordInputFieldBounds(int origin_x,
                                 int origin_y,
                                 const PasswordInputState& state,
                                 const PasswordInputStyle& style);
+UiRect PasswordInputVisualBounds(int origin_x,
+                                 int origin_y,
+                                 const PasswordInputState& state,
+                                 const PasswordInputStyle& style);
 UiRect PasswordInputVisibilityButtonBounds(int origin_x,
                                            int origin_y,
                                            const PasswordInputState& state,

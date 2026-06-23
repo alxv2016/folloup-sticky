@@ -23,11 +23,16 @@ esp_err_t Schedule(SurfaceKey key,
                    ApplyCallback apply_callback,
                    display_service::RefreshMode refresh_mode =
                        display_service::RefreshMode::kPartial);
+esp_err_t Schedule(SurfaceKey key,
+                   ApplyCallback apply_callback,
+                   const display_service::RefreshRequest& refresh_request);
 esp_err_t ScheduleOverlay(
     SurfaceKey key,
     ApplyCallback apply_callback,
     display_service::OverlayRefreshPolicy policy =
         display_service::OverlayRefreshPolicy::kRebuildUnderlay);
+esp_err_t RequestRefresh(SurfaceKey key,
+                         const display_service::RefreshRequest& refresh_request);
 esp_err_t RequestRefresh(SurfaceKey key,
                          display_service::RefreshMode refresh_mode =
                              display_service::RefreshMode::kPartial);
