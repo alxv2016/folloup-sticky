@@ -7,7 +7,7 @@ namespace feedback_service {
 namespace {
 
 constexpr const char* kTag = "FeedbackService";
-constexpr bool kBuzzerFeedbackEnabled = false;
+constexpr bool kBuzzerFeedbackEnabled = true;
 
 buzzer_service::Pattern PatternForEvent(FeedbackEvent event)
 {

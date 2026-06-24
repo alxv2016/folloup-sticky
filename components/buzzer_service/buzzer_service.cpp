@@ -21,6 +21,9 @@ constexpr ledc_channel_t kLedcChannel = LEDC_CHANNEL_0;
 constexpr ledc_timer_bit_t kLedcDutyResolution = LEDC_TIMER_10_BIT;
 constexpr uint32_t kDefaultFrequencyHz = 4000;
 constexpr uint32_t kMaxVolumeDuty = 512;
+// Feedback is short beeps only: any tone longer than this is clamped down so no
+// sustained/long tones can play, regardless of the pattern that requested it.
+constexpr uint32_t kMaxBeepDurationMs = 40;
 constexpr uint32_t kTonePollMs = 10;
 constexpr uint32_t kQueueLength = 8;
 constexpr uint32_t kWorkerStackBytes = 3072;
@@ -93,6 +96,9 @@ void PlayToneBlocking(uint32_t frequency_hz, uint32_t duration_ms)
 {
     if (frequency_hz == 0 || duration_ms == 0) {
         return;
+    }
+    if (duration_ms > kMaxBeepDurationMs) {
+        duration_ms = kMaxBeepDurationMs;  // short beeps only — no long/sustained tones
     }
 
     esp_err_t err = StartTone(frequency_hz);
