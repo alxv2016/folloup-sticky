@@ -21,9 +21,6 @@ constexpr ledc_channel_t kLedcChannel = LEDC_CHANNEL_0;
 constexpr ledc_timer_bit_t kLedcDutyResolution = LEDC_TIMER_10_BIT;
 constexpr uint32_t kDefaultFrequencyHz = 4000;
 constexpr uint32_t kMaxVolumeDuty = 512;
-// Feedback is short beeps only: any tone longer than this is clamped down so no
-// sustained/long tones can play, regardless of the pattern that requested it.
-constexpr uint32_t kMaxBeepDurationMs = 40;
 constexpr uint32_t kTonePollMs = 10;
 constexpr uint32_t kQueueLength = 8;
 constexpr uint32_t kWorkerStackBytes = 3072;
@@ -97,9 +94,6 @@ void PlayToneBlocking(uint32_t frequency_hz, uint32_t duration_ms)
     if (frequency_hz == 0 || duration_ms == 0) {
         return;
     }
-    if (duration_ms > kMaxBeepDurationMs) {
-        duration_ms = kMaxBeepDurationMs;  // short beeps only — no long/sustained tones
-    }
 
     esp_err_t err = StartTone(frequency_hz);
     if (err != ESP_OK) {
@@ -131,16 +125,18 @@ void PlaySteps(const ToneStep* steps, size_t count)
 
 void PlayPatternBlocking(Pattern pattern)
 {
+    // Feedback is short beeps only. Every tone is <= 40ms; patterns stay distinct via
+    // pitch, note count, and spacing rather than tone length, so no sustained tones play.
     constexpr ToneStep kStartup[] = {
-        {523, 120, 60},
-        {659, 120, 60},
-        {784, 120, 60},
-        {1047, 180, 0},
+        {523, 40, 40},
+        {659, 40, 40},
+        {784, 40, 40},
+        {1047, 40, 0},
     };
     constexpr ToneStep kGeminiConnected[] = {
-        {1175, 70, 35},
-        {1568, 90, 45},
-        {2093, 130, 0},
+        {1175, 40, 30},
+        {1568, 40, 30},
+        {2093, 40, 0},
     };
     constexpr ToneStep kLock[] = {
         {1047, 28, 12},
@@ -151,30 +147,30 @@ void PlayPatternBlocking(Pattern pattern)
         {1047, 28, 0},
     };
     constexpr ToneStep kRecordingStart[] = {
-        {1319, 45, 20},
-        {1760, 70, 0},
+        {1319, 40, 20},
+        {1760, 40, 0},
     };
     constexpr ToneStep kModalOpen[] = {
         {1480, 40, 18},
-        {1661, 52, 0},
+        {1661, 40, 0},
     };
     constexpr ToneStep kClick[] = {
         {1760, 35, 0},
     };
     constexpr ToneStep kLongClick[] = {
-        {988, 90, 0},
+        {988, 40, 0},
     };
     constexpr ToneStep kDoubleClick[] = {
         {1760, 35, 35},
         {1760, 35, 0},
     };
     constexpr ToneStep kError[] = {
-        {220, 120, 70},
-        {196, 180, 0},
+        {220, 40, 70},
+        {196, 40, 0},
     };
     constexpr ToneStep kShutdown[] = {
         {784, 35, 60},
-        {523, 140, 0},
+        {523, 40, 0},
     };
 
     switch (pattern) {
