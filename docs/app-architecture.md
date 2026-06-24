@@ -264,7 +264,6 @@ docs/
   asset-generation.md
   app-architecture.md
   gemini-service.md
-  display-demo-cleanup.md
   reTerminal_Sticky_Hardware_Spec_Software_Porting-en.md
 scripts/
   generate_epaper_assets_common.py
@@ -1181,24 +1180,38 @@ its caller and owns:
 - e-paper reset, busy, data/command, and chip-select GPIO control
 - the SSD1677 command/data write path
 - the mono framebuffer
-- the retained previous framebuffer used by partial refresh
+- the retained previous framebuffer (a shadow of what is on the glass) used by the
+  partial-refresh differential
 - full base refresh
-- raw-coordinate region partial refresh
-- whole-screen mono partial refresh
+- change-detected whole-screen partial refresh (diff the framebuffer against the shadow,
+  drive only the changed pixels)
 - panel sleep
 - refresh timing metrics
 
 Current scope is intentionally mono-only. Do not port gray4 support unless a
 future product requirement explicitly asks for it.
 
-The first display update must use `RefreshFullBase()` so the SSD1677 current and
-previous RAM planes are seeded. Later full-screen mono updates may use
-`RefreshPartialFullScreen()`, which delegates to `RefreshPartialRegion()` with
-the full panel bounds. Region partial refresh takes raw framebuffer pixel
-coordinates with exclusive end bounds and internally byte-aligns the X range for
-1 bpp transfers. If partial refresh is requested before a base image exists,
-after sleep/timeout, or after the partial-refresh limit, the raw driver falls
-back to `RefreshFullBase()`.
+The first display update must use `RefreshFullBase()` so the SSD1677 current
+(`0x24`) and previous (`0x26`) RAM planes are seeded. Per-interaction updates call
+`RefreshChangedRegion()`, which diffs the freshly rendered framebuffer against the
+retained shadow and, only if something changed, drives a whole-screen partial via
+`RefreshPartialFullScreen()`. The differential waveform physically moves only the
+pixels that differ, so a whole-screen partial still updates just the changed element
+with no flash. If partial refresh is requested before a base image exists, after
+sleep/timeout, or after the partial-refresh limit, the driver falls back to
+`RefreshFullBase()`.
+
+> **Windowed / region partial refresh is NOT supported on this SSD1677 (GDEM0397T81)
+> panel.** The master activation drives the *whole* panel from the `0x24` plane — the
+> RAM window registers (`0x44/0x45`) scope only where writes land, not where the panel
+> is driven, and there is no register to limit the drive to a window. So a windowed
+> write leaves stale RAM outside it that gets re-energized on the next activation
+> (previously-focused elements "relight"). This was proven three ways: empirically,
+> against the datasheet, and with a from-scratch isolation test. Only full-buffer writes
+> are coherent, so every partial rewrites both RAM planes in full. `RefreshPartialRegion()`
+> remains internally but is only ever called with full-panel bounds. The driver also
+> applies a Y gate-line mapping fix (`window_y = height-1-raw_y`) and removes the
+> per-partial hardware reset (the datasheet resets only at power-on).
 
 The driver can initialize its own SPI bus for standalone reuse, but Sticky code
 must pass `external_spi_bus=true` after `sticky_board::EnsureSharedSpiBus()` has
@@ -1208,8 +1221,11 @@ Not yet ported from Folloup:
 
 - wake API and display wake policy
 - fast refresh/base path
-- retained view dirty-region policy
 - logical-to-raw display view abstraction
+
+(A retained view dirty-region / windowed partial-refresh policy is intentionally **not**
+pursued: the SSD1677 panel cannot drive a sub-window, so region partial refresh is not
+viable here — see the driver note above.)
 
 ### `components/display_service`
 
@@ -1255,8 +1271,8 @@ Current decoupled refresh rule:
 - schedule keyed UI presentation work through `main/ui_refresh_runtime.cpp`
 - let `ui_refresh_runtime` coalesce stale intermediate updates and keep the
   latest state for each keyed surface while the panel is busy
-- carry refresh scope through that queue as a `display_service::RefreshRequest`
-  so focus-only updates can stay bounded
+- carry the refresh mode through that queue as a `display_service::RefreshRequest`
+  (partial vs full); partials are change-detected whole-screen, not windowed
 - keep page-owned focus refresh on that same queue instead of bouncing through
   an extra app-shell UI dispatcher layer
 - keep `display_service` as the sole owner of framebuffer mutation and panel
@@ -1271,38 +1287,40 @@ The current keyed surfaces are:
 - settings page
 - WiFi page
 
-Current refresh-scope categories are:
+Current refresh categories are:
 
-- focus-only bounded repaint: old focus visual bounds union new focus visual
-  bounds, currently used on `Settings` and `WiFi`
-- larger bounded page repaint: used when a focus move also changes a larger
-  viewport region such as the visible WiFi network-list window
-- whole-screen partial refresh: used for general state churn, overlay reuse
-  paths, and safe fallbacks when region redraw is not appropriate
-- full base refresh: used for explicit full refresh requests, wake recovery,
-  and other panel-reset cases
+- whole-screen partial refresh: the default for every in-screen update (focus roving,
+  state churn, overlay reuse). The driver diffs the rendered frame against the shadow
+  and the differential waveform moves only the changed pixels — there is no
+  windowed/region variant because the panel cannot drive a sub-window (see the driver
+  note above)
+- full base refresh: used for explicit full refresh requests, wake recovery, the
+  periodic ghost-clear cadence, and other panel-reset cases
 
-The current focus fast-lane is:
+The current focus path is:
 
 - page input mutates page-owned focus truth first
-- the page runtime computes dirty bounds for pure focus motion plus whether the
-  visible footer projection actually changed
+- the page runtime flags only whether the visible footer projection actually changed
+  (it no longer computes per-interaction dirty bounds — that machinery was removed once
+  region refresh proved unviable)
 - `ui_refresh_runtime` coalesces the latest `RefreshRequest` for that page
 - when footer projection changed, the queued page apply updates page state and
-  footer state together once before the refresh request reaches the panel queue
-- `display_service` redraws the active screen and executes a region partial
-  refresh when the request is bounded and no overlay is visible
-- if any overlay is visible, the display path falls back to the broader
-  underlay rebuild / full-screen partial route so retained overlay correctness
-  wins over smaller repaint scope
+  footer state together once before the refresh reaches the panel queue
+- `display_service` re-renders the active screen and lets the driver diff it against
+  the shadow, driving a whole-screen partial of only the changed pixels (or skipping
+  entirely when nothing changed)
+- overlays (keyboard, modals) refresh through the overlay path: while typing, only the
+  cached underlay is reused and the overlay redrawn — the page underneath is **not**
+  re-rendered until the overlay closes
 - page-entry transitions still stay synchronous in `app_shell` rather than
   going through the latest-wins queue, because the app shell must preserve
   deterministic ordering for touch-provider setup, footer layout, runtime state
   sync, and screen switch
 
-The long-term direction is to replace the remaining demo bridge with real view
-renderers and rename the display API away from `DemoSelection` toward a
-view-oriented model. Track that work in `docs/display-demo-cleanup.md`.
+The temporary demo-selection machinery has been removed; `display_service` owns a
+`ScreenId`-based screen model. The home screen still renders a neutral placeholder
+card (`DrawHomePlaceholder`) — replacing that with a real home view is the remaining
+product work.
 
 Because the SSD1677 path shares `SPI2_HOST` with MicroSD, `display_service`
 depends on `storage_service` having already performed SD bring-up when a card is
