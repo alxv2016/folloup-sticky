@@ -158,11 +158,17 @@ void KeyboardStateChanged(const epaper_ui::KeyboardState& keyboard_state,
         }
     }
 
+    // Only re-render the WiFi page when the keyboard CLOSES (submit/dismiss). The page
+    // sits entirely behind the keyboard overlay while typing, and the keyboard's own
+    // overlay refresh already shows each typed character in its input preview. Refreshing
+    // the whole page (network list + keyboard) on every keystroke was a ~2s full re-render
+    // per key for nothing — that was the keyboard's "super slow" typing. The password
+    // input state is still kept in sync above, so the page shows the final text on close.
     if (intent == epaper_ui::KeyboardIntent::kSubmit ||
         intent == epaper_ui::KeyboardIntent::kDismiss) {
         (void)overlay_runtime::DismissKeyboard();
+        (void)UpdateDisplayStateAndRequestRefresh(display_service::RefreshMode::kPartial);
     }
-    (void)UpdateDisplayStateAndRequestRefresh(display_service::RefreshMode::kPartial);
 }
 
 esp_err_t ShowPasswordKeyboardImpl()

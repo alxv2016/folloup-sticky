@@ -99,9 +99,12 @@ esp_err_t EpaperPanel::InitFull()
 
 esp_err_t EpaperPanel::InitPartial()
 {
-    ESP_RETURN_ON_ERROR(HardwareReset(), kTag, "partial hardware reset failed");
-    ESP_RETURN_ON_ERROR(ReadBusy(), kTag, "busy wait before partial init failed");
-
+    // No hardware reset per partial. The datasheet reference sequence resets the IC
+    // only once at power-on; a partial runs against the panel established by the last
+    // full refresh (InitFull still resets). Resetting before every partial cost ~52ms
+    // (reset_high_ms + busy wait) for no benefit now that partials rewrite both RAM
+    // buffers in full. The registers below are re-asserted (cheap, no delays) because
+    // a partial uses a different border waveform than the full refresh.
     const uint8_t driver_output[] = {
         static_cast<uint8_t>((height_ - 1) & 0xFF),
         static_cast<uint8_t>((height_ - 1) >> 8),

@@ -733,9 +733,17 @@ bool FocusTouchTarget(const app_interaction::InteractiveTarget& target)
         return false;
     }
 
-    const esp_err_t err = SyncOverlayState(true, refresh_policy);
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        ESP_LOGW(kTag, "Overlay refresh after touch focus failed: %s", esp_err_to_name(err));
+    // Keyboard keys: skip the touch-down focus/highlight refresh. On this slow e-paper
+    // it cost a second full ~0.5s refresh per tap (highlight the key on press, then the
+    // character on release). The activate (touch-up) refresh already draws the pressed
+    // key highlighted AND the new character, so a tap is one refresh — matching the
+    // index-rove speed. selected_key_index is still updated and the haptic press
+    // feedback still fires (this returns true).
+    if (target.kind != app_interaction::Kind::kOverlayKeyboardKey) {
+        const esp_err_t err = SyncOverlayState(true, refresh_policy);
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(kTag, "Overlay refresh after touch focus failed: %s", esp_err_to_name(err));
+        }
     }
     return true;
 }
