@@ -270,7 +270,10 @@ bool ResolveTouchTarget(int x, int y, app_interaction::InteractiveTarget* target
     }
 
     const FooterFocusItem focused_item = FooterFocusItemFromUi(item);
-    if (focused_item == FooterFocusItem::kNone) {
+    if (focused_item == FooterFocusItem::kNone ||
+        focused_item == FooterFocusItem::kMic) {
+        // The mic is a recording-status indicator, not an interactive control: it stays
+        // visible but is not tappable, so a tap on it resolves to no footer target.
         return false;
     }
 

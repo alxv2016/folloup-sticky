@@ -138,8 +138,9 @@ footer_runtime::LayoutState FooterLayoutForScreen(display_service::ScreenId scre
     layout.visible = true;
     layout.show_settings = true;
     layout.show_wifi = true;
-    layout.show_home = screen == display_service::ScreenId::kSettings ||
-                       screen == display_service::ScreenId::kWifi;
+    // Home button is always visible, including on the home screen itself (tapping it
+    // there does a full-screen refresh via HandleFooterActivate -> ShowHomeScreen(kFull)).
+    layout.show_home = true;
     layout.show_mic = true;
     return layout;
 }
