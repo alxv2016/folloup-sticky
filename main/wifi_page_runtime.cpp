@@ -83,38 +83,6 @@ page_navigation::NavigationItemRole RoleForUiItem(epaper_ui::WifiPageItemId item
     }
 }
 
-epaper_ui::WifiPageItemId ItemForRole(page_navigation::NavigationItemRole role)
-{
-    switch (role) {
-        case page_navigation::NavigationItemRole::kWifiPageNetworkList:
-            return epaper_ui::WifiPageItemId::kNetworkList;
-        case page_navigation::NavigationItemRole::kWifiPagePasswordInput:
-            return epaper_ui::WifiPageItemId::kPasswordInput;
-        case page_navigation::NavigationItemRole::kWifiPagePasswordVisibilityButton:
-            return epaper_ui::WifiPageItemId::kPasswordVisibilityButton;
-        case page_navigation::NavigationItemRole::kWifiPageScanButton:
-            return epaper_ui::WifiPageItemId::kScanButton;
-        case page_navigation::NavigationItemRole::kWifiPageConnectButton:
-            return epaper_ui::WifiPageItemId::kConnectButton;
-        default:
-            return epaper_ui::WifiPageItemId::kNone;
-    }
-}
-
-epaper_ui::GlobalFooterItemId FooterUiItemForRole(page_navigation::NavigationItemRole role)
-{
-    switch (role) {
-        case page_navigation::NavigationItemRole::kFooterHome:
-            return epaper_ui::GlobalFooterItemId::kHome;
-        case page_navigation::NavigationItemRole::kFooterSettings:
-            return epaper_ui::GlobalFooterItemId::kSettings;
-        case page_navigation::NavigationItemRole::kFooterWifi:
-            return epaper_ui::GlobalFooterItemId::kWifi;
-        default:
-            return epaper_ui::GlobalFooterItemId::kNone;
-    }
-}
-
 footer_runtime::ProjectionState BuildFooterProjectionStateLocked()
 {
     const page_navigation::PageFocusProjection projection =
@@ -149,83 +117,6 @@ bool FooterProjectionChangedForFocusIndexes(int old_focus_index, int new_focus_i
 epaper_ui::WifiPageState BuildStateLocked()
 {
     return s_coordinator.BuildState();
-}
-
-epaper_ui::UiRect FocusVisualBoundsForState(int focus_index,
-                                            const epaper_ui::WifiPageState& page_state,
-                                            const epaper_ui::GlobalFooterState& footer_state)
-{
-    const page_navigation::NavigationItemDescriptor* item =
-        s_coordinator.navigation_model().ItemAt(focus_index);
-    if (item == nullptr) {
-        return {};
-    }
-
-    if (item->role == page_navigation::NavigationItemRole::kWifiPageNetworkList &&
-        page_state.network_list.active) {
-        const epaper_ui::UiRect row_bounds =
-            epaper_ui::WifiPageNetworkRowBounds(display_service::PortraitWidth(),
-                                                display_service::PortraitHeight(),
-                                                page_state,
-                                                page_state.network_list.focused_network_index);
-        if (!row_bounds.IsEmpty()) {
-            return row_bounds;
-        }
-    }
-
-    const epaper_ui::WifiPageItemId page_item = ItemForRole(item->role);
-    if (page_item != epaper_ui::WifiPageItemId::kNone) {
-        return epaper_ui::WifiPageItemVisualBounds(display_service::PortraitWidth(),
-                                                   display_service::PortraitHeight(),
-                                                   page_state,
-                                                   page_item);
-    }
-
-    const epaper_ui::GlobalFooterItemId footer_item = FooterUiItemForRole(item->role);
-    if (footer_item != epaper_ui::GlobalFooterItemId::kNone) {
-        return epaper_ui::GlobalFooterItemVisualBounds(display_service::PortraitWidth(),
-                                                       display_service::PortraitHeight(),
-                                                       footer_state,
-                                                       footer_item);
-    }
-    return {};
-}
-
-bool NetworkViewportChanged(const epaper_ui::WifiPageState& old_state,
-                            const epaper_ui::WifiPageState& new_state)
-{
-    if (!old_state.network_list.active || !new_state.network_list.active) {
-        return false;
-    }
-
-    return epaper_ui::WifiPageFirstVisibleNetworkRow(display_service::PortraitWidth(),
-                                                     display_service::PortraitHeight(),
-                                                     old_state) !=
-           epaper_ui::WifiPageFirstVisibleNetworkRow(display_service::PortraitWidth(),
-                                                     display_service::PortraitHeight(),
-                                                     new_state);
-}
-
-epaper_ui::UiRect BuildFocusDirtyRect(int old_focus_index,
-                                      const epaper_ui::WifiPageState& old_state,
-                                      int new_focus_index,
-                                      const epaper_ui::WifiPageState& new_state)
-{
-    const epaper_ui::GlobalFooterState footer_state = footer_runtime::BuildState();
-    const bool old_network_focus = s_coordinator.navigation_model().IsRoleSelected(
-        old_focus_index, page_navigation::NavigationItemRole::kWifiPageNetworkList);
-    const bool new_network_focus = s_coordinator.navigation_model().IsRoleSelected(
-        new_focus_index, page_navigation::NavigationItemRole::kWifiPageNetworkList);
-
-    if ((old_network_focus || new_network_focus) && NetworkViewportChanged(old_state, new_state)) {
-        return epaper_ui::WifiPageItemVisualBounds(display_service::PortraitWidth(),
-                                                   display_service::PortraitHeight(),
-                                                   new_state,
-                                                   epaper_ui::WifiPageItemId::kNetworkList);
-    }
-
-    return epaper_ui::UnionRect(FocusVisualBoundsForState(old_focus_index, old_state, footer_state),
-                                FocusVisualBoundsForState(new_focus_index, new_state, footer_state));
 }
 
 int VisibleNetworkRowCapacityLocked()
@@ -396,8 +287,7 @@ page_actions::FocusUpdateOutcome FocusTouchTargetImpl(
     result.apply_page_state = true;
     result.sync_footer_projection =
         FooterProjectionChangedForFocusIndexes(old_focus_index, new_focus_index);
-    result.dirty_rect = BuildFocusDirtyRect(old_focus_index, old_state, new_focus_index, new_state);
-    result.use_partial_region = !result.dirty_rect.IsEmpty();
+    result.use_partial_region = true;
     return result;
 }
 
@@ -475,10 +365,9 @@ page_actions::FocusMoveOutcome MoveFocus(int delta, bool page_jump)
         new_state = BuildStateLocked();
     }
 
-    result.dirty_rect = BuildFocusDirtyRect(old_focus_index, old_state, new_focus_index, new_state);
     result.sync_footer_projection =
         FooterProjectionChangedForFocusIndexes(old_focus_index, new_focus_index);
-    result.use_partial_region = !result.dirty_rect.IsEmpty();
+    result.use_partial_region = true;
     return result;
 }
 
@@ -575,9 +464,7 @@ page_actions::FocusUpdateOutcome FocusFooterItem(footer_runtime::FooterFocusItem
     result.apply_page_state = true;
     result.sync_footer_projection =
         FooterProjectionChangedForFocusIndexes(old_focus_index, new_focus_index);
-    result.dirty_rect =
-        BuildFocusDirtyRect(old_focus_index, old_state, new_focus_index, new_state);
-    result.use_partial_region = !result.dirty_rect.IsEmpty();
+    result.use_partial_region = true;
     return result;
 }
 

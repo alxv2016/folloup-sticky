@@ -77,52 +77,6 @@ page_navigation::NavigationItemRole RoleForUiItem(epaper_ui::SettingsPageItemId 
     }
 }
 
-epaper_ui::SettingsPageItemId ItemForRole(page_navigation::NavigationItemRole role)
-{
-    switch (role) {
-        case page_navigation::NavigationItemRole::kSettingsWifiToggle:
-            return epaper_ui::SettingsPageItemId::kWifiToggle;
-        case page_navigation::NavigationItemRole::kSettingsEnableApToggle:
-            return epaper_ui::SettingsPageItemId::kAccessPointToggle;
-        case page_navigation::NavigationItemRole::kSettingsFormatSdButton:
-            return epaper_ui::SettingsPageItemId::kFormatSdButton;
-        case page_navigation::NavigationItemRole::kUnknown:
-        case page_navigation::NavigationItemRole::kFooterHome:
-        case page_navigation::NavigationItemRole::kFooterSettings:
-        case page_navigation::NavigationItemRole::kFooterWifi:
-        case page_navigation::NavigationItemRole::kWifiPageNetworkList:
-        case page_navigation::NavigationItemRole::kWifiPagePasswordInput:
-        case page_navigation::NavigationItemRole::kWifiPagePasswordVisibilityButton:
-        case page_navigation::NavigationItemRole::kWifiPageScanButton:
-        case page_navigation::NavigationItemRole::kWifiPageConnectButton:
-        default:
-            return epaper_ui::SettingsPageItemId::kNone;
-    }
-}
-
-epaper_ui::GlobalFooterItemId FooterUiItemForRole(page_navigation::NavigationItemRole role)
-{
-    switch (role) {
-        case page_navigation::NavigationItemRole::kFooterHome:
-            return epaper_ui::GlobalFooterItemId::kHome;
-        case page_navigation::NavigationItemRole::kFooterSettings:
-            return epaper_ui::GlobalFooterItemId::kSettings;
-        case page_navigation::NavigationItemRole::kFooterWifi:
-            return epaper_ui::GlobalFooterItemId::kWifi;
-        case page_navigation::NavigationItemRole::kUnknown:
-        case page_navigation::NavigationItemRole::kSettingsWifiToggle:
-        case page_navigation::NavigationItemRole::kSettingsEnableApToggle:
-        case page_navigation::NavigationItemRole::kSettingsFormatSdButton:
-        case page_navigation::NavigationItemRole::kWifiPageNetworkList:
-        case page_navigation::NavigationItemRole::kWifiPagePasswordInput:
-        case page_navigation::NavigationItemRole::kWifiPagePasswordVisibilityButton:
-        case page_navigation::NavigationItemRole::kWifiPageScanButton:
-        case page_navigation::NavigationItemRole::kWifiPageConnectButton:
-        default:
-            return epaper_ui::GlobalFooterItemId::kNone;
-    }
-}
-
 footer_runtime::ProjectionState BuildFooterProjectionStateLocked()
 {
     const page_navigation::PageFocusProjection projection =
@@ -157,44 +111,6 @@ bool FooterProjectionChangedForFocusIndexes(int old_focus_index, int new_focus_i
 epaper_ui::SettingsPageState BuildStateLocked()
 {
     return s_coordinator.BuildState(wifi_service::GetUiState(), storage_service::GetSnapshot());
-}
-
-epaper_ui::UiRect FocusVisualBoundsForState(int focus_index,
-                                            const epaper_ui::SettingsPageState& page_state,
-                                            const epaper_ui::GlobalFooterState& footer_state)
-{
-    const page_navigation::NavigationItemDescriptor* item =
-        s_coordinator.navigation_model().ItemAt(focus_index);
-    if (item == nullptr) {
-        return {};
-    }
-
-    const epaper_ui::SettingsPageItemId page_item = ItemForRole(item->role);
-    if (page_item != epaper_ui::SettingsPageItemId::kNone) {
-        return epaper_ui::SettingsPageItemVisualBounds(display_service::PortraitWidth(),
-                                                       display_service::PortraitHeight(),
-                                                       page_state,
-                                                       page_item);
-    }
-
-    const epaper_ui::GlobalFooterItemId footer_item = FooterUiItemForRole(item->role);
-    if (footer_item != epaper_ui::GlobalFooterItemId::kNone) {
-        return epaper_ui::GlobalFooterItemVisualBounds(display_service::PortraitWidth(),
-                                                       display_service::PortraitHeight(),
-                                                       footer_state,
-                                                       footer_item);
-    }
-    return {};
-}
-
-epaper_ui::UiRect BuildFocusDirtyRect(int old_focus_index,
-                                      const epaper_ui::SettingsPageState& old_state,
-                                      int new_focus_index,
-                                      const epaper_ui::SettingsPageState& new_state)
-{
-    const epaper_ui::GlobalFooterState footer_state = footer_runtime::BuildState();
-    return epaper_ui::UnionRect(FocusVisualBoundsForState(old_focus_index, old_state, footer_state),
-                                FocusVisualBoundsForState(new_focus_index, new_state, footer_state));
 }
 
 bool ResolveTouchTargetImpl(int x, int y, app_interaction::InteractiveTarget* target)
@@ -274,9 +190,7 @@ page_actions::FocusUpdateOutcome FocusTouchTargetImpl(
     result.apply_page_state = true;
     result.sync_footer_projection =
         FooterProjectionChangedForFocusIndexes(old_focus_index, new_focus_index);
-    result.dirty_rect =
-        BuildFocusDirtyRect(old_focus_index, old_state, new_focus_index, new_state);
-    result.use_partial_region = !result.dirty_rect.IsEmpty();
+    result.use_partial_region = true;
     return result;
 }
 
@@ -346,11 +260,9 @@ page_actions::FocusMoveOutcome MoveFocus(int delta)
         new_state = BuildStateLocked();
     }
 
-    result.dirty_rect =
-        BuildFocusDirtyRect(old_focus_index, old_state, new_focus_index, new_state);
     result.sync_footer_projection =
         FooterProjectionChangedForFocusIndexes(old_focus_index, new_focus_index);
-    result.use_partial_region = !result.dirty_rect.IsEmpty();
+    result.use_partial_region = true;
     return result;
 }
 
@@ -398,9 +310,7 @@ page_actions::FocusUpdateOutcome FocusFooterItem(footer_runtime::FooterFocusItem
     result.apply_page_state = true;
     result.sync_footer_projection =
         FooterProjectionChangedForFocusIndexes(old_focus_index, new_focus_index);
-    result.dirty_rect =
-        BuildFocusDirtyRect(old_focus_index, old_state, new_focus_index, new_state);
-    result.use_partial_region = !result.dirty_rect.IsEmpty();
+    result.use_partial_region = true;
     return result;
 }
 

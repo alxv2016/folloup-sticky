@@ -62,6 +62,7 @@ QueueHandle_t s_command_queue = nullptr;
 TaskHandle_t s_display_task = nullptr;
 std::mutex s_state_mutex;
 std::mutex s_panel_mutex;
+std::mutex s_command_queue_mutex;
 bool s_display_sleeping = false;
 std::atomic<bool> s_refresh_in_progress = false;
 std::atomic<ScreenId> s_current_screen = ScreenId::kHome;
@@ -574,28 +575,71 @@ bool HasVisibleOverlay(const RenderSnapshot& snapshot)
            snapshot.toast.visible;
 }
 
-epaper_ui::UiRect ClampPortraitRect(const epaper_ui::UiRect& rect)
+RefreshMode MergeRefreshMode(RefreshMode lhs, RefreshMode rhs)
 {
-    if (rect.IsEmpty()) {
-        return {};
+    return lhs == RefreshMode::kFull || rhs == RefreshMode::kFull ? RefreshMode::kFull
+                                                                  : RefreshMode::kPartial;
+}
+
+RefreshRequest MergeRefreshRequest(const RefreshRequest& lhs, const RefreshRequest& rhs)
+{
+    RefreshRequest merged = {};
+    merged.refresh_mode = MergeRefreshMode(lhs.refresh_mode, rhs.refresh_mode);
+    if (merged.refresh_mode == RefreshMode::kFull || lhs.scope == RefreshScope::kScreen ||
+        rhs.scope == RefreshScope::kScreen) {
+        merged.scope = RefreshScope::kScreen;
+        merged.dirty_rect = {};
+        return merged;
     }
 
-    const int x0 = std::clamp(rect.x, 0, kPortraitWidth);
-    const int y0 = std::clamp(rect.y, 0, kPortraitHeight);
-    const int x1 = std::clamp(rect.right(), 0, kPortraitWidth);
-    const int y1 = std::clamp(rect.bottom(), 0, kPortraitHeight);
-    if (x1 <= x0 || y1 <= y0) {
-        return {};
+    merged.scope = RefreshScope::kRegion;
+    merged.dirty_rect = epaper_ui::UnionRect(lhs.dirty_rect, rhs.dirty_rect);
+    return merged;
+}
+
+OverlayRefreshPolicy MergeOverlayRefreshPolicy(OverlayRefreshPolicy lhs, OverlayRefreshPolicy rhs)
+{
+    return lhs == OverlayRefreshPolicy::kRebuildUnderlay ||
+                   rhs == OverlayRefreshPolicy::kRebuildUnderlay
+               ? OverlayRefreshPolicy::kRebuildUnderlay
+               : OverlayRefreshPolicy::kReuseUnderlaySnapshot;
+}
+
+esp_err_t EnqueueDisplayCommand(const DisplayCommand& incoming)
+{
+    if (s_command_queue == nullptr) {
+        return ESP_ERR_INVALID_STATE;
     }
-    return {x0, y0, x1 - x0, y1 - y0};
+
+    std::lock_guard<std::mutex> lock(s_command_queue_mutex);
+
+    DisplayCommand merged = incoming;
+    DisplayCommand pending = {};
+    if (xQueuePeek(s_command_queue, &pending, 0) == pdTRUE) {
+        if (pending.type == DisplayCommandType::kRefreshCurrent &&
+            incoming.type == DisplayCommandType::kRefreshCurrent &&
+            pending.screen == incoming.screen) {
+            merged.refresh_request =
+                MergeRefreshRequest(pending.refresh_request, incoming.refresh_request);
+        } else if (pending.type == DisplayCommandType::kRefreshOverlay &&
+                   incoming.type == DisplayCommandType::kRefreshOverlay &&
+                   pending.screen == incoming.screen) {
+            merged.overlay_refresh_policy = MergeOverlayRefreshPolicy(
+                pending.overlay_refresh_policy, incoming.overlay_refresh_policy);
+        }
+    }
+
+    return xQueueOverwrite(s_command_queue, &merged) == pdPASS ? ESP_OK : ESP_FAIL;
 }
 
 esp_err_t RefreshCurrentScreenRegionLocked(const epaper_ui::UiRect& dirty_rect)
 {
-    const epaper_ui::UiRect clamped_rect = ClampPortraitRect(dirty_rect);
-    if (clamped_rect.IsEmpty()) {
-        return ESP_OK;
-    }
+    // The caller's dirty_rect is only a hint that *something* changed. The region
+    // actually driven is derived from the rendered pixel delta inside the driver
+    // (EpaperPanel::RefreshChangedRegion), so a partial refresh can never strand a
+    // changed pixel that the caller forgot to include — it just renders the whole
+    // frame and drives whatever differs from the glass.
+    (void)dirty_rect;
 
     const RenderSnapshot snapshot = CaptureRenderSnapshot();
     if (HasVisibleOverlay(snapshot)) {
@@ -629,7 +673,7 @@ esp_err_t RefreshCurrentScreenRegionLocked(const epaper_ui::UiRect& dirty_rect)
     }
 
     RefreshBusyGuard refresh_busy;
-    const esp_err_t err = panel.RefreshPartialFullScreen();
+    const esp_err_t err = panel.RefreshChangedRegion();
     if (err != ESP_OK) {
         return err;
     }
@@ -974,7 +1018,7 @@ esp_err_t SetCurrentScreen(ScreenId screen, RefreshMode refresh_mode)
     command.type = DisplayCommandType::kSetScreen;
     command.screen = screen;
     command.refresh_request.refresh_mode = refresh_mode;
-    return xQueueOverwrite(s_command_queue, &command) == pdPASS ? ESP_OK : ESP_FAIL;
+    return EnqueueDisplayCommand(command);
 }
 
 esp_err_t RequestOverlayRefresh(OverlayRefreshPolicy policy)
@@ -987,7 +1031,7 @@ esp_err_t RequestOverlayRefresh(OverlayRefreshPolicy policy)
     command.type = DisplayCommandType::kRefreshOverlay;
     command.screen = s_current_screen.load(std::memory_order_relaxed);
     command.overlay_refresh_policy = policy;
-    return xQueueOverwrite(s_command_queue, &command) == pdPASS ? ESP_OK : ESP_FAIL;
+    return EnqueueDisplayCommand(command);
 }
 
 esp_err_t RequestRefreshCurrentScreen(const RefreshRequest& refresh_request)
@@ -1000,7 +1044,7 @@ esp_err_t RequestRefreshCurrentScreen(const RefreshRequest& refresh_request)
     command.type = DisplayCommandType::kRefreshCurrent;
     command.screen = s_current_screen.load(std::memory_order_relaxed);
     command.refresh_request = refresh_request;
-    return xQueueOverwrite(s_command_queue, &command) == pdPASS ? ESP_OK : ESP_FAIL;
+    return EnqueueDisplayCommand(command);
 }
 
 esp_err_t RequestRefreshCurrentScreen(RefreshMode refresh_mode)

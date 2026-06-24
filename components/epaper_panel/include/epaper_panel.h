@@ -55,6 +55,7 @@ public:
     esp_err_t RefreshFullBase();
     esp_err_t RefreshPartialRegion(uint16_t raw_x_start, uint16_t raw_y_start,
                                    uint16_t raw_x_end, uint16_t raw_y_end);
+    esp_err_t RefreshChangedRegion();
     esp_err_t RefreshPartialFullScreen();
     esp_err_t Sleep();
     void Clear(bool white = true);
