@@ -10,8 +10,6 @@ struct FocusUpdateOutcome {
     bool handled = false;
     bool apply_page_state = false;
     bool sync_footer_projection = false;
-    bool use_partial_region = false;
-    epaper_ui::UiRect dirty_rect = {};
 };
 
 struct FocusMoveOutcome {
@@ -19,8 +17,6 @@ struct FocusMoveOutcome {
     bool play_navigation_cue = false;
     bool apply_page_state = false;
     bool sync_footer_projection = false;
-    bool use_partial_region = false;
-    epaper_ui::UiRect dirty_rect = {};
 };
 
 }  // namespace page_actions

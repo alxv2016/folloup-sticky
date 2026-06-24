@@ -100,15 +100,10 @@ void ApplySettingsFocusUpdate(const page_actions::FocusUpdateOutcome& outcome)
         footer_runtime::SetProjectionState(settings_page_runtime::BuildFooterProjectionState());
     }
     if (outcome.apply_page_state) {
-        const display_service::RefreshRequest refresh_request = outcome.use_partial_region
-                                                                    ? display_service::RefreshRequest{
-                                                                          .refresh_mode = display_service::RefreshMode::kPartial,
-                                                                          .scope = display_service::RefreshScope::kRegion,
-                                                                          .dirty_rect = outcome.dirty_rect,
-                                                                      }
-                                                                    : display_service::RefreshRequest{
-                                                                          .refresh_mode = display_service::RefreshMode::kPartial,
-                                                                      };
+        const display_service::RefreshRequest refresh_request = {
+            .refresh_mode = display_service::RefreshMode::kPartial,
+            .scope = display_service::RefreshScope::kRegion,
+        };
         if (outcome.sync_footer_projection) {
             (void)ui_refresh_runtime::Schedule(ui_refresh_runtime::SurfaceKey::kSettingsPage,
                                                &ApplySettingsPageAndFooterDisplayState,
@@ -116,11 +111,7 @@ void ApplySettingsFocusUpdate(const page_actions::FocusUpdateOutcome& outcome)
             return;
         }
 
-        if (outcome.use_partial_region) {
-            ApplySettingsPageStateUpdate(refresh_request);
-        } else {
-            ApplySettingsPageStateUpdate(display_service::RefreshMode::kPartial);
-        }
+        ApplySettingsPageStateUpdate(refresh_request);
     }
 }
 
@@ -134,15 +125,10 @@ void ApplyWifiFocusUpdate(const page_actions::FocusUpdateOutcome& outcome)
         footer_runtime::SetProjectionState(wifi_page_runtime::BuildFooterProjectionState());
     }
     if (outcome.apply_page_state) {
-        const display_service::RefreshRequest refresh_request = outcome.use_partial_region
-                                                                    ? display_service::RefreshRequest{
-                                                                          .refresh_mode = display_service::RefreshMode::kPartial,
-                                                                          .scope = display_service::RefreshScope::kRegion,
-                                                                          .dirty_rect = outcome.dirty_rect,
-                                                                      }
-                                                                    : display_service::RefreshRequest{
-                                                                          .refresh_mode = display_service::RefreshMode::kPartial,
-                                                                      };
+        const display_service::RefreshRequest refresh_request = {
+            .refresh_mode = display_service::RefreshMode::kPartial,
+            .scope = display_service::RefreshScope::kRegion,
+        };
         if (outcome.sync_footer_projection) {
             (void)ui_refresh_runtime::Schedule(ui_refresh_runtime::SurfaceKey::kWifiPage,
                                                &ApplyWifiPageAndFooterDisplayState,
@@ -150,11 +136,7 @@ void ApplyWifiFocusUpdate(const page_actions::FocusUpdateOutcome& outcome)
             return;
         }
 
-        if (outcome.use_partial_region) {
-            ApplyWifiPageStateUpdate(refresh_request);
-        } else {
-            ApplyWifiPageStateUpdate(display_service::RefreshMode::kPartial);
-        }
+        ApplyWifiPageStateUpdate(refresh_request);
     }
 }
 
@@ -289,8 +271,6 @@ FocusMoveResult ApplySettingsMoveResult(const page_actions::FocusMoveOutcome& ou
         .handled = outcome.handled,
         .apply_page_state = outcome.apply_page_state,
         .sync_footer_projection = outcome.sync_footer_projection,
-        .use_partial_region = outcome.use_partial_region,
-        .dirty_rect = outcome.dirty_rect,
     });
     return result;
 }
@@ -308,8 +288,6 @@ FocusMoveResult ApplyWifiMoveResult(const page_actions::FocusMoveOutcome& outcom
         .handled = outcome.handled,
         .apply_page_state = outcome.apply_page_state,
         .sync_footer_projection = outcome.sync_footer_projection,
-        .use_partial_region = outcome.use_partial_region,
-        .dirty_rect = outcome.dirty_rect,
     });
     return result;
 }

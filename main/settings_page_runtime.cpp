@@ -189,9 +189,7 @@ page_actions::FocusUpdateOutcome FocusTouchTargetImpl(
     result.handled = true;
     result.apply_page_state = true;
     result.sync_footer_projection =
-        FooterProjectionChangedForFocusIndexes(old_focus_index, new_focus_index);
-    result.use_partial_region = true;
-    return result;
+        FooterProjectionChangedForFocusIndexes(old_focus_index, new_focus_index);    return result;
 }
 
 settings_page_interactions::ActivateResult ActivateTouchTargetImpl(
@@ -261,9 +259,7 @@ page_actions::FocusMoveOutcome MoveFocus(int delta)
     }
 
     result.sync_footer_projection =
-        FooterProjectionChangedForFocusIndexes(old_focus_index, new_focus_index);
-    result.use_partial_region = true;
-    return result;
+        FooterProjectionChangedForFocusIndexes(old_focus_index, new_focus_index);    return result;
 }
 
 settings_page_interactions::ActivateResult ActivateFocusedItem()
@@ -309,9 +305,7 @@ page_actions::FocusUpdateOutcome FocusFooterItem(footer_runtime::FooterFocusItem
     result.handled = true;
     result.apply_page_state = true;
     result.sync_footer_projection =
-        FooterProjectionChangedForFocusIndexes(old_focus_index, new_focus_index);
-    result.use_partial_region = true;
-    return result;
+        FooterProjectionChangedForFocusIndexes(old_focus_index, new_focus_index);    return result;
 }
 
 void ResetFocus()

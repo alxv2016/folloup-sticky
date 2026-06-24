@@ -186,52 +186,6 @@ void EpaperPanel::CopyFramebufferToPrevious()
     }
 }
 
-void EpaperPanel::CopyFramebufferRegionToPrevious(uint16_t x_start, uint16_t y_start,
-                                                  uint16_t x_end, uint16_t y_end)
-{
-    if (framebuffer_ == nullptr || previous_framebuffer_ == nullptr) {
-        return;
-    }
-
-    const size_t mono_stride = static_cast<size_t>(width_) / 8U;
-    const size_t row_bytes = static_cast<size_t>(x_end - x_start) / 8U;
-    for (uint16_t row = y_start; row < y_end; ++row) {
-        const size_t row_offset = static_cast<size_t>(row) * mono_stride + (x_start / 8U);
-        memcpy(previous_framebuffer_ + row_offset, framebuffer_ + row_offset, row_bytes);
-    }
-}
-
-esp_err_t EpaperPanel::WriteRegionBytes(const uint8_t* data, uint16_t x_start, uint16_t y_start,
-                                        uint16_t x_end, uint16_t y_end)
-{
-    if (data == nullptr) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    if (x_start >= x_end || y_start >= y_end) {
-        return ESP_OK;
-    }
-
-    const size_t mono_stride = static_cast<size_t>(width_) / 8U;
-    const int row_bytes = static_cast<int>((x_end - x_start) / 8U);
-    const size_t byte_x = x_start / 8U;
-    if (row_bytes <= 0) {
-        return ESP_OK;
-    }
-
-    SetDc(1);
-    SetCs(0);
-    esp_err_t err = ESP_OK;
-    for (uint16_t row = y_start; row < y_end; ++row) {
-        const uint8_t* row_data = data + static_cast<size_t>(row) * mono_stride + byte_x;
-        err = TransmitBytes(row_data, row_bytes);
-        if (err != ESP_OK) {
-            break;
-        }
-    }
-    SetCs(1);
-    return err;
-}
-
 esp_err_t EpaperPanel::RefreshFull()
 {
     return RefreshFullBase();
@@ -251,24 +205,8 @@ esp_err_t EpaperPanel::RefreshFullBase()
     return ESP_OK;
 }
 
-esp_err_t EpaperPanel::RefreshPartialRegion(uint16_t raw_x_start, uint16_t raw_y_start,
-                                            uint16_t raw_x_end, uint16_t raw_y_end)
+esp_err_t EpaperPanel::RefreshPartialFullScreen()
 {
-    raw_x_start = std::min<uint16_t>(raw_x_start, static_cast<uint16_t>(width_));
-    raw_x_end = std::min<uint16_t>(raw_x_end, static_cast<uint16_t>(width_));
-    raw_y_start = std::min<uint16_t>(raw_y_start, static_cast<uint16_t>(height_));
-    raw_y_end = std::min<uint16_t>(raw_y_end, static_cast<uint16_t>(height_));
-    if (raw_x_start >= raw_x_end || raw_y_start >= raw_y_end) {
-        return ESP_OK;
-    }
-
-    raw_x_start &= static_cast<uint16_t>(~0x07U);
-    raw_x_end = static_cast<uint16_t>((raw_x_end + 7U) & ~0x07U);
-    raw_x_end = std::min<uint16_t>(raw_x_end, static_cast<uint16_t>(width_));
-    if (raw_x_start >= raw_x_end) {
-        return ESP_OK;
-    }
-
     if (!CanPartialRefresh(kMaxPartialRefreshesBeforeFull)) {
         return RefreshFullBase();
     }
@@ -276,51 +214,42 @@ esp_err_t EpaperPanel::RefreshPartialRegion(uint16_t raw_x_start, uint16_t raw_y
         return ESP_ERR_INVALID_STATE;
     }
 
-    const uint16_t window_x_start = raw_x_start;
-    const uint16_t window_x_end = static_cast<uint16_t>(raw_x_end - 1U);
-    // The full-frame path streams framebuffer row r into RAM gate line (height-1-r):
-    // data-entry mode 0x01 decrements Y from a top-corner cursor (SetCursor at
-    // height-1). The region window MUST use that same gate-space mapping. Deriving
-    // the Y window straight from raw_y (framebuffer-row space) instead mirrors the
-    // tile about the panel's vertical center — harmless only for a vertically
-    // centered rect (raw_y_start + raw_y_end == height, e.g. a full-screen partial),
-    // but it flips every off-center focus rect to the opposite side. Convert the
-    // framebuffer-row rect [raw_y_start, raw_y_end) into gate lines: row raw_y_start
-    // maps to the high gate (cursor), counting down to row raw_y_end-1.
-    const uint16_t window_y_start = static_cast<uint16_t>(height_ - 1 - raw_y_start);
-    const uint16_t window_y_end = static_cast<uint16_t>(height_ - raw_y_end);
-    const uint16_t cursor_x = raw_x_start;
-    const uint16_t cursor_y = window_y_start;
+    // Whole-screen partial. Windowed/region partial is NOT possible on this SSD1677: the
+    // activation drives the WHOLE panel from 0x24, the RAM window registers only scope
+    // writes (not the drive), and nothing limits the drive to a window — a windowed 0x24
+    // write leaves previously-touched regions outside the window re-energizing stale
+    // content. So both RAM planes are rewritten in full every cycle. The partial waveform
+    // still physically moves only the pixels where 0x24 != 0x26, so the update shows just
+    // the changed element with no full-screen flash. (RefreshChangedRegion does the pixel
+    // diff and skips this call entirely when nothing changed.)
+    //
+    // RAM addressing matches DisplayFullBase: data-entry mode 0x01 decrements Y from a
+    // top-corner cursor, so framebuffer row r lands on gate line (height-1-r). The window
+    // spans the whole panel: X [0, width-1], Y [height-1, 0], cursor at (0, height-1).
+    const uint16_t window_x_end = static_cast<uint16_t>(width_ - 1);
+    const uint16_t window_y_start = static_cast<uint16_t>(height_ - 1);
 
     ResetMetrics();
     ESP_RETURN_ON_ERROR(InitPartial(), kTag, "partial init failed");
 
-    // OLD (0x26): rewrite the FULL glass shadow every cycle. This panel drives the
-    // WHOLE panel on every activation (the window only scopes writes, not the drive)
-    // and retains RAM across refreshes, so OLD must equal the glass everywhere or
-    // untouched regions get re-energized. previous_framebuffer_ tracks the glass.
-    // InitPartial left the full-panel window/cursor set, mirroring DisplayFullBase.
+    // OLD (0x26): rewrite the full glass shadow so untouched regions are not re-energized.
+    // previous_framebuffer_ tracks the glass. InitPartial left the full-panel window/cursor
+    // set, mirroring DisplayFullBase.
     ESP_RETURN_ON_ERROR(SendCommand(0x26), kTag, "write partial previous image command failed");
     ESP_RETURN_ON_ERROR(WriteBytes(previous_framebuffer_, config_.buffer_len),
                         kTag, "write partial previous image failed");
 
-    // NEW (0x24): write only the changed box. 0x24 already equals the glass outside the
-    // box — it persists across refreshes and the pixel-diff caller has written every
-    // change since the last full refresh into it — so with OLD just re-asserted to the
-    // glass, 0x24 == 0x26 everywhere except the box, and the activation drives the box
-    // alone. (This is why it must be fed by the actual pixel delta, not a hand-rect:
-    // any change missed here would leave 0x24 stale and ghost on the next full-panel
-    // drive.)
-    ESP_RETURN_ON_ERROR(SetWindow(window_x_start, window_y_start, window_x_end, window_y_end),
-                        kTag, "partial region RAM window failed");
-    ESP_RETURN_ON_ERROR(SetCursor(cursor_x, cursor_y), kTag, "partial region RAM cursor failed");
+    // NEW (0x24): rewrite the full frame. The 0x26 write above advanced the RAM address
+    // counter, so reset the full-panel window/cursor before streaming 0x24.
+    ESP_RETURN_ON_ERROR(SetWindow(0, window_y_start, window_x_end, 0),
+                        kTag, "partial RAM window failed");
+    ESP_RETURN_ON_ERROR(SetCursor(0, window_y_start), kTag, "partial RAM cursor failed");
     ESP_RETURN_ON_ERROR(SendCommand(0x24), kTag, "write partial current image command failed");
-    ESP_RETURN_ON_ERROR(WriteRegionBytes(framebuffer_, raw_x_start, raw_y_start, raw_x_end,
-                                         raw_y_end),
+    ESP_RETURN_ON_ERROR(WriteBytes(framebuffer_, config_.buffer_len),
                         kTag, "write partial current image failed");
     ESP_RETURN_ON_ERROR(TurnOnDisplayPart(), kTag, "partial display update failed");
 
-    CopyFramebufferRegionToPrevious(raw_x_start, raw_y_start, raw_x_end, raw_y_end);
+    CopyFramebufferToPrevious();
     wake_refresh_pending_ = false;
     ++partial_refresh_count_;
     state_ = EpaperPanelState::kActive;
@@ -346,12 +275,6 @@ esp_err_t EpaperPanel::RefreshChangedRegion()
         return ESP_OK;
     }
     return RefreshPartialFullScreen();
-}
-
-esp_err_t EpaperPanel::RefreshPartialFullScreen()
-{
-    return RefreshPartialRegion(0, 0, static_cast<uint16_t>(width_),
-                                static_cast<uint16_t>(height_));
 }
 
 esp_err_t EpaperPanel::Sleep()

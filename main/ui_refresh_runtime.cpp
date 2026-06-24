@@ -71,43 +71,10 @@ const char* SurfaceName(SurfaceKey key)
     }
 }
 
-display_service::RefreshMode MergeRefreshMode(display_service::RefreshMode current,
-                                              display_service::RefreshMode incoming)
-{
-    return current == display_service::RefreshMode::kFull ||
-                   incoming == display_service::RefreshMode::kFull
-               ? display_service::RefreshMode::kFull
-               : display_service::RefreshMode::kPartial;
-}
-
-display_service::RefreshRequest MergeRefreshRequest(
-    const display_service::RefreshRequest& current,
-    const display_service::RefreshRequest& incoming)
-{
-    display_service::RefreshRequest merged = {};
-    merged.refresh_mode = MergeRefreshMode(current.refresh_mode, incoming.refresh_mode);
-    if (merged.refresh_mode == display_service::RefreshMode::kFull ||
-        current.scope == display_service::RefreshScope::kScreen ||
-        incoming.scope == display_service::RefreshScope::kScreen) {
-        merged.scope = display_service::RefreshScope::kScreen;
-        merged.dirty_rect = {};
-        return merged;
-    }
-
-    merged.scope = display_service::RefreshScope::kRegion;
-    merged.dirty_rect = epaper_ui::UnionRect(current.dirty_rect, incoming.dirty_rect);
-    return merged;
-}
-
-display_service::OverlayRefreshPolicy MergeOverlayRefreshPolicy(
-    display_service::OverlayRefreshPolicy current,
-    display_service::OverlayRefreshPolicy incoming)
-{
-    return current == display_service::OverlayRefreshPolicy::kRebuildUnderlay ||
-                   incoming == display_service::OverlayRefreshPolicy::kRebuildUnderlay
-               ? display_service::OverlayRefreshPolicy::kRebuildUnderlay
-               : display_service::OverlayRefreshPolicy::kReuseUnderlaySnapshot;
-}
+// Refresh/overlay coalescing reuses the shared display_service::Merge* helpers so the
+// keyed UI-refresh queue and the in-task command queue merge identically.
+using display_service::MergeOverlayRefreshPolicy;
+using display_service::MergeRefreshRequest;
 
 void UiRefreshTask(void*)
 {

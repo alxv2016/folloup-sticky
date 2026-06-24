@@ -35,13 +35,19 @@ enum class RefreshScope {
 struct RefreshRequest {
     RefreshMode refresh_mode = RefreshMode::kPartial;
     RefreshScope scope = RefreshScope::kScreen;
-    epaper_ui::UiRect dirty_rect = {};
 };
 
 enum class OverlayRefreshPolicy {
     kRebuildUnderlay,
     kReuseUnderlaySnapshot,
 };
+
+// Coalescing helpers, shared by the in-task command queue (display_service) and the
+// keyed UI-refresh queue (ui_refresh_runtime) so both merge identically.
+RefreshMode MergeRefreshMode(RefreshMode lhs, RefreshMode rhs);
+RefreshRequest MergeRefreshRequest(const RefreshRequest& lhs, const RefreshRequest& rhs);
+OverlayRefreshPolicy MergeOverlayRefreshPolicy(OverlayRefreshPolicy lhs,
+                                               OverlayRefreshPolicy rhs);
 
 esp_err_t Init();
 bool IsInitialized();

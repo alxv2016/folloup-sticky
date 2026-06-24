@@ -575,36 +575,6 @@ bool HasVisibleOverlay(const RenderSnapshot& snapshot)
            snapshot.toast.visible;
 }
 
-RefreshMode MergeRefreshMode(RefreshMode lhs, RefreshMode rhs)
-{
-    return lhs == RefreshMode::kFull || rhs == RefreshMode::kFull ? RefreshMode::kFull
-                                                                  : RefreshMode::kPartial;
-}
-
-RefreshRequest MergeRefreshRequest(const RefreshRequest& lhs, const RefreshRequest& rhs)
-{
-    RefreshRequest merged = {};
-    merged.refresh_mode = MergeRefreshMode(lhs.refresh_mode, rhs.refresh_mode);
-    if (merged.refresh_mode == RefreshMode::kFull || lhs.scope == RefreshScope::kScreen ||
-        rhs.scope == RefreshScope::kScreen) {
-        merged.scope = RefreshScope::kScreen;
-        merged.dirty_rect = {};
-        return merged;
-    }
-
-    merged.scope = RefreshScope::kRegion;
-    merged.dirty_rect = epaper_ui::UnionRect(lhs.dirty_rect, rhs.dirty_rect);
-    return merged;
-}
-
-OverlayRefreshPolicy MergeOverlayRefreshPolicy(OverlayRefreshPolicy lhs, OverlayRefreshPolicy rhs)
-{
-    return lhs == OverlayRefreshPolicy::kRebuildUnderlay ||
-                   rhs == OverlayRefreshPolicy::kRebuildUnderlay
-               ? OverlayRefreshPolicy::kRebuildUnderlay
-               : OverlayRefreshPolicy::kReuseUnderlaySnapshot;
-}
-
 esp_err_t EnqueueDisplayCommand(const DisplayCommand& incoming)
 {
     if (s_command_queue == nullptr) {
@@ -626,21 +596,25 @@ esp_err_t EnqueueDisplayCommand(const DisplayCommand& incoming)
                    pending.screen == incoming.screen) {
             merged.overlay_refresh_policy = MergeOverlayRefreshPolicy(
                 pending.overlay_refresh_policy, incoming.overlay_refresh_policy);
+        } else if (pending.type == DisplayCommandType::kSetScreen &&
+                   incoming.type == DisplayCommandType::kSetScreen &&
+                   pending.screen == incoming.screen) {
+            // Same-screen set: keep the stronger refresh so a pending full refresh
+            // (e.g. de-ghosting / base reseed) is not silently downgraded to partial.
+            merged.refresh_request.refresh_mode = MergeRefreshMode(
+                pending.refresh_request.refresh_mode, incoming.refresh_request.refresh_mode);
         }
     }
 
     return xQueueOverwrite(s_command_queue, &merged) == pdPASS ? ESP_OK : ESP_FAIL;
 }
 
-esp_err_t RefreshCurrentScreenRegionLocked(const epaper_ui::UiRect& dirty_rect)
+esp_err_t RefreshCurrentScreenRegionLocked()
 {
-    // The caller's dirty_rect is only a hint that *something* changed. The region
-    // actually driven is derived from the rendered pixel delta inside the driver
-    // (EpaperPanel::RefreshChangedRegion), so a partial refresh can never strand a
-    // changed pixel that the caller forgot to include — it just renders the whole
-    // frame and drives whatever differs from the glass.
-    (void)dirty_rect;
-
+    // Renders the whole frame and lets the driver drive only the rendered pixel delta
+    // (EpaperPanel::RefreshChangedRegion), skipping entirely when nothing changed. No
+    // caller-supplied region is needed — the delta is derived from the framebuffer vs the
+    // glass shadow, so a partial refresh can never strand a changed pixel.
     const RenderSnapshot snapshot = CaptureRenderSnapshot();
     if (HasVisibleOverlay(snapshot)) {
         return RefreshCurrentScreenLocked(false);
@@ -808,7 +782,7 @@ void DisplayTask(void*)
         } else {
             err = command.refresh_request.scope == RefreshScope::kRegion &&
                           command.refresh_request.refresh_mode == RefreshMode::kPartial
-                      ? RefreshCurrentScreenRegionLocked(command.refresh_request.dirty_rect)
+                      ? RefreshCurrentScreenRegionLocked()
                       : RefreshCurrentScreenLocked(
                             command.refresh_request.refresh_mode == RefreshMode::kFull);
         }
@@ -849,6 +823,34 @@ esp_err_t StartDisplayTask()
 }
 
 }  // namespace
+
+RefreshMode MergeRefreshMode(RefreshMode lhs, RefreshMode rhs)
+{
+    return lhs == RefreshMode::kFull || rhs == RefreshMode::kFull ? RefreshMode::kFull
+                                                                  : RefreshMode::kPartial;
+}
+
+RefreshRequest MergeRefreshRequest(const RefreshRequest& lhs, const RefreshRequest& rhs)
+{
+    RefreshRequest merged = {};
+    merged.refresh_mode = MergeRefreshMode(lhs.refresh_mode, rhs.refresh_mode);
+    // kScreen (always refresh) dominates kRegion (skip when unchanged); a full refresh
+    // is always whole-screen.
+    merged.scope = merged.refresh_mode == RefreshMode::kFull ||
+                           lhs.scope == RefreshScope::kScreen ||
+                           rhs.scope == RefreshScope::kScreen
+                       ? RefreshScope::kScreen
+                       : RefreshScope::kRegion;
+    return merged;
+}
+
+OverlayRefreshPolicy MergeOverlayRefreshPolicy(OverlayRefreshPolicy lhs, OverlayRefreshPolicy rhs)
+{
+    return lhs == OverlayRefreshPolicy::kRebuildUnderlay ||
+                   rhs == OverlayRefreshPolicy::kRebuildUnderlay
+               ? OverlayRefreshPolicy::kRebuildUnderlay
+               : OverlayRefreshPolicy::kReuseUnderlaySnapshot;
+}
 
 esp_err_t Init()
 {
@@ -1067,7 +1069,7 @@ esp_err_t RefreshCurrentScreen(const RefreshRequest& refresh_request)
 
     if (refresh_request.scope == RefreshScope::kRegion &&
         refresh_request.refresh_mode == RefreshMode::kPartial) {
-        return RefreshCurrentScreenRegionLocked(refresh_request.dirty_rect);
+        return RefreshCurrentScreenRegionLocked();
     }
 
     return RefreshCurrentScreenLocked(refresh_request.refresh_mode == RefreshMode::kFull);
