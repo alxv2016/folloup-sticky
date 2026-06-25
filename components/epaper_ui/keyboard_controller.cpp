@@ -133,6 +133,12 @@ KeyboardActionResult KeyboardController::ActivateFocusedKey(KeyboardState& state
             ClampSelection(state);
             result.state_changed = true;
             return result;
+        case KeyboardKeyKind::kModeMore:
+            state.shift_locked = false;
+            state.layout = KeyboardLayoutKind::kSymbols2;
+            ClampSelection(state);
+            result.state_changed = true;
+            return result;
         case KeyboardKeyKind::kDismiss:
             result.intent = KeyboardIntent::kDismiss;
             return result;

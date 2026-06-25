@@ -358,7 +358,7 @@ void WifiPageCoordinator::InitializePasswordInput()
 {
     password_input_state_.label_text = kPasswordLabel;
     password_input_state_.placeholder_text = kPasswordPlaceholder;
-    password_input_state_.submit_style = epaper_ui::KeyboardInputSubmitStyle::kJoin;
+    password_input_state_.submit_style = epaper_ui::KeyboardInputSubmitStyle::kDone;
 }
 
 int WifiPageCoordinator::NetworkCount() const

@@ -26,7 +26,7 @@ struct KeyboardStyle {
     int screen_origin_y = 0;
     int screen_height = 0;
     int vertical_padding = design::spacing::k16;
-    int horizontal_padding = design::spacing::k16;
+    int horizontal_padding = design::spacing::k14;
     int row_gap = design::spacing::k2;
     int key_gap = design::spacing::k2;
     int field_gap = design::spacing::k16;

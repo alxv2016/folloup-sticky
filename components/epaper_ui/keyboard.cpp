@@ -40,8 +40,11 @@ int RowsBlockHeight(const KeyboardState& state, const KeyboardStyle& style)
 
 std::string BuildDisplayText(const KeyboardInputState& input)
 {
-    std::string display =
-        input.password_mode ? std::string(input.value_text.size(), '*') : input.value_text;
+    // The keyboard modal always shows the typed text in full, even for password fields,
+    // so the user can verify what they entered while the on-screen keyboard is open.
+    // (The page-level password field keeps its own masking/reveal behavior; password_mode
+    // still round-trips through ApplyKeyboardInputToPasswordInput.)
+    std::string display = input.value_text;
     if (!input.show_cursor) {
         return display;
     }
@@ -245,20 +248,26 @@ UiRect KeyboardKeyBounds(int portrait_width,
                        input.height + field_gap;
     const int y = rows_y + row * (ClampPositive(style.key_height) + ClampPositive(style.row_gap));
 
-    const int total_units = TotalWidthUnits(row_spec);
+    // Fixed grid: every row is laid out on the same column scale, derived from the widest
+    // row in the layout, so a 1-unit key (every letter) is identical in every row instead
+    // of being stretched to fill its own row. Edges are distributed proportionally (not a
+    // floored integer column width) so the configured horizontal padding is honored
+    // exactly and no width is wasted to rounding; rows narrower than the widest are
+    // centered.
+    int reference_units = 1;
+    for (size_t r = 0; r < layout.row_count; ++r) {
+        reference_units = std::max(reference_units, TotalWidthUnits(layout.rows[r]));
+    }
     const int key_gap = ClampPositive(style.key_gap);
-    const int total_gap =
-        std::max<int>(0, static_cast<int>(row_spec.key_count) - 1) * key_gap;
-    const int available_width = std::max(0, content_width - total_gap);
+    const int row_units = TotalWidthUnits(row_spec);
+    const int row_px = (row_units * content_width) / reference_units;
+    const int row_x = content_x + std::max(0, (content_width - row_px) / 2);
     const int start_units = WidthUnitsBefore(row_spec, column);
-    const int end_units = start_units + std::max(1, row_spec.keys[column].width_units);
-    const int x = content_x +
-                  (total_units > 0 ? (start_units * available_width) / total_units : 0) +
-                  column * key_gap;
-    const int width =
-        std::max(1,
-                 (total_units > 0 ? (end_units * available_width) / total_units : available_width) -
-                     (total_units > 0 ? (start_units * available_width) / total_units : 0));
+    const int key_units = std::max(1, row_spec.keys[column].width_units);
+    const int key_x0 = row_units > 0 ? (start_units * row_px) / row_units : 0;
+    const int key_x1 = row_units > 0 ? ((start_units + key_units) * row_px) / row_units : row_px;
+    const int x = row_x + key_x0;
+    const int width = std::max(1, key_x1 - key_x0 - key_gap);
     return {x, y, width, ClampPositive(style.key_height)};
 }
 
@@ -274,7 +283,15 @@ bool HitTestKeyboardKey(int portrait_width,
         *flat_key_index = -1;
     }
 
+    const UiRect panel = KeyboardPanelBounds(portrait_width, portrait_height, state, style);
+    if (panel.IsEmpty()) {
+        return false;
+    }
+
     const KeyboardLayoutSpec& layout = GetKeyboardLayout(state.layout);
+    int nearest_index = -1;
+    long nearest_dist = -1;
+    int rows_top = -1;
     for (size_t row = 0; row < layout.row_count; ++row) {
         for (size_t column = 0; column < layout.rows[row].key_count; ++column) {
             const UiRect bounds = KeyboardKeyBounds(portrait_width,
@@ -283,14 +300,47 @@ bool HitTestKeyboardKey(int portrait_width,
                                                     style,
                                                     static_cast<int>(row),
                                                     static_cast<int>(column));
-            if (!bounds.IsEmpty() && bounds.Contains(x, y)) {
+            if (bounds.IsEmpty()) {
+                continue;
+            }
+            if (rows_top < 0 || bounds.y < rows_top) {
+                rows_top = bounds.y;
+            }
+            const int flat_index =
+                KeyboardFlatIndex(state.layout, static_cast<int>(row), static_cast<int>(column));
+            if (bounds.Contains(x, y)) {
                 if (flat_key_index != nullptr) {
-                    *flat_key_index = KeyboardFlatIndex(
-                        state.layout, static_cast<int>(row), static_cast<int>(column));
+                    *flat_key_index = flat_index;
                 }
                 return true;
             }
+            // Squared distance from the tap to the key rectangle (0 if inside, handled
+            // above), for the nearest-key snap below.
+            const int clamped_x = std::clamp(x, bounds.x, bounds.x + bounds.width);
+            const int clamped_y = std::clamp(y, bounds.y, bounds.y + bounds.height);
+            const long dx = x - clamped_x;
+            const long dy = y - clamped_y;
+            const long dist = dx * dx + dy * dy;
+            if (nearest_dist < 0 || dist < nearest_dist) {
+                nearest_dist = dist;
+                nearest_index = flat_index;
+            }
         }
+    }
+
+    // No key rectangle contained the tap. Snap to the nearest key, but only when the tap
+    // falls within the rows region of the panel (first row top .. panel bottom, across the
+    // panel width). This removes the dead zones in the inter-key gaps and the panel's
+    // bottom/side padding: the bottom row in particular has no row beneath it, so a
+    // slightly-low tap on the number/Hide/space/Join keys would otherwise miss entirely
+    // and feel unresponsive. Taps above the first row (title/input field area) still fall
+    // through so the input field keeps its own handling.
+    if (nearest_index >= 0 && rows_top >= 0 && y >= rows_top && y <= panel.y + panel.height &&
+        x >= panel.x && x <= panel.x + panel.width) {
+        if (flat_key_index != nullptr) {
+            *flat_key_index = nearest_index;
+        }
+        return true;
     }
     return false;
 }

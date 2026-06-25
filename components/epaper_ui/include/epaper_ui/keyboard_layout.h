@@ -13,6 +13,7 @@ enum class KeyboardLayoutKind : uint8_t {
     kLettersLower = 0,
     kLettersUpper,
     kSymbols,
+    kSymbols2,
     kNumbers,
 };
 
@@ -24,6 +25,7 @@ enum class KeyboardKeyKind : uint8_t {
     kEnter,
     kMode123,
     kModeAbc,
+    kModeMore,
     kDismiss,
 };
 
@@ -31,7 +33,10 @@ struct KeyboardKeySpec {
     KeyboardKeyKind kind = KeyboardKeyKind::kCharacter;
     std::string_view label = {};
     char output = '\0';
-    int width_units = 1;
+    // Width in grid columns. The grid uses half-letter granularity: a single character key
+    // is 2 columns, so wider control keys can be 1.5x a letter (3 columns) without
+    // overflowing the panel. Letters end up square (44x44) on the 480px panel.
+    int width_units = 2;
 };
 
 struct KeyboardRowSpec {
