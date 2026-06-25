@@ -5,6 +5,8 @@
 #include "settings_page_interactions.h"
 #include "settings_page_runtime.h"
 #include "storage_service.h"
+#include "time_page_interactions.h"
+#include "time_page_runtime.h"
 #include "ui_refresh_runtime.h"
 #include "wifi_page_interactions.h"
 #include "wifi_page_runtime.h"
@@ -90,6 +92,31 @@ esp_err_t ApplyWifiPageAndFooterDisplayState()
     return page_err != ESP_OK ? page_err : footer_err;
 }
 
+void ApplyTimePageStateUpdate(display_service::RefreshMode refresh_mode)
+{
+    (void)time_page_runtime::UpdateDisplayStateAndRequestRefresh(refresh_mode);
+}
+
+void ApplyTimePageStateUpdate(const display_service::RefreshRequest& refresh_request)
+{
+    (void)time_page_runtime::UpdateDisplayStateAndRequestRefresh(refresh_request);
+}
+
+esp_err_t ApplyTimePageAndFooterDisplayState()
+{
+    const esp_err_t page_err = time_page_runtime::UpdateDisplayState();
+    if (page_err != ESP_OK && page_err != ESP_ERR_INVALID_STATE) {
+        return page_err;
+    }
+
+    const esp_err_t footer_err = footer_runtime::UpdateDisplayState();
+    if (footer_err != ESP_OK && footer_err != ESP_ERR_INVALID_STATE) {
+        return footer_err;
+    }
+
+    return page_err != ESP_OK ? page_err : footer_err;
+}
+
 void ApplySettingsFocusUpdate(const page_actions::FocusUpdateOutcome& outcome)
 {
     if (!outcome.handled) {
@@ -137,6 +164,31 @@ void ApplyWifiFocusUpdate(const page_actions::FocusUpdateOutcome& outcome)
         }
 
         ApplyWifiPageStateUpdate(refresh_request);
+    }
+}
+
+void ApplyTimeFocusUpdate(const page_actions::FocusUpdateOutcome& outcome)
+{
+    if (!outcome.handled) {
+        return;
+    }
+
+    if (outcome.sync_footer_projection) {
+        footer_runtime::SetProjectionState(time_page_runtime::BuildFooterProjectionState());
+    }
+    if (outcome.apply_page_state) {
+        const display_service::RefreshRequest refresh_request = {
+            .refresh_mode = display_service::RefreshMode::kPartial,
+            .scope = display_service::RefreshScope::kRegion,
+        };
+        if (outcome.sync_footer_projection) {
+            (void)ui_refresh_runtime::Schedule(ui_refresh_runtime::SurfaceKey::kTimePage,
+                                               &ApplyTimePageAndFooterDisplayState,
+                                               refresh_request);
+            return;
+        }
+
+        ApplyTimePageStateUpdate(refresh_request);
     }
 }
 
@@ -258,6 +310,67 @@ ButtonResult ApplyWifiSecondaryActivateResult(
     return result;
 }
 
+ButtonResult ApplyTimeActivateResult(const time_page_interactions::ActivateResult& activation)
+{
+    ButtonResult result = {};
+    if (!activation.handled) {
+        return result;
+    }
+
+    result.handled = true;
+    result.interaction_result = MakeConsumedResult(activation.play_activate_cue);
+
+    time_page_interactions::ActivateCallbacks callbacks = {};
+    callbacks.show_home = [&result]() {
+        result.footer_item = footer_runtime::FooterFocusItem::kHome;
+    };
+    callbacks.show_settings = [&result]() {
+        result.footer_item = footer_runtime::FooterFocusItem::kSettings;
+    };
+    callbacks.show_wifi = [&result]() {
+        result.footer_item = footer_runtime::FooterFocusItem::kWifi;
+    };
+    callbacks.show_timezone_modal = []() {
+        (void)time_page_runtime::ShowTimezoneModal();
+    };
+    callbacks.edit_hour = []() {
+        (void)time_page_runtime::ShowFieldKeyboard(
+            page_navigation::NavigationItemRole::kTimePageHour);
+    };
+    callbacks.edit_minute = []() {
+        (void)time_page_runtime::ShowFieldKeyboard(
+            page_navigation::NavigationItemRole::kTimePageMinute);
+    };
+    callbacks.edit_month = []() {
+        (void)time_page_runtime::ShowFieldKeyboard(
+            page_navigation::NavigationItemRole::kTimePageMonth);
+    };
+    callbacks.edit_day = []() {
+        (void)time_page_runtime::ShowFieldKeyboard(
+            page_navigation::NavigationItemRole::kTimePageDay);
+    };
+    callbacks.edit_year = []() {
+        (void)time_page_runtime::ShowFieldKeyboard(
+            page_navigation::NavigationItemRole::kTimePageYear);
+    };
+    callbacks.toggle_meridiem = []() {
+        time_page_runtime::ToggleMeridiem();
+    };
+    callbacks.save = []() {
+        (void)time_page_runtime::Save();
+    };
+    time_page_interactions::ApplyPrimaryActivateResult(activation, callbacks);
+    if (result.footer_item != footer_runtime::FooterFocusItem::kNone) {
+        result.interaction_result.play_feedback = false;
+        result.interaction_result.feedback_cue = app_interaction::FeedbackCue::kNone;
+    }
+
+    if (activation.apply_page_state) {
+        ApplyTimePageStateUpdate(display_service::RefreshMode::kPartial);
+    }
+    return result;
+}
+
 FocusMoveResult ApplySettingsMoveResult(const page_actions::FocusMoveOutcome& outcome)
 {
     FocusMoveResult result = {};
@@ -285,6 +398,23 @@ FocusMoveResult ApplyWifiMoveResult(const page_actions::FocusMoveOutcome& outcom
     result.handled = true;
     result.interaction_result = MakeConsumedResult(outcome.play_navigation_cue);
     ApplyWifiFocusUpdate({
+        .handled = outcome.handled,
+        .apply_page_state = outcome.apply_page_state,
+        .sync_footer_projection = outcome.sync_footer_projection,
+    });
+    return result;
+}
+
+FocusMoveResult ApplyTimeMoveResult(const page_actions::FocusMoveOutcome& outcome)
+{
+    FocusMoveResult result = {};
+    if (!outcome.handled) {
+        return result;
+    }
+
+    result.handled = true;
+    result.interaction_result = MakeConsumedResult(outcome.play_navigation_cue);
+    ApplyTimeFocusUpdate({
         .handled = outcome.handled,
         .apply_page_state = outcome.apply_page_state,
         .sync_footer_projection = outcome.sync_footer_projection,
@@ -349,6 +479,34 @@ app_interaction::InputResult ActivateWifiTouchTarget(
     return result.interaction_result;
 }
 
+bool ResolveTimeTouchTarget(int x, int y, app_interaction::InteractiveTarget* target, void*)
+{
+    return time_page_runtime::ResolveTouchTarget(x, y, target);
+}
+
+bool FocusTimeTouchTarget(const app_interaction::InteractiveTarget& target, void*)
+{
+    const page_actions::FocusUpdateOutcome outcome = time_page_runtime::FocusTouchTarget(target);
+    ApplyTimeFocusUpdate(outcome);
+    return outcome.handled;
+}
+
+bool FocusTimeFooterTarget(const app_interaction::InteractiveTarget& target)
+{
+    const page_actions::FocusUpdateOutcome outcome =
+        time_page_runtime::FocusFooterItem(FooterItemFromTargetIndex(target.primary_index));
+    ApplyTimeFocusUpdate(outcome);
+    return outcome.handled;
+}
+
+app_interaction::InputResult ActivateTimeTouchTarget(
+    const app_interaction::InteractiveTarget& target, void*)
+{
+    const ButtonResult result =
+        ApplyTimeActivateResult(time_page_runtime::ActivateTouchTarget(target));
+    return result.interaction_result;
+}
+
 page_interaction_runtime::TouchProvider TouchProviderForScreen(display_service::ScreenId screen)
 {
     switch (screen) {
@@ -364,6 +522,13 @@ page_interaction_runtime::TouchProvider TouchProviderForScreen(display_service::
                 .resolve_touch_target = &ResolveWifiTouchTarget,
                 .focus_touch_target = &FocusWifiTouchTarget,
                 .activate_touch_target = &ActivateWifiTouchTarget,
+                .context = nullptr,
+            };
+        case display_service::ScreenId::kTime:
+            return {
+                .resolve_touch_target = &ResolveTimeTouchTarget,
+                .focus_touch_target = &FocusTimeTouchTarget,
+                .activate_touch_target = &ActivateTimeTouchTarget,
                 .context = nullptr,
             };
         case display_service::ScreenId::kHome:
@@ -429,6 +594,30 @@ ButtonResult HandleWifiButtonEvent(const button_service::ButtonEventInfo& event)
     }
 }
 
+ButtonResult HandleTimeButtonEvent(const button_service::ButtonEventInfo& event)
+{
+    ButtonResult result = {};
+    if (event.button != button_service::ButtonId::kPowerOk) {
+        return result;
+    }
+
+    switch (event.event) {
+        case button_service::ButtonEvent::kSingleClick:
+            return ApplyTimeActivateResult(time_page_runtime::ActivateFocusedItem());
+        case button_service::ButtonEvent::kPressDown:
+        case button_service::ButtonEvent::kPressUp:
+        case button_service::ButtonEvent::kPressRepeat:
+        case button_service::ButtonEvent::kLongPressStart:
+        case button_service::ButtonEvent::kLongPressUp:
+            result.handled = true;
+            result.interaction_result.consumed = true;
+            return result;
+        case button_service::ButtonEvent::kDoubleClick:
+        default:
+            return result;
+    }
+}
+
 }  // namespace
 
 void ConfigureTouchProviderForScreen(display_service::ScreenId screen)
@@ -449,6 +638,8 @@ footer_runtime::ProjectionState BuildFooterProjectionForScreen(display_service::
             return settings_page_runtime::BuildFooterProjectionState();
         case display_service::ScreenId::kWifi:
             return wifi_page_runtime::BuildFooterProjectionState();
+        case display_service::ScreenId::kTime:
+            return time_page_runtime::BuildFooterProjectionState();
         case display_service::ScreenId::kHome:
         case display_service::ScreenId::kLockScreen:
         default:
@@ -464,6 +655,9 @@ void ResetFocusForScreen(display_service::ScreenId screen)
             return;
         case display_service::ScreenId::kWifi:
             wifi_page_runtime::ResetFocus();
+            return;
+        case display_service::ScreenId::kTime:
+            time_page_runtime::ResetFocus();
             return;
         case display_service::ScreenId::kHome:
         case display_service::ScreenId::kLockScreen:
@@ -484,6 +678,8 @@ bool FocusFooterTouchTargetForCurrentScreen(const app_interaction::InteractiveTa
             return FocusSettingsFooterTarget(target);
         case display_service::ScreenId::kWifi:
             return FocusWifiFooterTarget(target);
+        case display_service::ScreenId::kTime:
+            return FocusTimeFooterTarget(target);
         case display_service::ScreenId::kHome:
         case display_service::ScreenId::kLockScreen:
         default:
@@ -498,6 +694,8 @@ FocusMoveResult MoveFocusForCurrentScreen(int delta, bool page_jump)
             return ApplySettingsMoveResult(settings_page_runtime::MoveFocus(delta));
         case display_service::ScreenId::kWifi:
             return ApplyWifiMoveResult(wifi_page_runtime::MoveFocus(delta, page_jump));
+        case display_service::ScreenId::kTime:
+            return ApplyTimeMoveResult(time_page_runtime::MoveFocus(delta));
         case display_service::ScreenId::kHome:
         case display_service::ScreenId::kLockScreen:
         default:
@@ -512,6 +710,8 @@ ButtonResult HandleButtonEventForCurrentScreen(const button_service::ButtonEvent
             return HandleSettingsButtonEvent(event);
         case display_service::ScreenId::kWifi:
             return HandleWifiButtonEvent(event);
+        case display_service::ScreenId::kTime:
+            return HandleTimeButtonEvent(event);
         case display_service::ScreenId::kHome:
         case display_service::ScreenId::kLockScreen:
         default:

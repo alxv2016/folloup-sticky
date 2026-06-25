@@ -107,6 +107,8 @@ main/
   settings_page_interactions.cpp
   wifi_page_interactions.h
   wifi_page_interactions.cpp
+  time_page_interactions.h
+  time_page_interactions.cpp
   page_interaction_runtime.h
   page_interaction_runtime.cpp
   ui_refresh_runtime.h
@@ -355,6 +357,42 @@ mode decisions, and sleep/wake transitions. It may consume `epaper_ui`
 renderers, but it should not become the home for product state composition or a
 grab bag of reusable widgets.
 
+### Overlay refresh suppression
+
+All page, status-bar, footer, and overlay repaints flow through
+`ui_refresh_runtime`, a keyed latest-wins worker. Each caller schedules an
+*apply callback* (which pushes fresh state into `display_service`) plus a
+refresh request, keyed by a `SurfaceKey` (`kOverlay`, `kLockScreen`,
+`kStatusBar`, `kFooter`, `kSettingsPage`, `kWifiPage`, `kTimePage`). The worker
+coalesces pending work per surface and issues at most one screen (underlay)
+refresh and one overlay refresh per drain.
+
+**The overlay rule:** while an overlay owns the screen — that is, while
+`overlay_runtime::IsInputCaptured()` is true (keyboard, select/storage/shutdown
+modal, or a closable toast) — the worker *suppresses underlay refreshes*
+(page/status/footer). The apply callbacks still run, so the stored state stays
+current; only the panel rebuild *beneath* the open overlay is skipped. Overlay
+refreshes (the overlay repainting itself) always proceed. When the overlay
+closes, the next underlay refresh resumes and the screen repaints with the
+latest state (the overlay-dismiss path already requests that refresh).
+
+This is a single global policy enforced in one place (`UiRefreshTask`), so it
+applies uniformly to every screen rather than being re-implemented per event
+handler. It exists because rebuilding a page underneath an open keyboard or
+modal — for example on every clock tick while editing the time page — made
+overlays feel laggy and, during rapid overlay navigation, could keep the
+display task busy long enough to starve the idle task and trip the task
+watchdog. Background events (clock ticks, Wi-Fi/scan updates, battery changes)
+therefore keep their contracts in sync without forcing a visible underlay
+rebuild while the user is busy inside an overlay. Auto-dismiss toasts do not
+capture input, so they never suppress underlay refreshes.
+
+Invariant: every `SurfaceKey` must map to a distinct slot in `ui_refresh_runtime`
+(`SurfaceIndex` plus `kSurfaceCount`). A missing `SurfaceIndex` case silently
+aliases that surface onto slot `0` (`kOverlay`), letting page refreshes clobber
+the keyboard/modal's pending overlay refresh — keep them in sync when adding a
+screen.
+
 ### `main`
 
 `main/` owns product composition for this firmware. It is not a reusable
@@ -391,15 +429,16 @@ The current app-runtime helpers under `main/` are:
   page-owned screens, including focus movement, page-local button activation,
   footer projection hooks, touch-provider registration, and applying neutral
   page interaction results into app-facing behavior
-- `settings_page_interactions` / `wifi_page_interactions`: own page-local
-  focus and activate semantics for the current page-owned screens so the
-  shared page-input layer applies intent/results instead of open-coding page
-  behavior inline inside each runtime
+- `settings_page_interactions` / `wifi_page_interactions` /
+  `time_page_interactions`: own page-local focus and activate semantics for the
+  current page-owned screens so the shared page-input layer applies
+  intent/results instead of open-coding page behavior inline inside each runtime
 - `page_interaction_runtime`: own the registration contract future page
   runtimes/coordinators use to plug page targets into the shared touch
   interaction path
 - `lock_screen_runtime`: own lock-screen visibility and clock-state composition
-- `ui_refresh_runtime`: own the keyed latest-wins UI presentation worker
+- `ui_refresh_runtime`: own the keyed latest-wins UI presentation worker, and
+  enforce the global overlay refresh rule (see "Overlay refresh suppression")
 
 The current early startup sequence is:
 
@@ -488,6 +527,8 @@ Current focus-surface inventory is:
 - `Home`: footer path only
 - `Settings`: shared page-focus path
 - `WiFi`: shared page-focus path, with page-owned list sub-focus for networks
+- `Time`: shared page-focus path, with overlay editors (timezone select modal,
+  numeric keyboard per field)
 - `Lock screen`: no focusable page or footer surface today
 - shutdown/storage/select/keyboard/toast overlays: overlay path
 
@@ -510,10 +551,10 @@ Ownership is intentionally split as:
   screens so `app_shell` and `input_focus_runtime` do not hard-code page
   behavior directly, and so neutral page interaction results are applied in
   one place instead of inside individual page runtimes
-- `main/settings_page_interactions.*` and `main/wifi_page_interactions.*`:
-  focused interaction helpers that translate current page focus into neutral
-  page outcomes plus follow-on intents, while leaving service effects and
-  orchestration callbacks outside the coordinator
+- `main/settings_page_interactions.*`, `main/wifi_page_interactions.*`, and
+  `main/time_page_interactions.*`: focused interaction helpers that translate
+  current page focus into neutral page outcomes plus follow-on intents, while
+  leaving service effects and orchestration callbacks outside the coordinator
 - `main/page_interaction_runtime.cpp`: registration point for future page
   runtimes/coordinators to provide `resolve -> focus -> activate` touch hooks
 - `main/overlay_runtime.cpp`: retained overlay state, focus-sync, submit, and
@@ -537,6 +578,7 @@ Today that contract is implemented by the current page-owned screens:
 
 - `Settings`
 - `WiFi`
+- `Time`
 
 Future pages should keep page-local selected indexes as render projections of
 page-owned focus truth rather than inventing separate touch-only selection
@@ -587,6 +629,69 @@ The current app-wide interaction feedback lifecycle is:
 
 This keeps interaction ownership local while preventing buzzer policy from
 leaking into reusable runtime helpers or shared interaction contracts.
+
+### Time configuration page
+
+The time configuration page is the first screen ported end-to-end through the
+full page pattern, and is the reference example for adding a page. It is reached
+from the global footer `Time` button and is composed across five layers:
+
+- **View renderer** (`components/epaper_ui/time_page.*`): a stateless
+  `DrawTimePage` plus `TimePageState`, bounds, and hit-test. Like the other page
+  renderers it lives in `epaper_ui` (not `main/`) because `display_service` — a
+  component — draws it and cannot depend on `main`. It composes the page's
+  primitives: `select_input` (timezone), `time_input` (hour / minute / month /
+  day / year), and `button` (AM-PM and Sync & Save). `text_input` is the shared
+  field primitive those build on, and which `password_input` now wraps.
+- **Coordinator** (`main/time_page_coordinator.*`): owns the editable field
+  values, the navigation model plus roving focus, loads state from
+  `timezone_service`, and builds `TimePageState` and the save patch. A
+  `user_edited_` guard stops background clock events from clobbering in-progress
+  edits; `MarkSaved()` clears it after a save so a later sync reloads the page.
+- **Interactions** (`main/time_page_interactions.*`): map the focused control to
+  a neutral activate intent (open timezone modal, edit a numeric field, toggle
+  AM/PM, save, or footer navigation) with no side effects.
+- **Runtime** (`main/time_page_runtime.*`): the mutex-guarded orchestrator —
+  focus movement, touch resolve/focus/activate, footer projection, the overlay
+  editors, and the save flow. State is pushed to `display_service` and refreshes
+  are scheduled through `ui_refresh_runtime` (`SurfaceKey::kTimePage`).
+- **Integration**: `display_service` gains `ScreenId::kTime`, `SetTimePageState`,
+  and an `ApplyTime` / `DrawTimeUnderlay` path; `page_navigation` gains the
+  `kTime` scope, the control roles, and `BuildTimePageNavigationModel`;
+  `page_input_runtime` routes the screen; and `app_shell` exposes
+  `ShowTimeScreen` plus the footer `Time` entry.
+
+Field editing happens in overlays, so it inherits the overlay refresh rule
+above:
+
+- The timezone control opens a scrollable `select_modal` over
+  `timezone_service::ListTimezones()`; the chosen index is committed through the
+  runtime's select-modal submit hook.
+- Each numeric field opens the keyboard in its `kNumbers` layout — a standalone
+  dial-pad (`1`-`9`, then `Bksp | 0 | Done`); the typed value is committed on
+  submit.
+
+The save / sync flow:
+
+- `BuildSettingsPatch` converts the fields (12h + AM/PM to 24h, `YYYY-MM-DD` and
+  `HH:MM`) and `Save()` calls `timezone_service::ApplySettingsPatch`, then shows
+  a result toast. The patch's internal `Notify` drives `HandleTimezoneEvent`,
+  which already re-syncs the page, so `Save()` does not also run a redundant
+  full sync.
+- `ApplySettingsPatch` never runs the blocking SNTP path on the caller's task.
+  When the network is up it queues the NTP sync on the dedicated `timezone_sync`
+  worker (`QueueSync`); the result returns asynchronously via the SNTP callback
+  -> `Notify` -> event. Running SNTP inline overflowed the small touch-task
+  stack.
+- The clock also re-syncs on every Wi-Fi reconnect: `SetNetworkConnected` queues
+  a sync on the disconnected -> connected transition whenever the clock is
+  enabled and a timezone is set (default Eastern). The transition guard keeps
+  repeated "connected" events from spamming NTP.
+
+The `location` field in the underlying `timezone_service` settings is
+intentionally not surfaced on this page. It is metadata only (kept in NVS and
+the web portal) and has no effect on timekeeping, which is driven solely by the
+timezone selection plus NTP.
 
 ## Task Mapping
 
@@ -1286,6 +1391,7 @@ The current keyed surfaces are:
 - footer
 - settings page
 - WiFi page
+- time page
 
 Current refresh categories are:
 

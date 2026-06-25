@@ -498,8 +498,11 @@ bool IsSystemTimeValidLocked()
 
 bool ShouldSyncOnNetworkConnectedLocked()
 {
-    return s_enabled && !s_timezone_name.empty() &&
-           (!IsSystemTimeValidLocked() || !s_has_network_sync);
+    // Re-sync on every (re)connect rather than only when the clock is invalid/unsynced: the
+    // device drops WiFi intermittently, so we prefer a fresh NTP fix each time the network
+    // comes back. SetNetworkConnected gates this to the disconnected->connected transition
+    // so frequent WiFi events while already connected don't queue redundant syncs.
+    return s_enabled && !s_timezone_name.empty();
 }
 
 void OnSntpTimeSync(timeval* tv)
@@ -912,8 +915,11 @@ void SetNetworkConnected(bool connected)
     bool should_sync = false;
     {
         std::lock_guard<std::mutex> lock(s_mutex);
+        const bool was_connected = s_network_connected;
         s_network_connected = connected;
-        should_sync = connected && ShouldSyncOnNetworkConnectedLocked();
+        // Only sync on the disconnected->connected transition so repeated "connected"
+        // events (RSSI updates, etc.) don't queue redundant NTP syncs.
+        should_sync = connected && !was_connected && ShouldSyncOnNetworkConnectedLocked();
     }
 
     if (should_sync) {
@@ -989,8 +995,13 @@ Result ApplySettingsPatch(const SettingsPatch& patch)
         }
     }
 
-    if (use_network_time && !SyncNow(nullptr, 2000)) {
-        return MakeError(500, "Failed to sync network time");
+    if (use_network_time) {
+        // Queue the NTP sync on the dedicated sync worker rather than running the
+        // stack-heavy, ~2s-blocking SNTP path inline. ApplySettingsPatch is called from
+        // the caller's task (e.g. the 4 KB touch task when the user taps "Sync & Save"),
+        // and running SNTP there overflowed its stack. The sync result arrives later via
+        // the SNTP callback -> Notify -> event.
+        QueueSync(true);
     } else if (enable_clock && !has_manual_epoch && !staged_timezone_name.empty()) {
         if (!timezone_checked && !ApplyTimezoneByName(staged_timezone_name)) {
             return MakeValidationError("timezone_name", "invalid_timezone",

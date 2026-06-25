@@ -8,6 +8,7 @@
 #include "followup_task_config.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "overlay_runtime.h"
 
 namespace ui_refresh_runtime {
 namespace {
@@ -24,7 +25,7 @@ struct PendingSurface {
     bool pending = false;
 };
 
-constexpr size_t kSurfaceCount = 6;
+constexpr size_t kSurfaceCount = 7;
 
 std::mutex s_mutex;
 std::array<PendingSurface, kSurfaceCount> s_pending = {};
@@ -46,6 +47,8 @@ size_t SurfaceIndex(SurfaceKey key)
             return 4;
         case SurfaceKey::kWifiPage:
             return 5;
+        case SurfaceKey::kTimePage:
+            return 6;
         default:
             return 0;
     }
@@ -66,6 +69,8 @@ const char* SurfaceName(SurfaceKey key)
             return "settings_page";
         case SurfaceKey::kWifiPage:
             return "wifi_page";
+        case SurfaceKey::kTimePage:
+            return "time_page";
         default:
             return "unknown";
     }
@@ -155,8 +160,17 @@ void UiRefreshTask(void*)
             }
 
             if (display_service::IsInitialized()) {
+                // Global modal rule: while an overlay owns the screen (keyboard, select
+                // modal, storage/shutdown modal, or a closable toast), suppress underlay
+                // refreshes (page, status bar, footer). The apply callbacks above already
+                // pushed the new state, so the screen repaints correctly the moment the
+                // overlay closes — we just don't rebuild the underlay beneath an open
+                // overlay. Rebuilding underneath it is what made pages flicker/lag under the
+                // keyboard and could starve the display task during rapid overlay roving.
+                // Overlay refreshes (the overlay repainting itself) always proceed.
+                const bool overlay_owns_screen = overlay_runtime::IsInputCaptured();
                 esp_err_t err = ESP_OK;
-                if (any_screen_refresh) {
+                if (any_screen_refresh && !overlay_owns_screen) {
                     err = display_service::RequestRefreshCurrentScreen(merged_refresh_request);
                     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
                         ESP_LOGW(kTag,

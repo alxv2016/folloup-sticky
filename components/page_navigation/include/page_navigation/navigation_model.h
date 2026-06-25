@@ -10,6 +10,7 @@ namespace page_navigation {
 enum class NavigationScope : uint8_t {
     kSettings = 0,
     kWifi,
+    kTime,
 };
 
 enum class NavigationItemSection : uint8_t {
@@ -17,6 +18,7 @@ enum class NavigationItemSection : uint8_t {
     kFooter,
     kSettingsPageMenu,
     kWifiPageControls,
+    kTimePageControls,
 };
 
 enum class NavigationItemRole : uint8_t {
@@ -32,6 +34,14 @@ enum class NavigationItemRole : uint8_t {
     kWifiPagePasswordVisibilityButton,
     kWifiPageScanButton,
     kWifiPageConnectButton,
+    kTimePageTimezone,
+    kTimePageHour,
+    kTimePageMinute,
+    kTimePageMeridiem,
+    kTimePageMonth,
+    kTimePageDay,
+    kTimePageYear,
+    kTimePageSave,
 };
 
 struct NavigationItemDescriptor {
@@ -52,6 +62,7 @@ struct NavigationModel {
 
 NavigationModel BuildSettingsPageNavigationModel();
 NavigationModel BuildWifiPageNavigationModel();
+NavigationModel BuildTimePageNavigationModel();
 
 }  // namespace page_navigation
 

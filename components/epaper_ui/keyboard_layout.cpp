@@ -158,8 +158,8 @@ constexpr KeyboardKeySpec kNumbersRow3[] = {
     {.label = "9", .output = '9', .width_units = 3},
 };
 constexpr KeyboardKeySpec kNumbersRow4[] = {
-    {.label = "0", .output = '0', .width_units = 3},
     {.kind = KeyboardKeyKind::kBackspace, .label = "Bksp", .width_units = 3},
+    {.label = "0", .output = '0', .width_units = 3},
     {.kind = KeyboardKeyKind::kEnter, .label = "Done", .width_units = 3},
 };
 constexpr KeyboardRowSpec kNumbersRows[] = {

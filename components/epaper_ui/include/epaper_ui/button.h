@@ -17,6 +17,8 @@ enum class ButtonVariant : uint8_t {
 struct ButtonState {
     std::string_view label_text = {};
     bool selected = false;
+
+    bool operator==(const ButtonState& other) const = default;
 };
 
 struct ButtonStyle {

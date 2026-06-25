@@ -33,10 +33,18 @@ epaper_ui::WifiStatus BuildWifiStatus(const wifi_service::UiState& ui_state)
 std::string BuildTimeText()
 {
     const timezone_service::Snapshot snapshot = timezone_service::GetSnapshot();
-    if (!snapshot.runtime.current_time.empty()) {
-        return snapshot.runtime.current_time;
+    const std::string& time24 = snapshot.runtime.current_time;
+    // current_time is "HH:MM" 24-hour; present it as 12-hour with an AM/PM suffix.
+    if (time24.size() < 5 || time24[2] != ':') {
+        return "--:--";
     }
-    return "--:--";
+    const int hour24 = ((time24[0] - '0') * 10) + (time24[1] - '0');
+    const bool pm = hour24 >= 12;
+    int hour12 = hour24 % 12;
+    if (hour12 == 0) {
+        hour12 = 12;
+    }
+    return std::to_string(hour12) + time24.substr(2, 3) + (pm ? " PM" : " AM");
 }
 
 }  // namespace

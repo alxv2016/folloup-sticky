@@ -15,6 +15,7 @@
 #include "epaper_ui/shutdown_modal.h"
 #include "epaper_ui/storage_modal.h"
 #include "epaper_ui/toast.h"
+#include "epaper_ui/time_page.h"
 #include "epaper_ui/wifi_page.h"
 #include "epaper_panel.h"
 #include "esp_check.h"
@@ -70,6 +71,7 @@ epaper_ui::StatusBarState s_status_bar_state = {};
 epaper_ui::GlobalFooterState s_global_footer_state = {};
 epaper_ui::SettingsPageState s_settings_page_state = {};
 epaper_ui::WifiPageState s_wifi_page_state = {};
+epaper_ui::TimePageState s_time_page_state = {};
 epaper_ui::LockScreenState s_lock_screen_state = {};
 epaper_ui::KeyboardState s_keyboard_state = {};
 epaper_ui::ShutdownModalState s_shutdown_modal_state = {};
@@ -84,6 +86,7 @@ struct RenderSnapshot {
     epaper_ui::GlobalFooterState global_footer = {};
     epaper_ui::SettingsPageState settings_page = {};
     epaper_ui::WifiPageState wifi_page = {};
+    epaper_ui::TimePageState time_page = {};
     epaper_ui::LockScreenState lock_screen = {};
     epaper_ui::KeyboardState keyboard = {};
     epaper_ui::ShutdownModalState shutdown_modal = {};
@@ -91,6 +94,12 @@ struct RenderSnapshot {
     epaper_ui::SelectModalState select_modal = {};
     epaper_ui::ToastState toast = {};
 };
+
+// Single shared snapshot reused across every render. The struct is large (it holds every
+// page + overlay state), so copying it onto the 4 KB display task stack on each render
+// overflowed the stack. Only the display task captures/reads it, and captures never nest,
+// so one instance returned by reference is safe and avoids the per-render stack copy.
+RenderSnapshot s_render_snapshot = {};
 
 class RefreshBusyGuard {
 public:
@@ -151,14 +160,15 @@ EpaperPanel& Panel()
     return panel;
 }
 
-RenderSnapshot CaptureRenderSnapshot()
+const RenderSnapshot& CaptureRenderSnapshot()
 {
     std::lock_guard<std::mutex> lock(s_state_mutex);
-    RenderSnapshot snapshot = {};
+    RenderSnapshot& snapshot = s_render_snapshot;
     snapshot.status_bar = s_status_bar_state;
     snapshot.global_footer = s_global_footer_state;
     snapshot.settings_page = s_settings_page_state;
     snapshot.wifi_page = s_wifi_page_state;
+    snapshot.time_page = s_time_page_state;
     snapshot.lock_screen = s_lock_screen_state;
     snapshot.keyboard = s_keyboard_state;
     snapshot.shutdown_modal = s_shutdown_modal_state;
@@ -420,6 +430,20 @@ void DrawWifiUnderlay(uint8_t* framebuffer, const RenderSnapshot& snapshot)
                             snapshot.global_footer);
 }
 
+void DrawTimeUnderlay(uint8_t* framebuffer, const RenderSnapshot& snapshot)
+{
+    EpaperPanel& panel = Panel();
+    panel.Clear(true);
+    epaper_ui::DrawTimePage(framebuffer,
+                            STICKY_EPD_WIDTH,
+                            STICKY_EPD_HEIGHT,
+                            kPortraitWidth,
+                            kPortraitHeight,
+                            snapshot.time_page,
+                            snapshot.status_bar,
+                            snapshot.global_footer);
+}
+
 void LogMetrics(const EpaperPanelMetrics& metrics)
 {
     ESP_LOGI(kTag,
@@ -470,7 +494,7 @@ esp_err_t RefreshCurrentScreenLocked(bool full_refresh);
 
 esp_err_t ApplyHomeScreen(bool full_refresh)
 {
-    const RenderSnapshot snapshot = CaptureRenderSnapshot();
+    const RenderSnapshot& snapshot = CaptureRenderSnapshot();
     EpaperPanel& panel = Panel();
     DrawHomeUnderlay(panel.framebuffer(), snapshot);
     CaptureUnderlaySnapshot(panel.framebuffer());
@@ -495,7 +519,7 @@ esp_err_t ApplyHomeScreen(bool full_refresh)
 
 esp_err_t ApplyLockScreen(bool full_refresh)
 {
-    const RenderSnapshot snapshot = CaptureRenderSnapshot();
+    const RenderSnapshot& snapshot = CaptureRenderSnapshot();
     EpaperPanel& panel = Panel();
     DrawLockScreenUnderlay(panel.framebuffer(), snapshot);
     CaptureUnderlaySnapshot(panel.framebuffer());
@@ -520,7 +544,7 @@ esp_err_t ApplyLockScreen(bool full_refresh)
 
 esp_err_t ApplySettings(bool full_refresh)
 {
-    const RenderSnapshot snapshot = CaptureRenderSnapshot();
+    const RenderSnapshot& snapshot = CaptureRenderSnapshot();
     EpaperPanel& panel = Panel();
     DrawSettingsUnderlay(panel.framebuffer(), snapshot);
     CaptureUnderlaySnapshot(panel.framebuffer());
@@ -545,7 +569,7 @@ esp_err_t ApplySettings(bool full_refresh)
 
 esp_err_t ApplyWifi(bool full_refresh)
 {
-    const RenderSnapshot snapshot = CaptureRenderSnapshot();
+    const RenderSnapshot& snapshot = CaptureRenderSnapshot();
     EpaperPanel& panel = Panel();
     DrawWifiUnderlay(panel.framebuffer(), snapshot);
     CaptureUnderlaySnapshot(panel.framebuffer());
@@ -565,6 +589,31 @@ esp_err_t ApplyWifi(bool full_refresh)
 
     LogMetrics(panel.metrics());
     s_current_screen.store(ScreenId::kWifi, std::memory_order_relaxed);
+    return ESP_OK;
+}
+
+esp_err_t ApplyTime(bool full_refresh)
+{
+    const RenderSnapshot& snapshot = CaptureRenderSnapshot();
+    EpaperPanel& panel = Panel();
+    DrawTimeUnderlay(panel.framebuffer(), snapshot);
+    CaptureUnderlaySnapshot(panel.framebuffer());
+    DrawCurrentOverlays(panel.framebuffer(), snapshot);
+
+    DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
+    if (bus_guard.err() != ESP_OK) {
+        return bus_guard.err();
+    }
+
+    RefreshBusyGuard refresh_busy;
+    const esp_err_t err = full_refresh ? panel.RefreshFullBase()
+                                       : panel.RefreshPartialFullScreen();
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    LogMetrics(panel.metrics());
+    s_current_screen.store(ScreenId::kTime, std::memory_order_relaxed);
     return ESP_OK;
 }
 
@@ -615,7 +664,7 @@ esp_err_t RefreshCurrentScreenRegionLocked()
     // (EpaperPanel::RefreshChangedRegion), skipping entirely when nothing changed. No
     // caller-supplied region is needed — the delta is derived from the framebuffer vs the
     // glass shadow, so a partial refresh can never strand a changed pixel.
-    const RenderSnapshot snapshot = CaptureRenderSnapshot();
+    const RenderSnapshot& snapshot = CaptureRenderSnapshot();
     if (HasVisibleOverlay(snapshot)) {
         return RefreshCurrentScreenLocked(false);
     }
@@ -630,6 +679,9 @@ esp_err_t RefreshCurrentScreenRegionLocked()
             break;
         case ScreenId::kWifi:
             DrawWifiUnderlay(panel.framebuffer(), snapshot);
+            break;
+        case ScreenId::kTime:
+            DrawTimeUnderlay(panel.framebuffer(), snapshot);
             break;
         case ScreenId::kLockScreen:
             DrawLockScreenUnderlay(panel.framebuffer(), snapshot);
@@ -686,6 +738,8 @@ esp_err_t RefreshCurrentScreenLocked(bool full_refresh)
             return ApplySettings(full_refresh);
         case ScreenId::kWifi:
             return ApplyWifi(full_refresh);
+        case ScreenId::kTime:
+            return ApplyTime(full_refresh);
         case ScreenId::kLockScreen:
             return ApplyLockScreen(full_refresh);
         default:
@@ -704,7 +758,7 @@ esp_err_t RefreshOverlayStateLocked(OverlayRefreshPolicy policy)
     }
 
     EpaperPanel& panel = Panel();
-    const RenderSnapshot snapshot = CaptureRenderSnapshot();
+    const RenderSnapshot& snapshot = CaptureRenderSnapshot();
     ESP_LOGI(kTag,
              "Overlay refresh path: policy=%s snapshot_valid=%d",
              OverlayRefreshPolicyName(policy),
@@ -774,6 +828,8 @@ void DisplayTask(void*)
                 err = ApplyWifi(command.refresh_request.refresh_mode == RefreshMode::kFull);
             } else if (command.screen == ScreenId::kSettings) {
                 err = ApplySettings(command.refresh_request.refresh_mode == RefreshMode::kFull);
+            } else if (command.screen == ScreenId::kTime) {
+                err = ApplyTime(command.refresh_request.refresh_mode == RefreshMode::kFull);
             } else {
                 err = ApplyHomeScreen(command.refresh_request.refresh_mode == RefreshMode::kFull);
             }
@@ -941,6 +997,17 @@ esp_err_t SetWifiPageState(const epaper_ui::WifiPageState& state)
 
     std::lock_guard<std::mutex> lock(s_state_mutex);
     s_wifi_page_state = state;
+    return ESP_OK;
+}
+
+esp_err_t SetTimePageState(const epaper_ui::TimePageState& state)
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    std::lock_guard<std::mutex> lock(s_state_mutex);
+    s_time_page_state = state;
     return ESP_OK;
 }
 

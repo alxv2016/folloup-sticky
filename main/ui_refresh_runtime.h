@@ -13,6 +13,7 @@ enum class SurfaceKey {
     kFooter,
     kSettingsPage,
     kWifiPage,
+    kTimePage,
 };
 
 using ApplyCallback = esp_err_t (*)();

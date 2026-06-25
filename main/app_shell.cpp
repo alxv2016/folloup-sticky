@@ -40,6 +40,7 @@
 #include "transcription_service.h"
 #include "ui_refresh_runtime.h"
 #include "wifi_service.h"
+#include "time_page_runtime.h"
 #include "wifi_page_runtime.h"
 
 namespace app_shell {
@@ -138,6 +139,7 @@ footer_runtime::LayoutState FooterLayoutForScreen(display_service::ScreenId scre
     layout.visible = true;
     layout.show_settings = true;
     layout.show_wifi = true;
+    layout.show_time = true;
     // Home button is always visible, including on the home screen itself (tapping it
     // there does a full-screen refresh via HandleFooterActivate -> ShowHomeScreen(kFull)).
     layout.show_home = true;
@@ -225,6 +227,26 @@ esp_err_t ShowWifiScreen(display_service::RefreshMode refresh_mode)
     return display_service::SetCurrentScreen(display_service::ScreenId::kWifi, refresh_mode);
 }
 
+esp_err_t ShowTimeScreen(display_service::RefreshMode refresh_mode)
+{
+    SyncStatusBarState("show_time_screen");
+    page_input_runtime::ResetFocusForScreen(display_service::ScreenId::kTime);
+    page_input_runtime::ConfigureTouchProviderForScreen(display_service::ScreenId::kTime);
+    footer_runtime::SetLayoutState(FooterLayoutForScreen(display_service::ScreenId::kTime));
+    footer_runtime::SetProjectionState(
+        page_input_runtime::BuildFooterProjectionForScreen(display_service::ScreenId::kTime));
+    const esp_err_t footer_err = footer_runtime::UpdateDisplayState();
+    if (footer_err != ESP_OK && footer_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Footer sync before time screen failed: %s",
+                 esp_err_to_name(footer_err));
+    }
+    const esp_err_t time_err = time_page_runtime::SyncFromService(false);
+    if (time_err != ESP_OK && time_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Time page sync before show failed: %s", esp_err_to_name(time_err));
+    }
+    return display_service::SetCurrentScreen(display_service::ScreenId::kTime, refresh_mode);
+}
+
 app_interaction::InputResult HandleFooterActivate(footer_runtime::FooterFocusItem item, void*)
 {
     app_interaction::InputResult result = {};
@@ -250,6 +272,10 @@ app_interaction::InputResult HandleFooterActivate(footer_runtime::FooterFocusIte
             err = ShowWifiScreen(display_service::RefreshMode::kFull);
             break;
         case footer_runtime::FooterFocusItem::kTime:
+            result.play_feedback = true;
+            result.feedback_cue = app_interaction::FeedbackCue::kClick;
+            err = ShowTimeScreen(display_service::RefreshMode::kFull);
+            break;
         case footer_runtime::FooterFocusItem::kFolder:
         case footer_runtime::FooterFocusItem::kMic:
         case footer_runtime::FooterFocusItem::kNone:
@@ -462,6 +488,7 @@ void HandleRecordingSessionEvent(const recording_session_service::Event& event, 
                 MakeFeedbackResult(app_interaction::FeedbackCue::kRecordingStart));
             break;
         case recording_session_service::Phase::kAwaitingTagSelection: {
+            time_page_runtime::ClearPendingSelectModal();
             const esp_err_t err =
                 overlay_runtime::ShowSelectModal(BuildRecordingTagSelectModalState());
             FlushOverlayFeedback();
@@ -586,6 +613,17 @@ void HandleTimezoneEvent(const timezone_service::Event& event, void*)
                  esp_err_to_name(lock_screen_err));
     }
 
+    // Keep the time page in sync on clock events when it is the active screen. If an overlay
+    // is open over it, ui_refresh_runtime suppresses the underlay repaint globally (the state
+    // is still applied), so we don't need to special-case overlays here.
+    const bool time_active =
+        display_service::GetCurrentScreen() == display_service::ScreenId::kTime;
+    const esp_err_t time_page_err = time_page_runtime::SyncFromService(time_active);
+    if (time_page_err != ESP_OK && time_page_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Time page update after time event failed: %s",
+                 esp_err_to_name(time_page_err));
+    }
+
     const esp_err_t status_bar_err =
         s_startup_complete.load(std::memory_order_relaxed)
             ? status_bar_runtime::UpdateDisplayStateAndRequestRefresh(
@@ -687,8 +725,11 @@ void HandleDispatchedButtonEvent(const button_service::ButtonEventInfo& event)
         input_focus_runtime::HandleButtonEvent(event);
     PlayInteractionFeedback(overlay_result);
     if (overlay_result.select_modal_submitted) {
-        (void)recording_session_service::SubmitTagSelection(
-            overlay_result.select_modal_selected_index);
+        if (!time_page_runtime::HandleSelectModalSubmit(
+                overlay_result.select_modal_selected_index)) {
+            (void)recording_session_service::SubmitTagSelection(
+                overlay_result.select_modal_selected_index);
+        }
     }
     if (overlay_result.request_format_sd_card) {
         const esp_err_t err = storage_service::RequestFormatSdCard();
@@ -905,8 +946,11 @@ void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
     PlayInteractionFeedback(touch_result);
     FlushOverlayFeedback();
     if (touch_result.select_modal_submitted) {
-        (void)recording_session_service::SubmitTagSelection(
-            touch_result.select_modal_selected_index);
+        if (!time_page_runtime::HandleSelectModalSubmit(
+                touch_result.select_modal_selected_index)) {
+            (void)recording_session_service::SubmitTagSelection(
+                touch_result.select_modal_selected_index);
+        }
     }
     if (touch_result.request_format_sd_card) {
         const esp_err_t err = storage_service::RequestFormatSdCard();

@@ -96,4 +96,26 @@ NavigationModel BuildWifiPageNavigationModel()
     return model;
 }
 
+NavigationModel BuildTimePageNavigationModel()
+{
+    NavigationModel model = {};
+    model.scope = NavigationScope::kTime;
+
+    AddItem(model, NavigationItemSection::kTimePageControls,
+            NavigationItemRole::kTimePageTimezone, 0);
+    AddItem(model, NavigationItemSection::kTimePageControls, NavigationItemRole::kTimePageHour, 1);
+    AddItem(model, NavigationItemSection::kTimePageControls,
+            NavigationItemRole::kTimePageMinute, 2);
+    AddItem(model, NavigationItemSection::kTimePageControls,
+            NavigationItemRole::kTimePageMeridiem, 3);
+    AddItem(model, NavigationItemSection::kTimePageControls, NavigationItemRole::kTimePageMonth, 4);
+    AddItem(model, NavigationItemSection::kTimePageControls, NavigationItemRole::kTimePageDay, 5);
+    AddItem(model, NavigationItemSection::kTimePageControls, NavigationItemRole::kTimePageYear, 6);
+    AddItem(model, NavigationItemSection::kTimePageControls, NavigationItemRole::kTimePageSave, 7);
+    AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterSettings, 1);
+    AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterWifi, 2);
+    AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterHome, 0);
+    return model;
+}
+
 }  // namespace page_navigation
