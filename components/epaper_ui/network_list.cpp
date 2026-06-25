@@ -91,6 +91,18 @@ int VisibleRowCapacity(const UiRect& viewport, const NetworkListStyle& style)
     return std::max(1, viewport.height / row_height);
 }
 
+// Top Y of the row at 0-based position `row_in_view`, distributing the viewport height
+// evenly across `capacity` rows so the visible rows fill the panel exactly (no leftover
+// gap at the bottom of the list). Each row's height is the difference between consecutive
+// edges; rows are >= the nominal item height since capacity = floor(viewport / item).
+int RowEdgeY(const UiRect& viewport, int capacity, int row_in_view)
+{
+    if (capacity <= 0) {
+        return viewport.y;
+    }
+    return viewport.y + (row_in_view * viewport.height) / capacity;
+}
+
 int AnchorIndex(const NetworkListState& state)
 {
     const int focused = ClampFocusedIndex(state);
@@ -320,10 +332,12 @@ UiRect NetworkListRowBounds(int origin_x,
     if (network_index < first || network_index >= end) {
         return {};
     }
+    const int capacity = VisibleRowCapacity(viewport, style);
+    const int row_top = RowEdgeY(viewport, capacity, network_index - first);
     return {viewport.x,
-            viewport.y + (network_index - first) * ClampPositive(style.item.height),
+            row_top,
             viewport.width,
-            ClampPositive(style.item.height)};
+            RowEdgeY(viewport, capacity, network_index - first + 1) - row_top};
 }
 
 bool HitTestNetworkListRow(int origin_x,
@@ -446,6 +460,7 @@ void DrawNetworkList(uint8_t* framebuffer,
         int first = 0;
         int end = 0;
         VisibleRange(state, style, viewport, &first, &end);
+        const int capacity = VisibleRowCapacity(viewport, style);
         for (int index = first; index < end; ++index) {
             NetworkItemState row = state.networks[static_cast<size_t>(index)];
             NetworkItemStyle row_style = style.item;
@@ -465,14 +480,16 @@ void DrawNetworkList(uint8_t* framebuffer,
                 row_style.selected_content_outlined = true;
             }
             row.selected = row_is_focused || row_is_selected;
+            const int row_top = RowEdgeY(viewport, capacity, index - first);
             row_style.width = viewport.width;
+            row_style.height = RowEdgeY(viewport, capacity, index - first + 1) - row_top;
             DrawNetworkItem(framebuffer,
                             raw_width,
                             raw_height,
                             portrait_width,
                             portrait_height,
                             viewport.x,
-                            viewport.y + ((index - first) * ClampPositive(style.item.height)),
+                            row_top,
                             row,
                             row_style);
         }
