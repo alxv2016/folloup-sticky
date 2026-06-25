@@ -233,7 +233,7 @@ inline constexpr int kSectionGap = spacing::k48;
 namespace global_footer {
 
 inline constexpr int kBottomPadding = spacing::k16;
-inline constexpr int kButtonSize = 52;
+inline constexpr int kButtonSize = 58;
 inline constexpr int kIconSize = icon::k44;
 inline constexpr int kSdStatusYOffset = 1;
 
