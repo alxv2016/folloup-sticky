@@ -308,6 +308,21 @@ esp_err_t EnterSoftOffSleep()
     return ESP_ERR_INVALID_STATE;
 }
 
+// True when external (USB) power is feeding the system rail. On detection failure we assume
+// battery so shutdown still attempts a real power-off (the latch release is harmless on USB
+// and falls back to soft-off if the rail does not drop).
+bool IsUsbConnected()
+{
+    if (!s_power_input_ready) {
+        return false;
+    }
+    sticky_board::PowerInputSample sample = {};
+    if (sticky_board::ReadPowerInputSample(&sample) != ESP_OK) {
+        return false;
+    }
+    return sample.calibrated_mv >= kUsbSenseConnectedThresholdMv;
+}
+
 }  // namespace
 
 esp_err_t Init()
@@ -567,15 +582,30 @@ esp_err_t RequestShutdown()
         ESP_LOGW(kTag, "Continuing shutdown after RTC clear failure");
     }
 
+    // On USB the system rail is fed through the charger path, so releasing the latch can
+    // never cut power. Go straight to soft-off (deep sleep, wake on POWER_OK) instead.
+    if (IsUsbConnected()) {
+        ESP_LOGW(kTag,
+                 "USB connected: cannot cut the rail; entering soft-off (unplug to fully "
+                 "power off)");
+        s_power_hold_enabled = false;
+        return EnterSoftOffSleep();
+    }
+
+    // On battery: release the self-hold latch to actually cut system power. The rail
+    // collapses inside ReleasePowerHold() and execution never returns here.
     esp_err_t err = sticky_board::ReleasePowerHold();
     if (err != ESP_OK) {
         ESP_LOGW(kTag, "Power hold release failed: %s", esp_err_to_name(err));
         sticky_board::RestorePowerHold();
-    } else {
-        s_power_hold_enabled = false;
-        err = EnterSoftOffSleep();
+        return err;
     }
-    return err;
+
+    // Latch released but still running: the rail did not drop (unexpected on battery).
+    // Fall back to soft-off so the device at least appears off and can be woken.
+    s_power_hold_enabled = false;
+    ESP_LOGW(kTag, "Latch released but board still running; falling back to soft-off");
+    return EnterSoftOffSleep();
 }
 
 }  // namespace power_service

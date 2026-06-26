@@ -7,6 +7,7 @@
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_log.h"
+#include "esp_rom_sys.h"
 #include "driver/spi_master.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -15,7 +16,10 @@ namespace sticky_board {
 namespace {
 
 constexpr const char* kTag = "StickyBoard";
-constexpr TickType_t kPowerLatchSettleDelay = pdMS_TO_TICKS(20);
+// Self-hold latch behaves like a D flip-flop: PWR_HOLD is the data (1 = stay on, 0 = off)
+// and PWR_LOCK is the commit clock. The latch samples PWR_HOLD on a PWR_LOCK 0->1->0 pulse.
+// Edge-triggered, so a few tens of microseconds is ample for the pulse width.
+constexpr uint32_t kPowerLatchPulseUs = 50;
 constexpr TickType_t kPowerLatchShutdownHoldDelay = pdMS_TO_TICKS(500);
 constexpr adc_atten_t kPowerSenseAttenuation = ADC_ATTEN_DB_12;
 constexpr adc_bitwidth_t kPowerSenseBitWidth = ADC_BITWIDTH_DEFAULT;
@@ -84,6 +88,21 @@ void LogPowerLatchLevels(const char* phase)
     ESP_LOGI(kTag, "%s PWR_HOLD(GPIO%d)=%d PWR_LOCK(GPIO%d)=%d", phase,
              STICKY_POWER_HOLD_PIN, gpio_get_level(STICKY_POWER_HOLD_PIN),
              STICKY_POWER_LOCK_PIN, gpio_get_level(STICKY_POWER_LOCK_PIN));
+}
+
+// Configure both latch lines as push-pull outputs in one shot so the commit pulse can be
+// driven with plain gpio_set_level() calls — no per-edge gpio_config()/gpio_reset_pin()
+// churn that could glitch GPIO45/46 (ESP32-S3 strapping pins) mid-pulse.
+esp_err_t ConfigureLatchOutputs()
+{
+    gpio_config_t config = {};
+    config.pin_bit_mask =
+        (1ULL << STICKY_POWER_HOLD_PIN) | (1ULL << STICKY_POWER_LOCK_PIN);
+    config.mode = GPIO_MODE_INPUT_OUTPUT;
+    config.pull_up_en = GPIO_PULLUP_DISABLE;
+    config.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    config.intr_type = GPIO_INTR_DISABLE;
+    return gpio_config(&config);
 }
 
 bool CreateAdcCalibration(adc_unit_t unit, adc_channel_t channel,
@@ -168,15 +187,18 @@ esp_err_t EnablePowerHold()
     if (err != ESP_OK) {
         return err;
     }
+    err = ConfigureLatchOutputs();
+    if (err != ESP_OK) {
+        return err;
+    }
 
-    err = EnableOutputPin(STICKY_POWER_HOLD_PIN, 1);
-    if (err != ESP_OK) {
-        return err;
-    }
-    err = EnableOutputPin(STICKY_POWER_LOCK_PIN, 1);
-    if (err != ESP_OK) {
-        return err;
-    }
+    // Latch ON: HOLD = 1 (stay on), LOCK idle low, then commit with a 0->1->0 pulse.
+    gpio_set_level(STICKY_POWER_HOLD_PIN, 1);
+    gpio_set_level(STICKY_POWER_LOCK_PIN, 0);
+    esp_rom_delay_us(kPowerLatchPulseUs);
+    gpio_set_level(STICKY_POWER_LOCK_PIN, 1);
+    esp_rom_delay_us(kPowerLatchPulseUs);
+    gpio_set_level(STICKY_POWER_LOCK_PIN, 0);
 
     ESP_LOGI(kTag, "Power hold enabled on GPIO%d/GPIO%d", STICKY_POWER_HOLD_PIN,
              STICKY_POWER_LOCK_PIN);
@@ -190,52 +212,28 @@ esp_err_t ReleasePowerHold()
     if (err != ESP_OK) {
         return err;
     }
+    err = ConfigureLatchOutputs();
+    if (err != ESP_OK) {
+        return err;
+    }
 
     LogPowerLatchLevels("Power latch release start:");
 
-    // Page 6 tracing shows U3 Q driving Q7, and Q7 can pull on the PWR_HOLD
-    // node that also gates Q2. First latch U3 Q low while PWR_HOLD is low so
-    // Q7 releases, then drive PWR_HOLD high to try to turn Q2 off.
-    err = EnableOutputPin(STICKY_POWER_LOCK_PIN, 0);
-    if (err != ESP_OK) {
-        return err;
-    }
-    LogPowerLatchLevels("Power latch release lock-low:");
-    vTaskDelay(kPowerLatchSettleDelay);
+    // Latch OFF: drive HOLD low (request off), then clock it in with a LOCK 0->1->0 pulse.
+    // On battery the system rail collapses inside the pulse and nothing below runs. Leave
+    // HOLD low afterward — re-asserting it would feed the hold node and keep the rail on.
+    gpio_set_level(STICKY_POWER_HOLD_PIN, 0);
+    gpio_set_level(STICKY_POWER_LOCK_PIN, 0);
+    esp_rom_delay_us(kPowerLatchPulseUs);
+    gpio_set_level(STICKY_POWER_LOCK_PIN, 1);
+    esp_rom_delay_us(kPowerLatchPulseUs);
+    gpio_set_level(STICKY_POWER_LOCK_PIN, 0);
 
-    err = EnableOutputPin(STICKY_POWER_HOLD_PIN, 0);
-    if (err != ESP_OK) {
-        return err;
-    }
-    LogPowerLatchLevels("Power latch release hold-low:");
-    vTaskDelay(kPowerLatchSettleDelay);
-
-    err = EnableOutputPin(STICKY_POWER_LOCK_PIN, 1);
-    if (err != ESP_OK) {
-        return err;
-    }
-    LogPowerLatchLevels("Power latch release lock-pulse-high:");
-    vTaskDelay(kPowerLatchSettleDelay);
-
-    err = EnableOutputPin(STICKY_POWER_LOCK_PIN, 0);
-    if (err != ESP_OK) {
-        return err;
-    }
-    LogPowerLatchLevels("Power latch release lock-low-after-pulse:");
-    vTaskDelay(kPowerLatchSettleDelay);
-
-    err = EnableOutputPin(STICKY_POWER_HOLD_PIN, 1);
-    if (err != ESP_OK) {
-        return err;
-    }
-    LogPowerLatchLevels("Power latch release hold-high:");
-    vTaskDelay(kPowerLatchSettleDelay);
-
+    // Reaching here means the rail did not collapse (e.g. USB still feeding it). Give it a
+    // beat in case the supply is just slow, then report back so the caller can fall back.
     vTaskDelay(kPowerLatchShutdownHoldDelay);
     LogPowerLatchLevels("Power latch release complete:");
-
-    ESP_LOGI(kTag, "Power hold released on GPIO%d/GPIO%d", STICKY_POWER_HOLD_PIN,
-             STICKY_POWER_LOCK_PIN);
+    ESP_LOGW(kTag, "Power hold released but board still running (USB-powered?)");
     return ESP_OK;
 }
 
