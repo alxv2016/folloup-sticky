@@ -42,6 +42,16 @@ menu "Folloup Settings"
             Default timezone catalog entry used before a runtime timezone
             setting has been saved in NVS.
 
+    config FOLLOWUP_WELCOME_MESSAGE_ROTATE_HOURS
+        int "Dashboard welcome message rotation interval (hours)"
+        range 1 720
+        default 1
+        help
+            How many hours between dashboard welcome-message rotations. The
+            greeting starts from a random message chosen at boot and advances
+            one step every interval, so it changes over time without being
+            tied to the calendar.
+
     config FOLLOWUP_GEMINI_API_KEY
         string "Built-in Gemini API key"
         default ""

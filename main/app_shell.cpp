@@ -40,6 +40,8 @@
 #include "transcription_service.h"
 #include "ui_refresh_runtime.h"
 #include "wifi_service.h"
+#include "dashboard_page_runtime.h"
+#include "recording_archive_service.h"
 #include "time_page_runtime.h"
 #include "wifi_page_runtime.h"
 
@@ -174,6 +176,7 @@ esp_err_t SyncWifiPageState(bool request_refresh_if_active)
 esp_err_t ShowHomeScreen(display_service::RefreshMode refresh_mode)
 {
     SyncStatusBarState("show_home_screen");
+    page_input_runtime::ResetFocusForScreen(display_service::ScreenId::kHome);
     page_input_runtime::ConfigureTouchProviderForScreen(display_service::ScreenId::kHome);
     footer_runtime::SetLayoutState(FooterLayoutForScreen(display_service::ScreenId::kHome));
     footer_runtime::SetProjectionState(
@@ -181,6 +184,11 @@ esp_err_t ShowHomeScreen(display_service::RefreshMode refresh_mode)
     const esp_err_t footer_err = footer_runtime::UpdateDisplayState();
     if (footer_err != ESP_OK && footer_err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(kTag, "Footer sync before home screen failed: %s", esp_err_to_name(footer_err));
+    }
+    const esp_err_t dashboard_err = dashboard_page_runtime::SyncFromService(false);
+    if (dashboard_err != ESP_OK && dashboard_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Dashboard sync before home screen failed: %s",
+                 esp_err_to_name(dashboard_err));
     }
     return display_service::SetCurrentScreen(display_service::ScreenId::kHome, refresh_mode);
 }
@@ -632,6 +640,15 @@ void HandleTimezoneEvent(const timezone_service::Event& event, void*)
     if (status_bar_err != ESP_OK && status_bar_err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(kTag, "Status bar update after time event failed: %s",
                  esp_err_to_name(status_bar_err));
+    }
+
+    // Roll the dashboard welcome message over to the next variant when its interval elapses.
+    if (display_service::GetCurrentScreen() == display_service::ScreenId::kHome) {
+        const esp_err_t welcome_err = dashboard_page_runtime::RefreshWelcomeIfRotated();
+        if (welcome_err != ESP_OK && welcome_err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(kTag, "Dashboard welcome rotation after time event failed: %s",
+                     esp_err_to_name(welcome_err));
+        }
     }
 }
 
@@ -1102,6 +1119,22 @@ void InitTimezoneService()
     }
 }
 
+void HandleRecordingArchiveEvent(const recording_archive_service::Event&, void*)
+{
+    const bool home_active =
+        display_service::GetCurrentScreen() == display_service::ScreenId::kHome;
+    const esp_err_t err = dashboard_page_runtime::SyncFromService(home_active);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Dashboard update after archive event failed: %s", esp_err_to_name(err));
+    }
+}
+
+void InitRecordingArchiveService()
+{
+    recording_archive_service::SetEventHandler(HandleRecordingArchiveEvent, nullptr);
+    recording_archive_service::Init();
+}
+
 void InitGeminiService()
 {
     gemini_service::SetEventHandler(HandleGeminiEvent, nullptr);
@@ -1258,6 +1291,7 @@ void Run()
     InitEnvironmentService();
     InitDeviceSleepRuntime();
     InitTimezoneService();
+    InitRecordingArchiveService();
     InitGeminiService();
     InitWifiService();
     InitRecordingService();

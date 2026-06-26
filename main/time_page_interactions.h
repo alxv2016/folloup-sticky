@@ -22,6 +22,7 @@ enum class ActivateIntent : uint8_t {
     kShowHome,
     kShowSettings,
     kShowWifi,
+    kShowTime,
 };
 
 struct ActivateResult {
@@ -45,6 +46,7 @@ struct ActivateCallbacks {
     std::function<void()> show_home;
     std::function<void()> show_settings;
     std::function<void()> show_wifi;
+    std::function<void()> show_time;
 };
 
 ActivateResult HandlePrimaryActivate(TimePageCoordinator& coordinator);

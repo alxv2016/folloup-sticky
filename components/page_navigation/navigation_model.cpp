@@ -61,6 +61,7 @@ NavigationModel BuildSettingsPageNavigationModel()
             2);
     AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterSettings, 1);
     AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterWifi, 2);
+    AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterTime, 3);
     AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterHome, 0);
     return model;
 }
@@ -92,6 +93,7 @@ NavigationModel BuildWifiPageNavigationModel()
             4);
     AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterSettings, 1);
     AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterWifi, 2);
+    AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterTime, 3);
     AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterHome, 0);
     return model;
 }
@@ -114,6 +116,23 @@ NavigationModel BuildTimePageNavigationModel()
     AddItem(model, NavigationItemSection::kTimePageControls, NavigationItemRole::kTimePageSave, 7);
     AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterSettings, 1);
     AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterWifi, 2);
+    AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterTime, 3);
+    AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterHome, 0);
+    return model;
+}
+
+NavigationModel BuildDashboardPageNavigationModel()
+{
+    NavigationModel model = {};
+    model.scope = NavigationScope::kDashboard;
+
+    for (int index = 0; index < 5; ++index) {
+        AddItem(model, NavigationItemSection::kDashboardPageMenu,
+                NavigationItemRole::kDashboardMenuItem, index);
+    }
+    AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterSettings, 1);
+    AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterWifi, 2);
+    AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterTime, 3);
     AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterHome, 0);
     return model;
 }

@@ -71,6 +71,54 @@ int CenterOffset(int container_size, int item_size)
     return std::max(0, (container_size - item_size) / 2);
 }
 
+std::vector<std::string> WrapTextToWidth(design::TypographyRole role,
+                                         const std::string& text,
+                                         int max_width)
+{
+    std::vector<std::string> lines;
+    if (text.empty()) {
+        return lines;
+    }
+    if (max_width <= 0 || MeasureText(role, text) <= max_width) {
+        lines.push_back(text);
+        return lines;
+    }
+
+    size_t start = 0;
+    while (start < text.size()) {
+        while (start < text.size() && text[start] == ' ') {
+            ++start;
+        }
+        if (start >= text.size()) {
+            break;
+        }
+
+        size_t best_end = start;
+        size_t pos = start;
+        while (pos < text.size()) {
+            size_t word_end = text.find(' ', pos);
+            if (word_end == std::string::npos) {
+                word_end = text.size();
+            }
+            if (MeasureText(role, text.substr(start, word_end - start)) > max_width) {
+                if (best_end == start) {
+                    best_end = word_end;  // a single word longer than the line: keep it whole
+                }
+                break;
+            }
+            best_end = word_end;
+            if (word_end >= text.size()) {
+                break;
+            }
+            pos = word_end + 1;
+        }
+
+        lines.push_back(text.substr(start, best_end - start));
+        start = best_end + (best_end < text.size() ? 1 : 0);
+    }
+    return lines;
+}
+
 bool ShouldDrawBlackForTone(int x, int y, uint8_t tone)
 {
     if (tone <= design::color::kGray1) {

@@ -5,6 +5,8 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <dirent.h>
+#include <mutex>
 #include <string>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -30,7 +32,15 @@ struct ArchiveMetadata {
     uint32_t duration_ms = 0;
     bool has_transcript = false;
     RecordingTag tag = RecordingTag::kNote;
+    bool completed = false;
+    bool follow_up = false;
+    bool follow_up_completed = false;
 };
+
+std::mutex s_mutex;
+Snapshot s_snapshot = {};
+EventHandler s_event_handler = nullptr;
+void* s_event_context = nullptr;
 
 struct WavHeader {
     char riff[4];
@@ -240,6 +250,9 @@ std::string SerializeMetadata(const ArchiveMetadata& metadata)
     cJSON_AddNumberToObject(root, "duration_ms", metadata.duration_ms);
     cJSON_AddBoolToObject(root, "has_transcript", metadata.has_transcript);
     cJSON_AddStringToObject(root, "tag", TagName(metadata.tag));
+    cJSON_AddBoolToObject(root, "completed", metadata.completed);
+    cJSON_AddBoolToObject(root, "follow_up", metadata.follow_up);
+    cJSON_AddBoolToObject(root, "follow_up_completed", metadata.follow_up_completed);
 
     char* raw = cJSON_PrintUnformatted(root);
     std::string json = raw != nullptr ? raw : "";
@@ -303,6 +316,11 @@ bool ParseMetadata(const std::string& json, ArchiveMetadata* metadata)
             parsed.tag = RecordingTag::kNote;
         }
     }
+
+    parsed.completed = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(root, "completed"));
+    parsed.follow_up = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(root, "follow_up"));
+    parsed.follow_up_completed =
+        cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(root, "follow_up_completed"));
 
     cJSON_Delete(root);
     *metadata = parsed;
@@ -533,6 +551,124 @@ esp_err_t SaveTranscriptOnMountedFilesystem(const char* mount_point, void* conte
     return ESP_OK;
 }
 
+void NotifyHandler()
+{
+    EventHandler handler = nullptr;
+    void* context = nullptr;
+    Event event = {};
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        handler = s_event_handler;
+        context = s_event_context;
+        event.snapshot = s_snapshot;
+    }
+    if (handler != nullptr) {
+        handler(event, context);
+    }
+}
+
+void ScanDirectoryInto(const std::string& directory, Snapshot* snapshot)
+{
+    DIR* dir = opendir(directory.c_str());
+    if (dir == nullptr) {
+        return;  // directory may not exist yet
+    }
+
+    struct dirent* entry = nullptr;
+    while ((entry = readdir(dir)) != nullptr) {
+        const std::string name = entry->d_name;
+        if (name.size() < 6 || name.compare(name.size() - 5, 5, ".json") != 0) {
+            continue;
+        }
+
+        std::string json;
+        ArchiveMetadata metadata = {};
+        if (!ReadTextFile(JoinPath(directory, name), &json) || !ParseMetadata(json, &metadata)) {
+            continue;
+        }
+
+        snapshot->recording_count++;
+        if (metadata.follow_up) {
+            snapshot->follow_up_recording_count++;
+        }
+        switch (metadata.tag) {
+            case RecordingTag::kNote:
+                snapshot->notes_recording_count++;
+                break;
+            case RecordingTag::kTask:
+                snapshot->todo_recording_count++;
+                if (metadata.completed) {
+                    snapshot->completed_todo_count++;
+                } else {
+                    snapshot->incomplete_todo_count++;
+                }
+                break;
+            case RecordingTag::kIdea:
+            default:
+                break;
+        }
+    }
+    closedir(dir);
+}
+
+struct ScanContext {
+    Snapshot* snapshot = nullptr;
+};
+
+esp_err_t ScanArchiveOnMountedFilesystem(const char* mount_point, void* context)
+{
+    auto* scan = static_cast<ScanContext*>(context);
+    if (mount_point == nullptr || scan == nullptr || scan->snapshot == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    ScanDirectoryInto(JoinPath(mount_point, "recordings"), scan->snapshot);
+    ScanDirectoryInto(JoinPath(mount_point, "todos"), scan->snapshot);
+    scan->snapshot->available = true;
+    return ESP_OK;
+}
+
+struct MutateContext {
+    const char* recording_id = nullptr;
+    bool set_completed = false;
+    bool completed = false;
+    bool set_follow_up = false;
+    bool follow_up = false;
+    bool follow_up_completed = false;
+    bool applied = false;
+};
+
+esp_err_t MutateMetadataOnMountedFilesystem(const char* mount_point, void* context)
+{
+    auto* mutate = static_cast<MutateContext*>(context);
+    if (mount_point == nullptr || mutate == nullptr || mutate->recording_id == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    std::string base_path;
+    if (!ResolveExistingBasePath(mount_point, mutate->recording_id, &base_path)) {
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    const std::string metadata_path = base_path + ".json";
+    std::string json;
+    ArchiveMetadata metadata = {};
+    if (!ReadTextFile(metadata_path, &json) || !ParseMetadata(json, &metadata)) {
+        return ESP_FAIL;
+    }
+
+    if (mutate->set_completed) {
+        metadata.completed = mutate->completed;
+    }
+    if (mutate->set_follow_up) {
+        metadata.follow_up = mutate->follow_up;
+        metadata.follow_up_completed = mutate->follow_up_completed;
+    }
+
+    const std::string updated = SerializeMetadata(metadata);
+    mutate->applied = WriteFileBytes(metadata_path, updated.data(), updated.size());
+    return mutate->applied ? ESP_OK : ESP_FAIL;
+}
+
 }  // namespace
 
 SaveResult SaveClip(const recording_service::RecordedClip& clip, const SaveOptions& options)
@@ -553,6 +689,9 @@ SaveResult SaveClip(const recording_service::RecordedClip& clip, const SaveOptio
     if (err != ESP_OK && result.error_code.empty()) {
         result.error_code = "storage_error";
         result.error_message = esp_err_to_name(err);
+    }
+    if (result.success) {
+        (void)Refresh();  // recompute archive counts + notify subscribers
     }
     return result;
 }
@@ -595,6 +734,73 @@ const char* TagName(RecordingTag tag)
         default:
             return "note";
     }
+}
+
+void SetEventHandler(EventHandler handler, void* context)
+{
+    std::lock_guard<std::mutex> lock(s_mutex);
+    s_event_handler = handler;
+    s_event_context = context;
+}
+
+Snapshot GetSnapshot()
+{
+    std::lock_guard<std::mutex> lock(s_mutex);
+    return s_snapshot;
+}
+
+bool Refresh()
+{
+    Snapshot scanned = {};
+    scanned.initialized = true;
+    ScanContext context = {.snapshot = &scanned};
+    const esp_err_t err =
+        storage_service::RunWithMountedFilesystem(ScanArchiveOnMountedFilesystem, &context);
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        s_snapshot = scanned;
+    }
+    NotifyHandler();
+    return err == ESP_OK;
+}
+
+void Init()
+{
+    (void)Refresh();
+}
+
+bool MarkRecordingCompleted(const std::string& recording_id, bool completed)
+{
+    if (recording_id.empty()) {
+        return false;
+    }
+    MutateContext context = {};
+    context.recording_id = recording_id.c_str();
+    context.set_completed = true;
+    context.completed = completed;
+    (void)storage_service::RunWithMountedFilesystem(MutateMetadataOnMountedFilesystem, &context);
+    if (context.applied) {
+        (void)Refresh();
+    }
+    return context.applied;
+}
+
+bool MarkRecordingFollowUp(const std::string& recording_id, bool follow_up,
+                           bool follow_up_completed)
+{
+    if (recording_id.empty()) {
+        return false;
+    }
+    MutateContext context = {};
+    context.recording_id = recording_id.c_str();
+    context.set_follow_up = true;
+    context.follow_up = follow_up;
+    context.follow_up_completed = follow_up_completed;
+    (void)storage_service::RunWithMountedFilesystem(MutateMetadataOnMountedFilesystem, &context);
+    if (context.applied) {
+        (void)Refresh();
+    }
+    return context.applied;
 }
 
 }  // namespace recording_archive_service

@@ -11,6 +11,7 @@ enum class NavigationScope : uint8_t {
     kSettings = 0,
     kWifi,
     kTime,
+    kDashboard,
 };
 
 enum class NavigationItemSection : uint8_t {
@@ -19,6 +20,7 @@ enum class NavigationItemSection : uint8_t {
     kSettingsPageMenu,
     kWifiPageControls,
     kTimePageControls,
+    kDashboardPageMenu,
 };
 
 enum class NavigationItemRole : uint8_t {
@@ -26,6 +28,7 @@ enum class NavigationItemRole : uint8_t {
     kFooterHome,
     kFooterSettings,
     kFooterWifi,
+    kFooterTime,
     kSettingsWifiToggle,
     kSettingsEnableApToggle,
     kSettingsFormatSdButton,
@@ -42,6 +45,7 @@ enum class NavigationItemRole : uint8_t {
     kTimePageDay,
     kTimePageYear,
     kTimePageSave,
+    kDashboardMenuItem,
 };
 
 struct NavigationItemDescriptor {
@@ -63,6 +67,7 @@ struct NavigationModel {
 NavigationModel BuildSettingsPageNavigationModel();
 NavigationModel BuildWifiPageNavigationModel();
 NavigationModel BuildTimePageNavigationModel();
+NavigationModel BuildDashboardPageNavigationModel();
 
 }  // namespace page_navigation
 

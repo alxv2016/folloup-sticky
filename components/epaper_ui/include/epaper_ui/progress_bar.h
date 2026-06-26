@@ -13,6 +13,8 @@ struct ProgressBarState {
     std::string label_text = {};
     std::string status_text = {};
     int progress_percent = 0;
+
+    bool operator==(const ProgressBarState& other) const = default;
 };
 
 struct ProgressBarStyle {

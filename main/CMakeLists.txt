@@ -1,4 +1,4 @@
-idf_component_register(SRCS "time_page_runtime.cpp" "time_page_interactions.cpp" "time_page_coordinator.cpp" "page_input_runtime.cpp" "wifi_page_interactions.cpp" "settings_page_interactions.cpp" "input_runtime_setup.cpp" "button_input_runtime.cpp" "input_callback_dispatcher.cpp" "wifi_page_runtime.cpp" "settings_page_runtime.cpp" "settings_page_coordinator.cpp" "main.cpp"
+idf_component_register(SRCS "dashboard_page_runtime.cpp" "dashboard_page_interactions.cpp" "dashboard_page_coordinator.cpp" "time_page_runtime.cpp" "time_page_interactions.cpp" "time_page_coordinator.cpp" "page_input_runtime.cpp" "wifi_page_interactions.cpp" "settings_page_interactions.cpp" "input_runtime_setup.cpp" "button_input_runtime.cpp" "input_callback_dispatcher.cpp" "wifi_page_runtime.cpp" "settings_page_runtime.cpp" "settings_page_coordinator.cpp" "main.cpp"
                             "app_shell.cpp"
                             "device_sleep_runtime.cpp"
                             "footer_runtime.cpp"

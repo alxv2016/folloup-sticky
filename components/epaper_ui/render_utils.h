@@ -2,7 +2,9 @@
 #define EPAPER_UI_RENDER_UTILS_H_
 
 #include <cstdint>
+#include <string>
 #include <string_view>
+#include <vector>
 
 #include "design_tokens.h"
 #include "asset_types.h"
@@ -12,6 +14,11 @@
 namespace epaper_ui {
 
 int ClampPositive(int value);
+// Greedy word-wrap of `text` into lines that each fit `max_width` for the given typography
+// role. Returns the whole text as a single line when max_width <= 0 or it already fits.
+std::vector<std::string> WrapTextToWidth(design::TypographyRole role,
+                                         const std::string& text,
+                                         int max_width);
 int CenterOffset(int container_size, int item_size);
 bool ShouldDrawBlackForTone(int x, int y, uint8_t tone);
 void DrawPortraitPixel(uint8_t* framebuffer,

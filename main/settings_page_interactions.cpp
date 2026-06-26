@@ -11,7 +11,8 @@ ActivateResult HandlePrimaryActivate(const SettingsPageCoordinator& coordinator)
             coordinator,
             ActivateIntent::kShowHome,
             ActivateIntent::kForceRefresh,
-            ActivateIntent::kShowWifi);
+            ActivateIntent::kShowWifi,
+            ActivateIntent::kShowTime);
     if (footer_result.handled) {
         return footer_result;
     }
@@ -59,6 +60,11 @@ void ApplyPrimaryActivateResult(const ActivateResult& result,
         case ActivateIntent::kShowWifi:
             if (callbacks.show_wifi) {
                 callbacks.show_wifi();
+            }
+            return;
+        case ActivateIntent::kShowTime:
+            if (callbacks.show_time) {
+                callbacks.show_time();
             }
             return;
         case ActivateIntent::kForceRefresh:

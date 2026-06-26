@@ -15,6 +15,7 @@
 #include "epaper_ui/shutdown_modal.h"
 #include "epaper_ui/storage_modal.h"
 #include "epaper_ui/toast.h"
+#include "epaper_ui/dashboard_page.h"
 #include "epaper_ui/time_page.h"
 #include "epaper_ui/wifi_page.h"
 #include "epaper_panel.h"
@@ -36,14 +37,7 @@ constexpr const char* kTag = "DisplayService";
 constexpr int kPortraitWidth = STICKY_EPD_HEIGHT;
 constexpr int kPortraitHeight = STICKY_EPD_WIDTH;
 constexpr int kSplashLogoGap = design::spacing::k16;
-constexpr int kHomePlaceholderCardWidth = 360;
-constexpr int kHomePlaceholderCardHeight = 220;
-constexpr int kHomePlaceholderCardX = (kPortraitWidth - kHomePlaceholderCardWidth) / 2;
-constexpr int kHomePlaceholderCardY = (kPortraitHeight - kHomePlaceholderCardHeight) / 2;
-constexpr int kHomePlaceholderTextGap = design::spacing::k12;
 constexpr uint32_t kDisplayTaskStackWords = 4096;
-constexpr auto kHomePlaceholderTitleRole = design::TypographyRole::kHeadingH2;
-constexpr auto kHomePlaceholderValueRole = design::TypographyRole::kDisplay;
 
 enum class DisplayCommandType {
     kSetScreen,
@@ -72,6 +66,7 @@ epaper_ui::GlobalFooterState s_global_footer_state = {};
 epaper_ui::SettingsPageState s_settings_page_state = {};
 epaper_ui::WifiPageState s_wifi_page_state = {};
 epaper_ui::TimePageState s_time_page_state = {};
+epaper_ui::DashboardPageState s_dashboard_page_state = {};
 epaper_ui::LockScreenState s_lock_screen_state = {};
 epaper_ui::KeyboardState s_keyboard_state = {};
 epaper_ui::ShutdownModalState s_shutdown_modal_state = {};
@@ -87,6 +82,7 @@ struct RenderSnapshot {
     epaper_ui::SettingsPageState settings_page = {};
     epaper_ui::WifiPageState wifi_page = {};
     epaper_ui::TimePageState time_page = {};
+    epaper_ui::DashboardPageState dashboard_page = {};
     epaper_ui::LockScreenState lock_screen = {};
     epaper_ui::KeyboardState keyboard = {};
     epaper_ui::ShutdownModalState shutdown_modal = {};
@@ -169,6 +165,7 @@ const RenderSnapshot& CaptureRenderSnapshot()
     snapshot.settings_page = s_settings_page_state;
     snapshot.wifi_page = s_wifi_page_state;
     snapshot.time_page = s_time_page_state;
+    snapshot.dashboard_page = s_dashboard_page_state;
     snapshot.lock_screen = s_lock_screen_state;
     snapshot.keyboard = s_keyboard_state;
     snapshot.shutdown_modal = s_shutdown_modal_state;
@@ -218,15 +215,6 @@ void DrawPortraitPixel(uint8_t* framebuffer, int x, int y, bool black)
     DrawRawPixel(framebuffer, raw_x, raw_y, black);
 }
 
-void FillPortraitRect(uint8_t* framebuffer, int x, int y, int width, int height, bool black)
-{
-    for (int row = 0; row < height; ++row) {
-        for (int col = 0; col < width; ++col) {
-            DrawPortraitPixel(framebuffer, x + col, y + row, black);
-        }
-    }
-}
-
 void DrawPortraitMonoAsset(uint8_t* framebuffer, int x, int y, const EmbeddedImageAsset* asset)
 {
     if (framebuffer == nullptr || asset == nullptr || asset->format != ImageFormat::kMono1) {
@@ -240,63 +228,6 @@ void DrawPortraitMonoAsset(uint8_t* framebuffer, int x, int y, const EmbeddedIma
             }
         }
     }
-}
-
-void DrawTypographyText(uint8_t* framebuffer,
-                        int x,
-                        int y,
-                        std::string_view text,
-                        design::TypographyRole role,
-                        bool black)
-{
-    epaper_ui::DrawText(
-        [&](int px, int py, uint8_t color) {
-            DrawPortraitPixel(framebuffer, px, py, color < 0x80);
-        },
-        x,
-        y,
-        text,
-        black ? design::color::kBlack : design::color::kWhite,
-        role);
-}
-
-void DrawActionInRect(uint8_t* framebuffer,
-                      int x,
-                      int y,
-                      int width,
-                      int height,
-                      std::string_view first,
-                      std::string_view second,
-                      bool selected)
-{
-    const int first_height = epaper_ui::LineHeight(kHomePlaceholderTitleRole);
-    const int second_height = epaper_ui::LineHeight(kHomePlaceholderValueRole);
-    const int block_height = first_height + second_height + kHomePlaceholderTextGap;
-    const int first_x =
-        x + (width - epaper_ui::MeasureText(kHomePlaceholderTitleRole, first)) / 2;
-    const int second_x =
-        x + (width - epaper_ui::MeasureText(kHomePlaceholderValueRole, second)) / 2;
-    const int first_y = y + (height - block_height) / 2;
-    const int second_y = first_y + first_height + kHomePlaceholderTextGap;
-    const bool text_black = !selected;
-
-    FillPortraitRect(framebuffer, x, y, width, height, selected);
-    DrawTypographyText(
-        framebuffer, first_x, first_y, first, kHomePlaceholderTitleRole, text_black);
-    DrawTypographyText(
-        framebuffer, second_x, second_y, second, kHomePlaceholderValueRole, text_black);
-}
-
-void DrawHomePlaceholder(uint8_t* framebuffer)
-{
-    DrawActionInRect(framebuffer,
-                     kHomePlaceholderCardX,
-                     kHomePlaceholderCardY,
-                     kHomePlaceholderCardWidth,
-                     kHomePlaceholderCardHeight,
-                     "HOME",
-                     "PLACEHOLDER",
-                     false);
 }
 
 void DrawSplashScreen(uint8_t* framebuffer)
@@ -374,19 +305,14 @@ void DrawHomeUnderlay(uint8_t* framebuffer, const RenderSnapshot& snapshot)
 {
     EpaperPanel& panel = Panel();
     panel.Clear(true);
-    DrawHomePlaceholder(framebuffer);
-    epaper_ui::DrawStatusBar(framebuffer,
-                             STICKY_EPD_WIDTH,
-                             STICKY_EPD_HEIGHT,
-                             kPortraitWidth,
-                             kPortraitHeight,
-                             snapshot.status_bar);
-    epaper_ui::DrawGlobalFooter(framebuffer,
-                                STICKY_EPD_WIDTH,
-                                STICKY_EPD_HEIGHT,
-                                kPortraitWidth,
-                                kPortraitHeight,
-                                snapshot.global_footer);
+    epaper_ui::DrawDashboardPage(framebuffer,
+                                 STICKY_EPD_WIDTH,
+                                 STICKY_EPD_HEIGHT,
+                                 kPortraitWidth,
+                                 kPortraitHeight,
+                                 snapshot.dashboard_page,
+                                 snapshot.status_bar,
+                                 snapshot.global_footer);
 }
 
 void DrawLockScreenUnderlay(uint8_t* framebuffer, const RenderSnapshot& snapshot)
@@ -1008,6 +934,17 @@ esp_err_t SetTimePageState(const epaper_ui::TimePageState& state)
 
     std::lock_guard<std::mutex> lock(s_state_mutex);
     s_time_page_state = state;
+    return ESP_OK;
+}
+
+esp_err_t SetDashboardPageState(const epaper_ui::DashboardPageState& state)
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    std::lock_guard<std::mutex> lock(s_state_mutex);
+    s_dashboard_page_state = state;
     return ESP_OK;
 }
 
