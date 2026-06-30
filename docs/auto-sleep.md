@@ -145,19 +145,14 @@ The build-time settings live under `Folloup Settings`:
 - `CONFIG_FOLLOWUP_AUTO_SLEEP_DISPLAY_SLEEP_TIMEOUT_SECONDS`
 - `CONFIG_FOLLOWUP_AUTO_SLEEP_LIGHT_SLEEP_TIMEOUT_SECONDS`
 
-Current bench defaults:
+Current defaults:
 
-- display sleep: `10 s`
-- light sleep: `30 s`
+- display sleep: `180 s` (3 minutes)
+- light sleep: `1800 s` (30 minutes)
 
 Set either timeout to `0` to disable that stage. When both stages are enabled,
 the light-sleep timeout must be greater than or equal to the display-sleep
 timeout.
-
-Suggested production defaults remain:
-
-- display sleep: `180 s`
-- light sleep: `1800 s`
 
 ## Logging
 
