@@ -130,9 +130,16 @@ void SyncStatusBarState(const char* source)
     }
 }
 
-bool IsSettingsScreenActive()
+// A page may only request its own partial refresh once boot has painted the initial
+// full screen. Before s_startup_complete, ShowHomeScreen(kFull) at the end of Run()
+// repaints everything, so any earlier partial is redundant work — and ghosts on a
+// freshly-powered panel that has no full-flush baseline yet. Folding the startup gate
+// into the "is this screen active" check keeps every event handler from firing a
+// boot-time partial.
+bool ScreenActiveForRefresh(display_service::ScreenId screen)
 {
-    return display_service::GetCurrentScreen() == display_service::ScreenId::kSettings;
+    return s_startup_complete.load(std::memory_order_relaxed) &&
+           display_service::GetCurrentScreen() == screen;
 }
 
 footer_runtime::LayoutState FooterLayoutForScreen(display_service::ScreenId screen)
@@ -151,8 +158,7 @@ footer_runtime::LayoutState FooterLayoutForScreen(display_service::ScreenId scre
 
 esp_err_t SyncSettingsPageState(bool request_refresh_if_active)
 {
-    const bool startup_complete = s_startup_complete.load(std::memory_order_relaxed);
-    const bool active = startup_complete && IsSettingsScreenActive();
+    const bool active = ScreenActiveForRefresh(display_service::ScreenId::kSettings);
     const esp_err_t err =
         request_refresh_if_active && active
             ? settings_page_runtime::UpdateDisplayStateAndRequestRefresh(
@@ -166,7 +172,8 @@ esp_err_t SyncSettingsPageState(bool request_refresh_if_active)
 
 esp_err_t SyncWifiPageState(bool request_refresh_if_active)
 {
-    const esp_err_t err = wifi_page_runtime::SyncFromService(request_refresh_if_active);
+    const bool active = ScreenActiveForRefresh(display_service::ScreenId::kWifi);
+    const esp_err_t err = wifi_page_runtime::SyncFromService(request_refresh_if_active && active);
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(kTag, "WiFi page state sync failed: %s", esp_err_to_name(err));
     }
@@ -624,8 +631,7 @@ void HandleTimezoneEvent(const timezone_service::Event& event, void*)
     // Keep the time page in sync on clock events when it is the active screen. If an overlay
     // is open over it, ui_refresh_runtime suppresses the underlay repaint globally (the state
     // is still applied), so we don't need to special-case overlays here.
-    const bool time_active =
-        display_service::GetCurrentScreen() == display_service::ScreenId::kTime;
+    const bool time_active = ScreenActiveForRefresh(display_service::ScreenId::kTime);
     const esp_err_t time_page_err = time_page_runtime::SyncFromService(time_active);
     if (time_page_err != ESP_OK && time_page_err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(kTag, "Time page update after time event failed: %s",
@@ -643,7 +649,7 @@ void HandleTimezoneEvent(const timezone_service::Event& event, void*)
     }
 
     // Roll the dashboard welcome message over to the next variant when its interval elapses.
-    if (display_service::GetCurrentScreen() == display_service::ScreenId::kHome) {
+    if (ScreenActiveForRefresh(display_service::ScreenId::kHome)) {
         const esp_err_t welcome_err = dashboard_page_runtime::RefreshWelcomeIfRotated();
         if (welcome_err != ESP_OK && welcome_err != ESP_ERR_INVALID_STATE) {
             ESP_LOGW(kTag, "Dashboard welcome rotation after time event failed: %s",
@@ -1121,8 +1127,7 @@ void InitTimezoneService()
 
 void HandleRecordingArchiveEvent(const recording_archive_service::Event&, void*)
 {
-    const bool home_active =
-        display_service::GetCurrentScreen() == display_service::ScreenId::kHome;
+    const bool home_active = ScreenActiveForRefresh(display_service::ScreenId::kHome);
     const esp_err_t err = dashboard_page_runtime::SyncFromService(home_active);
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(kTag, "Dashboard update after archive event failed: %s", esp_err_to_name(err));

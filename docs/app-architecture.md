@@ -483,6 +483,26 @@ The current early startup sequence is:
   available.
 - Runs a small shutdown task so button callbacks can request shutdown without
   directly executing the power-latch release sequence.
+- Seeds the status bar and footer state (no refresh), then renders the home
+  screen with a single **full** refresh as the first thing the panel paints, and
+  finally sets `s_startup_complete`.
+
+**Boot refresh policy — no partial refresh before the initial full paint.** The
+first thing the panel paints on boot is the single **full** refresh of the home
+screen (`ShowHomeScreen(RefreshMode::kFull)`, the last step above). No partial
+refresh is allowed before it. Services initialize *before* that paint and several
+publish events during boot (the RTC time intent, Wi-Fi connection state, the
+recording-archive snapshot, storage mount); their handlers update UI state but
+must **not** request a refresh yet, because the upcoming full paint already
+redraws every surface — an earlier partial is redundant work, and a partial on a
+freshly-powered panel that has no full-flush baseline ghosts. The rule is
+enforced by gating every handler's refresh request on `s_startup_complete`,
+folded into the `ScreenActiveForRefresh(screen)` predicate
+(`s_startup_complete && GetCurrentScreen() == screen`); the status bar and footer
+paths check `s_startup_complete` directly. Anything new that repaints in response
+to a service event must route through the same gate so it stays silent until the
+initial full paint lands. After boot the predicate reduces to "is this screen
+active," so live updates partial-refresh normally.
 
 Current app-level button interactions are:
 
