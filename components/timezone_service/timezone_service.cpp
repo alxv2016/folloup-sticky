@@ -491,11 +491,6 @@ bool ParseLocalDateTime(const std::string& date_value,
     return true;
 }
 
-bool IsSystemTimeValidLocked()
-{
-    return time(nullptr) >= kMinValidEpoch;
-}
-
 bool ShouldSyncOnNetworkConnectedLocked()
 {
     // Re-sync on every (re)connect rather than only when the clock is invalid/unsynced: the
