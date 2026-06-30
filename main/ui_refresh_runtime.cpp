@@ -1,6 +1,8 @@
 #include "ui_refresh_runtime.h"
 
 #include <array>
+#include <cstdio>
+#include <cstring>
 #include <mutex>
 
 #include "esp_check.h"
@@ -80,6 +82,43 @@ const char* SurfaceName(SurfaceKey key)
     }
 }
 
+const char* SurfaceNameForIndex(size_t index)
+{
+    switch (index) {
+        case 0:
+            return "overlay";
+        case 1:
+            return "lock_screen";
+        case 2:
+            return "status_bar";
+        case 3:
+            return "footer";
+        case 4:
+            return "settings_page";
+        case 5:
+            return "wifi_page";
+        case 6:
+            return "time_page";
+        case 7:
+            return "dashboard_page";
+        default:
+            return "unknown";
+    }
+}
+
+// Builds a "+"-joined list of contributing surfaces (e.g. "status_bar+footer") so the
+// display log names every surface that fed a coalesced refresh. Truncates safely if the
+// joined list would overflow the buffer.
+void AppendSource(char* buf, size_t buf_size, const char* name)
+{
+    const size_t len = std::strlen(buf);
+    if (len == 0) {
+        std::snprintf(buf, buf_size, "%s", name);
+    } else if (len + 1 < buf_size) {
+        std::snprintf(buf + len, buf_size - len, "+%s", name);
+    }
+}
+
 // Refresh/overlay coalescing reuses the shared display_service::Merge* helpers so the
 // keyed UI-refresh queue and the in-task command queue merge identically.
 using display_service::MergeOverlayRefreshPolicy;
@@ -109,6 +148,8 @@ void UiRefreshTask(void*)
             display_service::RefreshRequest merged_refresh_request = {};
             display_service::OverlayRefreshPolicy merged_overlay_refresh_policy =
                 display_service::OverlayRefreshPolicy::kReuseUnderlaySnapshot;
+            char screen_source[48] = {};
+            char overlay_source[48] = {};
 
             for (size_t index = 0; index < pending.size(); ++index) {
                 const PendingSurface& surface = pending[index];
@@ -121,6 +162,8 @@ void UiRefreshTask(void*)
                     any_overlay_refresh = true;
                     merged_overlay_refresh_policy = MergeOverlayRefreshPolicy(
                         merged_overlay_refresh_policy, surface.overlay_refresh_policy);
+                    AppendSource(overlay_source, sizeof(overlay_source),
+                                 SurfaceNameForIndex(index));
                 } else {
                     if (any_screen_refresh) {
                         merged_refresh_request = MergeRefreshRequest(merged_refresh_request,
@@ -129,6 +172,8 @@ void UiRefreshTask(void*)
                         merged_refresh_request = surface.refresh_request;
                         any_screen_refresh = true;
                     }
+                    AppendSource(screen_source, sizeof(screen_source),
+                                 SurfaceNameForIndex(index));
                 }
 
                 if (surface.apply_callback == nullptr) {
@@ -175,7 +220,8 @@ void UiRefreshTask(void*)
                 const bool overlay_owns_screen = overlay_runtime::IsInputCaptured();
                 esp_err_t err = ESP_OK;
                 if (any_screen_refresh && !overlay_owns_screen) {
-                    err = display_service::RequestRefreshCurrentScreen(merged_refresh_request);
+                    err = display_service::RequestRefreshCurrentScreen(merged_refresh_request,
+                                                                       screen_source);
                     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
                         ESP_LOGW(kTag,
                                  "UI screen refresh request failed: mode=%d scope=%d err=%s",
@@ -184,7 +230,8 @@ void UiRefreshTask(void*)
                                  esp_err_to_name(err));
                     }
                 } else if (any_overlay_refresh) {
-                    err = display_service::RequestOverlayRefresh(merged_overlay_refresh_policy);
+                    err = display_service::RequestOverlayRefresh(merged_overlay_refresh_policy,
+                                                                 overlay_source);
                     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
                         ESP_LOGW(kTag,
                                  "UI overlay refresh request failed: policy=%d err=%s",

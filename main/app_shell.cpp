@@ -197,7 +197,8 @@ esp_err_t ShowHomeScreen(display_service::RefreshMode refresh_mode)
         ESP_LOGW(kTag, "Dashboard sync before home screen failed: %s",
                  esp_err_to_name(dashboard_err));
     }
-    return display_service::SetCurrentScreen(display_service::ScreenId::kHome, refresh_mode);
+    return display_service::SetCurrentScreen(display_service::ScreenId::kHome, refresh_mode,
+                                             "show_home_screen");
 }
 
 esp_err_t ShowSettingsScreen(display_service::RefreshMode refresh_mode)
@@ -218,8 +219,8 @@ esp_err_t ShowSettingsScreen(display_service::RefreshMode refresh_mode)
         ESP_LOGW(kTag, "Settings page sync before show failed: %s",
                  esp_err_to_name(settings_err));
     }
-    return display_service::SetCurrentScreen(display_service::ScreenId::kSettings,
-                                             refresh_mode);
+    return display_service::SetCurrentScreen(display_service::ScreenId::kSettings, refresh_mode,
+                                             "show_settings_screen");
 }
 
 esp_err_t ShowWifiScreen(display_service::RefreshMode refresh_mode)
@@ -239,7 +240,8 @@ esp_err_t ShowWifiScreen(display_service::RefreshMode refresh_mode)
     if (wifi_err != ESP_OK && wifi_err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(kTag, "WiFi page sync before show failed: %s", esp_err_to_name(wifi_err));
     }
-    return display_service::SetCurrentScreen(display_service::ScreenId::kWifi, refresh_mode);
+    return display_service::SetCurrentScreen(display_service::ScreenId::kWifi, refresh_mode,
+                                             "show_wifi_screen");
 }
 
 esp_err_t ShowTimeScreen(display_service::RefreshMode refresh_mode)
@@ -259,7 +261,8 @@ esp_err_t ShowTimeScreen(display_service::RefreshMode refresh_mode)
     if (time_err != ESP_OK && time_err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(kTag, "Time page sync before show failed: %s", esp_err_to_name(time_err));
     }
-    return display_service::SetCurrentScreen(display_service::ScreenId::kTime, refresh_mode);
+    return display_service::SetCurrentScreen(display_service::ScreenId::kTime, refresh_mode,
+                                             "show_time_screen");
 }
 
 app_interaction::InputResult HandleFooterActivate(footer_runtime::FooterFocusItem item, void*)

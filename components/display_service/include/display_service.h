@@ -69,13 +69,18 @@ esp_err_t SetShutdownModalState(const epaper_ui::ShutdownModalState& state);
 esp_err_t SetStorageModalState(const epaper_ui::StorageModalState& state);
 esp_err_t SetSelectModalState(const epaper_ui::SelectModalState& state);
 esp_err_t SetToastState(const epaper_ui::ToastState& state);
+// The optional `source` tag names what invoked the refresh; it is echoed in the
+// "Display command requested" log to make refresh provenance traceable.
 esp_err_t SetCurrentScreen(ScreenId screen,
-                           RefreshMode refresh_mode = RefreshMode::kPartial);
+                           RefreshMode refresh_mode = RefreshMode::kPartial,
+                           const char* source = "?");
 esp_err_t RequestOverlayRefresh(
-    OverlayRefreshPolicy policy = OverlayRefreshPolicy::kRebuildUnderlay);
+    OverlayRefreshPolicy policy = OverlayRefreshPolicy::kRebuildUnderlay,
+    const char* source = "?");
 esp_err_t RequestRefreshCurrentScreen(
-    const RefreshRequest& refresh_request);
-esp_err_t RequestRefreshCurrentScreen(RefreshMode refresh_mode = RefreshMode::kPartial);
+    const RefreshRequest& refresh_request, const char* source = "?");
+esp_err_t RequestRefreshCurrentScreen(RefreshMode refresh_mode = RefreshMode::kPartial,
+                                      const char* source = "?");
 esp_err_t RefreshCurrentScreen(const RefreshRequest& refresh_request);
 esp_err_t RefreshCurrentScreen(RefreshMode refresh_mode = RefreshMode::kPartial);
 esp_err_t EnterDisplaySleep();

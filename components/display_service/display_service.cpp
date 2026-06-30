@@ -45,12 +45,24 @@ enum class DisplayCommandType {
     kRefreshCurrent,
 };
 
+// Caller tag carried with each queued command so the "Display command requested" log
+// names what invoked the refresh. A fixed buffer (not a const char*) so it copies by
+// value through the FreeRTOS queue and stays valid when the display task logs it on
+// another thread.
+constexpr size_t kCommandSourceLen = 48;
+
 struct DisplayCommand {
     DisplayCommandType type = DisplayCommandType::kSetScreen;
     ScreenId screen = ScreenId::kHome;
     RefreshRequest refresh_request = {};
     OverlayRefreshPolicy overlay_refresh_policy = OverlayRefreshPolicy::kRebuildUnderlay;
+    char source[kCommandSourceLen] = "?";
 };
+
+void SetCommandSource(DisplayCommand& command, const char* source)
+{
+    strlcpy(command.source, source != nullptr ? source : "?", sizeof(command.source));
+}
 
 bool s_initialized = false;
 QueueHandle_t s_command_queue = nullptr;
@@ -732,11 +744,13 @@ void DisplayTask(void*)
             continue;
         }
 
-        ESP_LOGI(kTag, "Display command requested: type=%d screen=%d mode=%s scope=%s",
+        ESP_LOGI(kTag,
+                 "Display command requested: type=%d screen=%d mode=%s scope=%s source=%s",
                  static_cast<int>(command.type),
                  static_cast<int>(command.screen),
                  RefreshModeName(command.refresh_request.refresh_mode),
-                 RefreshScopeName(command.refresh_request.scope));
+                 RefreshScopeName(command.refresh_request.scope),
+                 command.source);
         std::lock_guard<std::mutex> lock(s_panel_mutex);
         if (s_display_sleeping) {
             if (command.type == DisplayCommandType::kSetScreen) {
@@ -1014,7 +1028,7 @@ esp_err_t SetToastState(const epaper_ui::ToastState& state)
     return ESP_OK;
 }
 
-esp_err_t SetCurrentScreen(ScreenId screen, RefreshMode refresh_mode)
+esp_err_t SetCurrentScreen(ScreenId screen, RefreshMode refresh_mode, const char* source)
 {
     if (!s_initialized || s_command_queue == nullptr) {
         return ESP_ERR_INVALID_STATE;
@@ -1024,10 +1038,11 @@ esp_err_t SetCurrentScreen(ScreenId screen, RefreshMode refresh_mode)
     command.type = DisplayCommandType::kSetScreen;
     command.screen = screen;
     command.refresh_request.refresh_mode = refresh_mode;
+    SetCommandSource(command, source);
     return EnqueueDisplayCommand(command);
 }
 
-esp_err_t RequestOverlayRefresh(OverlayRefreshPolicy policy)
+esp_err_t RequestOverlayRefresh(OverlayRefreshPolicy policy, const char* source)
 {
     if (!s_initialized || s_command_queue == nullptr) {
         return ESP_ERR_INVALID_STATE;
@@ -1037,10 +1052,11 @@ esp_err_t RequestOverlayRefresh(OverlayRefreshPolicy policy)
     command.type = DisplayCommandType::kRefreshOverlay;
     command.screen = s_current_screen.load(std::memory_order_relaxed);
     command.overlay_refresh_policy = policy;
+    SetCommandSource(command, source);
     return EnqueueDisplayCommand(command);
 }
 
-esp_err_t RequestRefreshCurrentScreen(const RefreshRequest& refresh_request)
+esp_err_t RequestRefreshCurrentScreen(const RefreshRequest& refresh_request, const char* source)
 {
     if (!s_initialized || s_command_queue == nullptr) {
         return ESP_ERR_INVALID_STATE;
@@ -1050,14 +1066,17 @@ esp_err_t RequestRefreshCurrentScreen(const RefreshRequest& refresh_request)
     command.type = DisplayCommandType::kRefreshCurrent;
     command.screen = s_current_screen.load(std::memory_order_relaxed);
     command.refresh_request = refresh_request;
+    SetCommandSource(command, source);
     return EnqueueDisplayCommand(command);
 }
 
-esp_err_t RequestRefreshCurrentScreen(RefreshMode refresh_mode)
+esp_err_t RequestRefreshCurrentScreen(RefreshMode refresh_mode, const char* source)
 {
-    return RequestRefreshCurrentScreen(RefreshRequest{
-        .refresh_mode = refresh_mode,
-    });
+    return RequestRefreshCurrentScreen(
+        RefreshRequest{
+            .refresh_mode = refresh_mode,
+        },
+        source);
 }
 
 esp_err_t RefreshCurrentScreen(const RefreshRequest& refresh_request)

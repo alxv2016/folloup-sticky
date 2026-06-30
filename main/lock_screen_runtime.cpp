@@ -184,7 +184,8 @@ esp_err_t Show()
     }
     const esp_err_t err =
         display_service::SetCurrentScreen(display_service::ScreenId::kLockScreen,
-                                          display_service::RefreshMode::kFull);
+                                          display_service::RefreshMode::kFull,
+                                          "lock_screen_show");
     if (err != ESP_OK) {
         std::lock_guard<std::mutex> lock(s_mutex);
         s_active = already_active;
@@ -215,7 +216,8 @@ esp_err_t Hide()
                  esp_err_to_name(status_bar_err));
     }
     const esp_err_t err = display_service::SetCurrentScreen(restore_screen,
-                                                            display_service::RefreshMode::kFull);
+                                                            display_service::RefreshMode::kFull,
+                                                            "lock_screen_hide");
     if (err != ESP_OK) {
         std::lock_guard<std::mutex> lock(s_mutex);
         s_active = was_active;
