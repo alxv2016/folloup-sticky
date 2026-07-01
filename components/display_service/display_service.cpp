@@ -572,6 +572,19 @@ esp_err_t EnqueueDisplayCommand(const DisplayCommand& incoming)
 
     std::lock_guard<std::mutex> lock(s_command_queue_mutex);
 
+    const auto implies_full_refresh = [](const DisplayCommand& command) {
+        switch (command.type) {
+            case DisplayCommandType::kRefreshOverlay:
+                return command.overlay_refresh_policy ==
+                       OverlayRefreshPolicy::kRebuildUnderlayFull;
+            case DisplayCommandType::kRefreshCurrent:
+            case DisplayCommandType::kSetScreen:
+                return command.refresh_request.refresh_mode == RefreshMode::kFull;
+            default:
+                return false;
+        }
+    };
+
     DisplayCommand merged = incoming;
     DisplayCommand pending = {};
     if (xQueuePeek(s_command_queue, &pending, 0) == pdTRUE) {
@@ -592,6 +605,30 @@ esp_err_t EnqueueDisplayCommand(const DisplayCommand& incoming)
             // (e.g. de-ghosting / base reseed) is not silently downgraded to partial.
             merged.refresh_request.refresh_mode = MergeRefreshMode(
                 pending.refresh_request.refresh_mode, incoming.refresh_request.refresh_mode);
+        }
+
+        // The queue is a single slot, so xQueueOverwrite discards whatever is
+        // pending. When the display task is busy (e.g. blocked on the shared SPI
+        // bus during an SD save), a queued FULL refresh (screen transition, wake,
+        // de-ghost reseed) can be sitting here when a partial refresh of a
+        // different command type arrives. The merges above only apply within a
+        // command type, so a cross-type partial would silently drop the pending
+        // full and leave ghosting. Never lose a queued full: promote the survivor
+        // so a full-screen refresh still happens.
+        if (implies_full_refresh(pending) && !implies_full_refresh(merged)) {
+            switch (merged.type) {
+                case DisplayCommandType::kRefreshOverlay:
+                    merged.overlay_refresh_policy =
+                        OverlayRefreshPolicy::kRebuildUnderlayFull;
+                    break;
+                case DisplayCommandType::kRefreshCurrent:
+                    merged.refresh_request.refresh_mode = RefreshMode::kFull;
+                    merged.refresh_request.scope = RefreshScope::kScreen;
+                    break;
+                case DisplayCommandType::kSetScreen:
+                    merged.refresh_request.refresh_mode = RefreshMode::kFull;
+                    break;
+            }
         }
     }
 
