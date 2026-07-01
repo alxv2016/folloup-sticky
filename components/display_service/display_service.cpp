@@ -12,8 +12,7 @@
 #include "epaper_ui/keyboard.h"
 #include "epaper_ui/lock_screen.h"
 #include "epaper_ui/settings_page.h"
-#include "epaper_ui/shutdown_modal.h"
-#include "epaper_ui/storage_modal.h"
+#include "epaper_ui/card_modal.h"
 #include "epaper_ui/toast.h"
 #include "epaper_ui/dashboard_page.h"
 #include "epaper_ui/time_page.h"
@@ -81,8 +80,7 @@ epaper_ui::TimePageState s_time_page_state = {};
 epaper_ui::DashboardPageState s_dashboard_page_state = {};
 epaper_ui::LockScreenState s_lock_screen_state = {};
 epaper_ui::KeyboardState s_keyboard_state = {};
-epaper_ui::ShutdownModalState s_shutdown_modal_state = {};
-epaper_ui::StorageModalState s_storage_modal_state = {};
+epaper_ui::CardModalState s_card_modal_state = {};
 epaper_ui::SelectModalState s_select_modal_state = {};
 epaper_ui::ToastState s_toast_state = {};
 std::array<uint8_t, STICKY_EPD_BUFFER_LEN> s_underlay_snapshot = {};
@@ -97,8 +95,7 @@ struct RenderSnapshot {
     epaper_ui::DashboardPageState dashboard_page = {};
     epaper_ui::LockScreenState lock_screen = {};
     epaper_ui::KeyboardState keyboard = {};
-    epaper_ui::ShutdownModalState shutdown_modal = {};
-    epaper_ui::StorageModalState storage_modal = {};
+    epaper_ui::CardModalState card_modal = {};
     epaper_ui::SelectModalState select_modal = {};
     epaper_ui::ToastState toast = {};
 };
@@ -180,8 +177,7 @@ const RenderSnapshot& CaptureRenderSnapshot()
     snapshot.dashboard_page = s_dashboard_page_state;
     snapshot.lock_screen = s_lock_screen_state;
     snapshot.keyboard = s_keyboard_state;
-    snapshot.shutdown_modal = s_shutdown_modal_state;
-    snapshot.storage_modal = s_storage_modal_state;
+    snapshot.card_modal = s_card_modal_state;
     snapshot.select_modal = s_select_modal_state;
     snapshot.toast = s_toast_state;
     return snapshot;
@@ -282,24 +278,18 @@ void DrawCurrentOverlays(uint8_t* framebuffer, const RenderSnapshot& snapshot)
                          kPortraitWidth,
                          kPortraitHeight,
                          snapshot.toast);
-    epaper_ui::DrawStorageModal(framebuffer,
-                                STICKY_EPD_WIDTH,
-                                STICKY_EPD_HEIGHT,
-                                kPortraitWidth,
-                                kPortraitHeight,
-                                snapshot.storage_modal);
     epaper_ui::DrawSelectModal(framebuffer,
                                STICKY_EPD_WIDTH,
                                STICKY_EPD_HEIGHT,
                                kPortraitWidth,
                                kPortraitHeight,
                                snapshot.select_modal);
-    epaper_ui::DrawShutdownModal(framebuffer,
-                                 STICKY_EPD_WIDTH,
-                                 STICKY_EPD_HEIGHT,
-                                 kPortraitWidth,
-                                 kPortraitHeight,
-                                 snapshot.shutdown_modal);
+    epaper_ui::DrawCardModal(framebuffer,
+                             STICKY_EPD_WIDTH,
+                             STICKY_EPD_HEIGHT,
+                             kPortraitWidth,
+                             kPortraitHeight,
+                             snapshot.card_modal);
 }
 
 void CaptureUnderlaySnapshot(const uint8_t* framebuffer)
@@ -559,9 +549,8 @@ esp_err_t ApplyTime(bool full_refresh)
 
 bool HasVisibleOverlay(const RenderSnapshot& snapshot)
 {
-    return snapshot.keyboard.visible || snapshot.shutdown_modal.visible ||
-           snapshot.storage_modal.visible || snapshot.select_modal.visible ||
-           snapshot.toast.visible;
+    return snapshot.keyboard.visible || snapshot.card_modal.visible ||
+           snapshot.select_modal.visible || snapshot.toast.visible;
 }
 
 esp_err_t EnqueueDisplayCommand(const DisplayCommand& incoming)
@@ -1032,25 +1021,14 @@ esp_err_t SetKeyboardState(const epaper_ui::KeyboardState& state)
     return ESP_OK;
 }
 
-esp_err_t SetShutdownModalState(const epaper_ui::ShutdownModalState& state)
+esp_err_t SetCardModalState(const epaper_ui::CardModalState& state)
 {
     if (!s_initialized) {
         return ESP_ERR_INVALID_STATE;
     }
 
     std::lock_guard<std::mutex> lock(s_state_mutex);
-    s_shutdown_modal_state = state;
-    return ESP_OK;
-}
-
-esp_err_t SetStorageModalState(const epaper_ui::StorageModalState& state)
-{
-    if (!s_initialized) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    std::lock_guard<std::mutex> lock(s_state_mutex);
-    s_storage_modal_state = state;
+    s_card_modal_state = state;
     return ESP_OK;
 }
 

@@ -5,8 +5,7 @@
 #include "epaper_ui/global_footer.h"
 #include "epaper_ui/keyboard.h"
 #include "epaper_ui/settings_page.h"
-#include "epaper_ui/shutdown_modal.h"
-#include "epaper_ui/storage_modal.h"
+#include "epaper_ui/card_modal.h"
 #include "epaper_ui/select_modal.h"
 #include "epaper_ui/dashboard_page.h"
 #include "epaper_ui/status_bar.h"
@@ -78,8 +77,7 @@ esp_err_t SetTimePageState(const epaper_ui::TimePageState& state);
 esp_err_t SetDashboardPageState(const epaper_ui::DashboardPageState& state);
 esp_err_t SetLockScreenState(const epaper_ui::LockScreenState& state);
 esp_err_t SetKeyboardState(const epaper_ui::KeyboardState& state);
-esp_err_t SetShutdownModalState(const epaper_ui::ShutdownModalState& state);
-esp_err_t SetStorageModalState(const epaper_ui::StorageModalState& state);
+esp_err_t SetCardModalState(const epaper_ui::CardModalState& state);
 esp_err_t SetSelectModalState(const epaper_ui::SelectModalState& state);
 esp_err_t SetToastState(const epaper_ui::ToastState& state);
 // The optional `source` tag names what invoked the refresh; it is echoed in the

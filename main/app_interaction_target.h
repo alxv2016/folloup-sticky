@@ -14,9 +14,10 @@ enum class Owner : uint8_t {
 
 enum class Kind : uint8_t {
     kNone = 0,
-    kOverlayStorageModalAction,
+    // Action button in the shared card modal (shutdown confirm, storage
+    // no-SD / confirm-format / status). primary_index = action button index.
+    kOverlayCardModalAction,
     kOverlaySelectModalItem,
-    kOverlayShutdownAction,
     kOverlayToastCloseAction,
     kOverlayKeyboardKey,
     kFooterItem,

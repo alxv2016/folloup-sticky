@@ -7,8 +7,7 @@
 #include "epaper_ui/keyboard.h"
 #include "epaper_ui/keyboard_controller.h"
 #include "epaper_ui/select_modal.h"
-#include "epaper_ui/shutdown_modal.h"
-#include "epaper_ui/storage_modal.h"
+#include "epaper_ui/card_modal.h"
 #include "epaper_ui/toast.h"
 #include "esp_err.h"
 

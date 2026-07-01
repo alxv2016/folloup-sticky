@@ -1,7 +1,8 @@
-#include "epaper_ui/storage_modal.h"
+#include "epaper_ui/card_modal.h"
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <string_view>
 
 #include "design_tokens.h"
@@ -15,75 +16,11 @@ namespace {
 constexpr design::TypographyRole kTitleRole = design::TypographyRole::kHeadingH2;
 constexpr design::TypographyRole kBodyRole = design::TypographyRole::kBody;
 constexpr design::TypographyRole kButtonRole = design::TypographyRole::kLabelSmall;
+constexpr int kMaxActions = 2;
 
-std::string_view TitleForKind(StorageModalKind kind)
+int ClampedActionCount(const CardModalState& state)
 {
-    switch (kind) {
-        case StorageModalKind::kNoSdCard:
-            return "No SD card";
-        case StorageModalKind::kConfirmFormat:
-            return "Format SD card?";
-        case StorageModalKind::kFormatting:
-            return "Formatting SD card";
-        case StorageModalKind::kFormatSuccess:
-            return "Format success";
-        case StorageModalKind::kFormatError:
-            return "Format failed";
-        case StorageModalKind::kNone:
-        default:
-            return {};
-    }
-}
-
-std::string_view BodyForKind(StorageModalKind kind)
-{
-    switch (kind) {
-        case StorageModalKind::kNoSdCard:
-            return "No SD card is inserted. Insert an SD card to continue.";
-        case StorageModalKind::kConfirmFormat:
-            return "Formatting the SD card will erase everything on the card.";
-        case StorageModalKind::kFormatting:
-            return "Formatting in progress. Please wait...";
-        case StorageModalKind::kFormatSuccess:
-            return "The SD card was formatted successfully.";
-        case StorageModalKind::kFormatError:
-            return "There was an error and the SD card could not be formatted.";
-        case StorageModalKind::kNone:
-        default:
-            return {};
-    }
-}
-
-int ActionCountForKind(StorageModalKind kind)
-{
-    switch (kind) {
-        case StorageModalKind::kConfirmFormat:
-            return 2;
-        case StorageModalKind::kNoSdCard:
-        case StorageModalKind::kFormatSuccess:
-        case StorageModalKind::kFormatError:
-            return 1;
-        case StorageModalKind::kFormatting:
-        case StorageModalKind::kNone:
-        default:
-            return 0;
-    }
-}
-
-std::string_view ActionLabelForKind(StorageModalKind kind, int action_index)
-{
-    switch (kind) {
-        case StorageModalKind::kConfirmFormat:
-            return action_index == 1 ? "Format" : "Cancel";
-        case StorageModalKind::kNoSdCard:
-        case StorageModalKind::kFormatSuccess:
-        case StorageModalKind::kFormatError:
-            return "OK";
-        case StorageModalKind::kFormatting:
-        case StorageModalKind::kNone:
-        default:
-            return {};
-    }
+    return std::min(static_cast<int>(state.action_labels.size()), kMaxActions);
 }
 
 std::array<std::string_view, 4> WrapLines(std::string_view text, int max_width, int* line_count)
@@ -152,7 +89,7 @@ std::array<std::string_view, 4> WrapLines(std::string_view text, int max_width, 
     return lines;
 }
 
-int CardHeight(int portrait_width, const StorageModalState& state)
+int CardHeight(int portrait_width, const CardModalState& state)
 {
     const int card_width = std::max(0, portrait_width - (2 * design::modal::kScreenInset));
     const int inner_width =
@@ -160,9 +97,9 @@ int CardHeight(int portrait_width, const StorageModalState& state)
     const int title_height = LineHeight(kTitleRole);
 
     int body_line_count = 0;
-    (void)WrapLines(BodyForKind(state.kind), inner_width, &body_line_count);
+    (void)WrapLines(state.body_text, inner_width, &body_line_count);
     const int body_height = body_line_count * LineHeight(kBodyRole);
-    const int action_count = ActionCountForKind(state.kind);
+    const int action_count = ClampedActionCount(state);
     const int action_height = action_count > 0 ? design::button::kHeight : 0;
     const int action_gap = action_count > 0 ? design::modal::kContentActionGap : 0;
 
@@ -180,9 +117,9 @@ ButtonStyle BuildButtonStyle(int width)
     return style;
 }
 
-UiRect ActionBoundsFromCard(const UiRect& card, const StorageModalState& state, int action_index)
+UiRect ActionBoundsFromCard(const UiRect& card, const CardModalState& state, int action_index)
 {
-    const int action_count = ActionCountForKind(state.kind);
+    const int action_count = ClampedActionCount(state);
     if (action_index < 0 || action_index >= action_count) {
         return {};
     }
@@ -194,7 +131,7 @@ UiRect ActionBoundsFromCard(const UiRect& card, const StorageModalState& state, 
     if (action_count == 1) {
         ButtonStyle style = BuildButtonStyle(inner_width);
         ButtonState button_state = {
-            .label_text = ActionLabelForKind(state.kind, 0),
+            .label_text = state.action_labels[0],
             .selected = state.selected_action_index == 0,
         };
         return ButtonBounds(inner_x, y, button_state, style);
@@ -205,7 +142,7 @@ UiRect ActionBoundsFromCard(const UiRect& card, const StorageModalState& state, 
     const int x = action_index == 0 ? inner_x : inner_x + button_width + gap;
     ButtonStyle style = BuildButtonStyle(button_width);
     ButtonState button_state = {
-        .label_text = ActionLabelForKind(state.kind, action_index),
+        .label_text = state.action_labels[static_cast<size_t>(action_index)],
         .selected = state.selected_action_index == action_index,
     };
     return ButtonBounds(x, y, button_state, style);
@@ -213,15 +150,15 @@ UiRect ActionBoundsFromCard(const UiRect& card, const StorageModalState& state, 
 
 bool HitActionAnyOrientation(int portrait_width,
                              int portrait_height,
-                             const StorageModalState& state,
+                             const CardModalState& state,
                              int x,
                              int y,
                              int* action_index)
 {
-    const int action_count = ActionCountForKind(state.kind);
+    const int action_count = ClampedActionCount(state);
     for (int index = 0; index < action_count; ++index) {
-        const UiRect bounds = StorageModalActionBounds(
-            portrait_width, portrait_height, state, index);
+        const UiRect bounds =
+            CardModalActionBounds(portrait_width, portrait_height, state, index);
         if (bounds.Contains(x, y)) {
             if (action_index != nullptr) {
                 *action_index = index;
@@ -233,8 +170,8 @@ bool HitActionAnyOrientation(int portrait_width,
     const int mirrored_x = std::max(0, portrait_width - 1 - x);
     const int mirrored_y = std::max(0, portrait_height - 1 - y);
     for (int index = 0; index < action_count; ++index) {
-        const UiRect bounds = StorageModalActionBounds(
-            portrait_width, portrait_height, state, index);
+        const UiRect bounds =
+            CardModalActionBounds(portrait_width, portrait_height, state, index);
         if (bounds.Contains(mirrored_x, y) || bounds.Contains(x, mirrored_y) ||
             bounds.Contains(mirrored_x, mirrored_y)) {
             if (action_index != nullptr) {
@@ -249,11 +186,16 @@ bool HitActionAnyOrientation(int portrait_width,
 
 }  // namespace
 
-UiRect StorageModalPanelBounds(int portrait_width,
-                               int portrait_height,
-                               const StorageModalState& state)
+int CardModalActionCount(const CardModalState& state)
 {
-    if (!state.visible || state.kind == StorageModalKind::kNone) {
+    return ClampedActionCount(state);
+}
+
+UiRect CardModalPanelBounds(int portrait_width,
+                            int portrait_height,
+                            const CardModalState& state)
+{
+    if (!state.visible) {
         return {};
     }
 
@@ -267,24 +209,27 @@ UiRect StorageModalPanelBounds(int portrait_width,
     };
 }
 
-UiRect StorageModalActionBounds(int portrait_width,
-                                int portrait_height,
-                                const StorageModalState& state,
-                                int action_index)
+UiRect CardModalActionBounds(int portrait_width,
+                             int portrait_height,
+                             const CardModalState& state,
+                             int action_index)
 {
     return ActionBoundsFromCard(
-        StorageModalPanelBounds(portrait_width, portrait_height, state), state, action_index);
+        CardModalPanelBounds(portrait_width, portrait_height, state), state, action_index);
 }
 
-int HitTestStorageModalAction(int portrait_width,
-                              int portrait_height,
-                              const StorageModalState& state,
-                              int x,
-                              int y,
-                              bool* hit)
+int HitTestCardModalAction(int portrait_width,
+                           int portrait_height,
+                           const CardModalState& state,
+                           int x,
+                           int y,
+                           bool* hit)
 {
     if (hit != nullptr) {
         *hit = false;
+    }
+    if (!state.visible) {
+        return -1;
     }
     int action_index = -1;
     const bool did_hit =
@@ -295,18 +240,18 @@ int HitTestStorageModalAction(int portrait_width,
     return did_hit ? action_index : -1;
 }
 
-void DrawStorageModal(uint8_t* framebuffer,
-                      int raw_width,
-                      int raw_height,
-                      int portrait_width,
-                      int portrait_height,
-                      const StorageModalState& state)
+void DrawCardModal(uint8_t* framebuffer,
+                   int raw_width,
+                   int raw_height,
+                   int portrait_width,
+                   int portrait_height,
+                   const CardModalState& state)
 {
-    if (!state.visible || state.kind == StorageModalKind::kNone) {
+    if (!state.visible || framebuffer == nullptr) {
         return;
     }
 
-    const UiRect card = StorageModalPanelBounds(portrait_width, portrait_height, state);
+    const UiRect card = CardModalPanelBounds(portrait_width, portrait_height, state);
     if (card.IsEmpty()) {
         return;
     }
@@ -323,7 +268,7 @@ void DrawStorageModal(uint8_t* framebuffer,
                      portrait_width,
                      portrait_height,
                      shadow,
-                     design::color::kGray3);
+                     design::color::kShadow);
     FillPortraitRect(framebuffer,
                      raw_width,
                      raw_height,
@@ -351,12 +296,12 @@ void DrawStorageModal(uint8_t* framebuffer,
                        portrait_height,
                        inner_x,
                        title_y,
-                       TitleForKind(state.kind),
+                       state.title_text,
                        kTitleRole,
                        design::color::kBlack);
 
     int body_line_count = 0;
-    const auto body_lines = WrapLines(BodyForKind(state.kind), inner_width, &body_line_count);
+    const auto body_lines = WrapLines(state.body_text, inner_width, &body_line_count);
     int body_y = title_y + LineHeight(kTitleRole) + design::modal::kTitleContentGap;
     for (int index = 0; index < body_line_count; ++index) {
         DrawTypographyText(framebuffer,
@@ -372,13 +317,13 @@ void DrawStorageModal(uint8_t* framebuffer,
         body_y += LineHeight(kBodyRole);
     }
 
-    const int action_count = ActionCountForKind(state.kind);
+    const int action_count = ClampedActionCount(state);
     for (int index = 0; index < action_count; ++index) {
-        const UiRect bounds = StorageModalActionBounds(
-            portrait_width, portrait_height, state, index);
+        const UiRect bounds =
+            CardModalActionBounds(portrait_width, portrait_height, state, index);
         ButtonStyle style = BuildButtonStyle(bounds.width);
         ButtonState button_state = {
-            .label_text = ActionLabelForKind(state.kind, index),
+            .label_text = state.action_labels[static_cast<size_t>(index)],
             .selected = state.selected_action_index == index,
         };
         DrawButton(framebuffer,

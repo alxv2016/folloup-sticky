@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cstdint>
 #include <mutex>
+#include <string>
+#include <vector>
 
 #include "design_tokens.h"
 #include "display_service.h"
@@ -17,15 +19,24 @@ namespace {
 
 constexpr const char* kTag = "OverlayRuntime";
 
+enum class CardModalPurpose : uint8_t {
+    kNone,
+    kShutdownConfirm,
+    kStorageNoSdCard,
+    kStorageConfirmFormat,
+    kStorageFormatting,
+    kStorageFormatSuccess,
+    kStorageFormatError,
+};
+
 std::mutex s_state_mutex;
 bool s_initialized = false;
-epaper_ui::ShutdownModalState s_shutdown_modal_state = {};
-epaper_ui::StorageModalState s_storage_modal_state = {};
+epaper_ui::CardModalState s_card_modal_state = {};
+CardModalPurpose s_card_modal_purpose = CardModalPurpose::kNone;
 epaper_ui::SelectModalState s_select_modal_state = {};
 epaper_ui::KeyboardState s_keyboard_state = {};
 epaper_ui::ToastState s_toast_state = {};
-page_navigation::RovingFocus s_shutdown_modal_focus = {};
-page_navigation::RovingFocus s_storage_modal_focus = {};
+page_navigation::RovingFocus s_card_modal_focus = {};
 page_navigation::RovingFocus s_select_modal_focus = {};
 bool s_shutdown_request_in_progress = false;
 KeyboardEventHandler s_keyboard_event_handler = nullptr;
@@ -41,15 +52,47 @@ int NormalizeSelectModalIndex(int selected_index, int item_count)
     return item_count > 0 ? page_navigation::RovingFocus::WrapIndex(selected_index, item_count) : 0;
 }
 
-int ShutdownActionIndex(epaper_ui::ShutdownModalAction action)
+epaper_ui::CardModalState BuildCardModalState(CardModalPurpose purpose)
 {
-    return action == epaper_ui::ShutdownModalAction::kConfirm ? 1 : 0;
-}
-
-epaper_ui::ShutdownModalAction ShutdownActionForIndex(int index)
-{
-    return index == 1 ? epaper_ui::ShutdownModalAction::kConfirm
-                      : epaper_ui::ShutdownModalAction::kCancel;
+    epaper_ui::CardModalState state = {};
+    state.visible = true;
+    switch (purpose) {
+        case CardModalPurpose::kShutdownConfirm:
+            state.title_text = "Shut down device?";
+            state.body_text = "Your device will power off. Do you want to continue?";
+            state.action_labels = {"Cancel", "Shut down"};
+            break;
+        case CardModalPurpose::kStorageNoSdCard:
+            state.title_text = "No SD card";
+            state.body_text = "No SD card is inserted. Insert an SD card to continue.";
+            state.action_labels = {"OK"};
+            break;
+        case CardModalPurpose::kStorageConfirmFormat:
+            state.title_text = "Format SD card?";
+            state.body_text = "Formatting the SD card will erase everything on the card.";
+            state.action_labels = {"Cancel", "Format"};
+            break;
+        case CardModalPurpose::kStorageFormatting:
+            state.title_text = "Formatting SD card";
+            state.body_text = "Formatting in progress. Please wait...";
+            state.action_labels = {};
+            break;
+        case CardModalPurpose::kStorageFormatSuccess:
+            state.title_text = "Format success";
+            state.body_text = "The SD card was formatted successfully.";
+            state.action_labels = {"OK"};
+            break;
+        case CardModalPurpose::kStorageFormatError:
+            state.title_text = "Format failed";
+            state.body_text = "There was an error and the SD card could not be formatted.";
+            state.action_labels = {"OK"};
+            break;
+        case CardModalPurpose::kNone:
+        default:
+            state.visible = false;
+            break;
+    }
+    return state;
 }
 
 void AdvanceOverlayInteractionGenerationLocked()
@@ -77,23 +120,12 @@ app_interaction::InteractiveTarget MakeSelectModalItemTarget(int index, int32_t 
     };
 }
 
-app_interaction::InteractiveTarget MakeStorageModalActionTarget(int index, int32_t generation)
+app_interaction::InteractiveTarget MakeCardModalActionTarget(int index, int32_t generation)
 {
     return {
         .owner = app_interaction::Owner::kOverlay,
-        .kind = app_interaction::Kind::kOverlayStorageModalAction,
+        .kind = app_interaction::Kind::kOverlayCardModalAction,
         .primary_index = index,
-        .secondary_index = generation,
-    };
-}
-
-app_interaction::InteractiveTarget MakeShutdownActionTarget(epaper_ui::ShutdownModalAction action,
-                                                            int32_t generation)
-{
-    return {
-        .owner = app_interaction::Owner::kOverlay,
-        .kind = app_interaction::Kind::kOverlayShutdownAction,
-        .primary_index = ShutdownActionIndex(action),
         .secondary_index = generation,
     };
 }
@@ -118,31 +150,9 @@ app_interaction::InteractiveTarget MakeKeyboardKeyTarget(int index, int32_t gene
     };
 }
 
-void SyncShutdownModalStateFromFocusLocked()
+void SyncCardModalStateFromFocusLocked()
 {
-    s_shutdown_modal_state.selected_action =
-        ShutdownActionForIndex(s_shutdown_modal_focus.index());
-}
-
-int StorageModalActionCountLocked()
-{
-    switch (s_storage_modal_state.kind) {
-        case epaper_ui::StorageModalKind::kConfirmFormat:
-            return 2;
-        case epaper_ui::StorageModalKind::kNoSdCard:
-        case epaper_ui::StorageModalKind::kFormatSuccess:
-        case epaper_ui::StorageModalKind::kFormatError:
-            return 1;
-        case epaper_ui::StorageModalKind::kFormatting:
-        case epaper_ui::StorageModalKind::kNone:
-        default:
-            return 0;
-    }
-}
-
-void SyncStorageModalStateFromFocusLocked()
-{
-    s_storage_modal_state.selected_action_index = std::max(0, s_storage_modal_focus.index());
+    s_card_modal_state.selected_action_index = std::max(0, s_card_modal_focus.index());
 }
 
 void SyncSelectModalStateFromFocusLocked()
@@ -157,8 +167,7 @@ int CurrentSelectModalIndexLocked()
 }
 
 struct OverlayRefreshSnapshot {
-    bool shutdown_visible = false;
-    bool storage_visible = false;
+    bool card_modal_visible = false;
     bool select_visible = false;
     bool keyboard_visible = false;
     bool toast_visible = false;
@@ -187,8 +196,7 @@ OverlayRefreshSnapshot CaptureOverlayRefreshSnapshotLocked()
     const int portrait_width = display_service::PortraitWidth();
     const int portrait_height = display_service::PortraitHeight();
 
-    snapshot.shutdown_visible = s_shutdown_modal_state.visible;
-    snapshot.storage_visible = s_storage_modal_state.visible;
+    snapshot.card_modal_visible = s_card_modal_state.visible;
     snapshot.select_visible = s_select_modal_state.visible;
     snapshot.keyboard_visible = s_keyboard_state.visible;
     snapshot.toast_visible = s_toast_state.visible;
@@ -206,14 +214,6 @@ OverlayRefreshSnapshot CaptureOverlayRefreshSnapshotLocked()
                 epaper_ui::KeyboardPanelBounds(portrait_width, portrait_height, s_keyboard_state, {}),
                 design::modal::kShadowOffset));
     }
-    if (snapshot.storage_visible) {
-        snapshot.bounds = epaper_ui::UnionRect(
-            snapshot.bounds,
-            ShadowedRect(
-                epaper_ui::StorageModalPanelBounds(
-                    portrait_width, portrait_height, s_storage_modal_state),
-                design::modal::kShadowOffset));
-    }
     if (snapshot.select_visible) {
         snapshot.bounds = epaper_ui::UnionRect(
             snapshot.bounds,
@@ -222,11 +222,13 @@ OverlayRefreshSnapshot CaptureOverlayRefreshSnapshotLocked()
                     portrait_width, portrait_height, s_select_modal_state),
                 design::modal::kShadowOffset));
     }
-    if (snapshot.shutdown_visible) {
+    if (snapshot.card_modal_visible) {
         snapshot.bounds = epaper_ui::UnionRect(
             snapshot.bounds,
-            ShadowedRect(epaper_ui::ShutdownModalCardBounds(portrait_width, portrait_height),
-                         design::modal::kShadowOffset));
+            ShadowedRect(
+                epaper_ui::CardModalPanelBounds(
+                    portrait_width, portrait_height, s_card_modal_state),
+                design::modal::kShadowOffset));
     }
 
     return snapshot;
@@ -252,8 +254,7 @@ display_service::OverlayRefreshPolicy DetermineOverlayRefreshPolicy(
 
     // Any other visibility change (overlay shown or moved, or a small card
     // modal / toast dismissed) rebuilds the underlay with a partial refresh.
-    const bool visibility_changed = before.shutdown_visible != after.shutdown_visible ||
-                                    before.storage_visible != after.storage_visible ||
+    const bool visibility_changed = before.card_modal_visible != after.card_modal_visible ||
                                     before.select_visible != after.select_visible ||
                                     before.keyboard_visible != after.keyboard_visible ||
                                     before.toast_visible != after.toast_visible;
@@ -262,54 +263,6 @@ display_service::OverlayRefreshPolicy DetermineOverlayRefreshPolicy(
     }
 
     return display_service::OverlayRefreshPolicy::kReuseUnderlaySnapshot;
-}
-
-bool HitShutdownActionAnyOrientation(int portrait_width,
-                                     int portrait_height,
-                                     int x,
-                                     int y,
-                                     epaper_ui::ShutdownModalAction* action)
-{
-    bool hit = false;
-    epaper_ui::ShutdownModalAction candidate = epaper_ui::HitTestShutdownModalAction(
-        portrait_width, portrait_height, x, y, &hit);
-    if (hit) {
-        if (action != nullptr) {
-            *action = candidate;
-        }
-        return true;
-    }
-
-    const int mirrored_x = std::max(0, portrait_width - 1 - x);
-    candidate = epaper_ui::HitTestShutdownModalAction(
-        portrait_width, portrait_height, mirrored_x, y, &hit);
-    if (hit) {
-        if (action != nullptr) {
-            *action = candidate;
-        }
-        return true;
-    }
-
-    const int mirrored_y = std::max(0, portrait_height - 1 - y);
-    candidate = epaper_ui::HitTestShutdownModalAction(
-        portrait_width, portrait_height, x, mirrored_y, &hit);
-    if (hit) {
-        if (action != nullptr) {
-            *action = candidate;
-        }
-        return true;
-    }
-
-    candidate = epaper_ui::HitTestShutdownModalAction(
-        portrait_width, portrait_height, mirrored_x, mirrored_y, &hit);
-    if (hit) {
-        if (action != nullptr) {
-            *action = candidate;
-        }
-        return true;
-    }
-
-    return false;
 }
 
 bool HitSelectModalItemAnyOrientation(int portrait_width,
@@ -371,18 +324,14 @@ bool IsCurrentOverlayTargetLocked(const app_interaction::InteractiveTarget& targ
     return IsOverlayTarget(target) && target.secondary_index == s_overlay_interaction_generation;
 }
 
-esp_err_t ApplyOverlayState(const epaper_ui::ShutdownModalState& shutdown_modal_state,
-                            const epaper_ui::StorageModalState& storage_modal_state,
+esp_err_t ApplyOverlayState(const epaper_ui::CardModalState& card_modal_state,
                             const epaper_ui::SelectModalState& select_modal_state,
                             const epaper_ui::KeyboardState& keyboard_state,
                             const epaper_ui::ToastState& toast_state)
 {
-    ESP_RETURN_ON_ERROR(display_service::SetShutdownModalState(shutdown_modal_state),
+    ESP_RETURN_ON_ERROR(display_service::SetCardModalState(card_modal_state),
                         kTag,
-                        "set shutdown modal state failed");
-    ESP_RETURN_ON_ERROR(display_service::SetStorageModalState(storage_modal_state),
-                        kTag,
-                        "set storage modal state failed");
+                        "set card modal state failed");
     ESP_RETURN_ON_ERROR(display_service::SetSelectModalState(select_modal_state),
                         kTag,
                         "set select modal state failed");
@@ -406,8 +355,7 @@ esp_err_t SyncOverlayState(
                                                    refresh_policy);
     }
 
-    epaper_ui::ShutdownModalState shutdown_modal_state = {};
-    epaper_ui::StorageModalState storage_modal_state = {};
+    epaper_ui::CardModalState card_modal_state = {};
     epaper_ui::SelectModalState select_modal_state = {};
     epaper_ui::KeyboardState keyboard_state = {};
     epaper_ui::ToastState toast_state = {};
@@ -416,15 +364,13 @@ esp_err_t SyncOverlayState(
         if (!s_initialized) {
             return ESP_ERR_INVALID_STATE;
         }
-        shutdown_modal_state = s_shutdown_modal_state;
-        storage_modal_state = s_storage_modal_state;
+        card_modal_state = s_card_modal_state;
         select_modal_state = s_select_modal_state;
         keyboard_state = s_keyboard_state;
         toast_state = s_toast_state;
     }
 
-    return ApplyOverlayState(shutdown_modal_state,
-                             storage_modal_state,
+    return ApplyOverlayState(card_modal_state,
                              select_modal_state,
                              keyboard_state,
                              toast_state);
@@ -468,16 +414,15 @@ esp_err_t Init()
         if (s_initialized) {
             return ESP_OK;
         }
-        s_shutdown_modal_state = {};
-        s_storage_modal_state = {};
+        s_card_modal_state = {};
+        s_card_modal_purpose = CardModalPurpose::kNone;
         s_select_modal_state = {};
         s_keyboard_state = {};
         s_toast_state = {};
         s_overlay_interaction_generation = 1;
         s_feedback_pending = false;
         s_pending_feedback = app_interaction::FeedbackCue::kModalOpen;
-        s_shutdown_modal_focus.Configure(0);
-        s_storage_modal_focus.Configure(0);
+        s_card_modal_focus.Configure(0);
         s_select_modal_focus.Configure(0);
         s_keyboard_event_handler = nullptr;
         s_keyboard_event_context = nullptr;
@@ -503,13 +448,19 @@ esp_err_t Init()
 bool IsShutdownModalVisible()
 {
     std::lock_guard<std::mutex> lock(s_state_mutex);
-    return s_shutdown_modal_state.visible;
+    return s_card_modal_state.visible &&
+           s_card_modal_purpose == CardModalPurpose::kShutdownConfirm;
 }
 
 bool IsStorageModalVisible()
 {
     std::lock_guard<std::mutex> lock(s_state_mutex);
-    return s_storage_modal_state.visible;
+    return s_card_modal_state.visible &&
+           (s_card_modal_purpose == CardModalPurpose::kStorageNoSdCard ||
+            s_card_modal_purpose == CardModalPurpose::kStorageConfirmFormat ||
+            s_card_modal_purpose == CardModalPurpose::kStorageFormatting ||
+            s_card_modal_purpose == CardModalPurpose::kStorageFormatSuccess ||
+            s_card_modal_purpose == CardModalPurpose::kStorageFormatError);
 }
 
 bool IsKeyboardVisible()
@@ -521,17 +472,15 @@ bool IsKeyboardVisible()
 bool IsShutdownPending()
 {
     std::lock_guard<std::mutex> lock(s_state_mutex);
-    return s_shutdown_modal_state.visible || s_shutdown_request_in_progress ||
-           s_storage_modal_state.visible || s_select_modal_state.visible ||
-           s_keyboard_state.visible;
+    return s_card_modal_state.visible || s_shutdown_request_in_progress ||
+           s_select_modal_state.visible || s_keyboard_state.visible;
 }
 
 bool IsInputCaptured()
 {
     std::lock_guard<std::mutex> lock(s_state_mutex);
-    return s_shutdown_modal_state.visible || s_shutdown_request_in_progress ||
-           s_storage_modal_state.visible || s_select_modal_state.visible ||
-           s_keyboard_state.visible ||
+    return s_card_modal_state.visible || s_shutdown_request_in_progress ||
+           s_select_modal_state.visible || s_keyboard_state.visible ||
            (s_toast_state.visible && s_toast_state.show_close_button);
 }
 
@@ -548,11 +497,10 @@ bool ResolveTouchTarget(int x, int y, app_interaction::InteractiveTarget* target
     }
 
     epaper_ui::SelectModalState select_modal_state = {};
-    epaper_ui::StorageModalState storage_modal_state = {};
+    epaper_ui::CardModalState card_modal_state = {};
     epaper_ui::ToastState toast_state = {};
     epaper_ui::KeyboardState keyboard_state = {};
-    bool shutdown_visible = false;
-    bool storage_visible = false;
+    bool card_modal_visible = false;
     bool select_visible = false;
     bool keyboard_visible = false;
     bool toast_visible = false;
@@ -562,15 +510,10 @@ bool ResolveTouchTarget(int x, int y, app_interaction::InteractiveTarget* target
         if (!s_initialized || s_shutdown_request_in_progress) {
             return false;
         }
-        shutdown_visible = s_shutdown_modal_state.visible;
-        storage_visible = s_storage_modal_state.visible && !s_shutdown_modal_state.visible;
-        select_visible = s_select_modal_state.visible && !s_shutdown_modal_state.visible;
-        keyboard_visible = s_keyboard_state.visible && !s_shutdown_modal_state.visible &&
-                           !storage_visible && !select_visible;
-        if (storage_visible) {
-            select_visible = false;
-        }
-        storage_modal_state = s_storage_modal_state;
+        card_modal_visible = s_card_modal_state.visible;
+        select_visible = s_select_modal_state.visible && !card_modal_visible;
+        keyboard_visible = s_keyboard_state.visible && !card_modal_visible && !select_visible;
+        card_modal_state = s_card_modal_state;
         keyboard_state = s_keyboard_state;
         toast_visible = s_toast_state.visible;
         select_modal_state = s_select_modal_state;
@@ -581,14 +524,13 @@ bool ResolveTouchTarget(int x, int y, app_interaction::InteractiveTarget* target
     const int portrait_width = display_service::PortraitWidth();
     const int portrait_height = display_service::PortraitHeight();
 
-    if (storage_visible) {
-        int action_index = -1;
+    if (card_modal_visible) {
         bool hit = false;
-        action_index = epaper_ui::HitTestStorageModalAction(
-            portrait_width, portrait_height, storage_modal_state, x, y, &hit);
+        const int action_index = epaper_ui::HitTestCardModalAction(
+            portrait_width, portrait_height, card_modal_state, x, y, &hit);
         if (hit && action_index >= 0) {
             if (target != nullptr) {
-                *target = MakeStorageModalActionTarget(action_index, generation);
+                *target = MakeCardModalActionTarget(action_index, generation);
             }
             return true;
         }
@@ -619,17 +561,6 @@ bool ResolveTouchTarget(int x, int y, app_interaction::InteractiveTarget* target
             flat_key_index >= 0) {
             if (target != nullptr) {
                 *target = MakeKeyboardKeyTarget(flat_key_index, generation);
-            }
-            return true;
-        }
-        return false;
-    }
-
-    if (shutdown_visible) {
-        epaper_ui::ShutdownModalAction action = epaper_ui::ShutdownModalAction::kCancel;
-        if (HitShutdownActionAnyOrientation(portrait_width, portrait_height, x, y, &action)) {
-            if (target != nullptr) {
-                *target = MakeShutdownActionTarget(action, generation);
             }
             return true;
         }
@@ -673,20 +604,20 @@ bool FocusTouchTarget(const app_interaction::InteractiveTarget& target)
 
         const OverlayRefreshSnapshot before = CaptureOverlayRefreshSnapshotLocked();
         switch (target.kind) {
-            case app_interaction::Kind::kOverlayStorageModalAction:
-                if (!s_storage_modal_state.visible || s_shutdown_modal_state.visible ||
-                    target.primary_index < 0 ||
-                    target.primary_index >= StorageModalActionCountLocked()) {
+            case app_interaction::Kind::kOverlayCardModalAction:
+                if (!s_card_modal_state.visible || target.primary_index < 0 ||
+                    target.primary_index >=
+                        epaper_ui::CardModalActionCount(s_card_modal_state)) {
                     return false;
                 }
-                if (s_storage_modal_state.selected_action_index != target.primary_index) {
-                    s_storage_modal_focus.SetIndex(target.primary_index);
-                    SyncStorageModalStateFromFocusLocked();
+                if (s_card_modal_state.selected_action_index != target.primary_index) {
+                    s_card_modal_focus.SetIndex(target.primary_index);
+                    SyncCardModalStateFromFocusLocked();
                     changed = true;
                 }
                 break;
             case app_interaction::Kind::kOverlaySelectModalItem:
-                if (!s_select_modal_state.visible || s_shutdown_modal_state.visible ||
+                if (!s_select_modal_state.visible || s_card_modal_state.visible ||
                     target.primary_index < 0 ||
                     target.primary_index >= static_cast<int>(s_select_modal_state.items.size())) {
                     return false;
@@ -697,20 +628,6 @@ bool FocusTouchTarget(const app_interaction::InteractiveTarget& target)
                     changed = true;
                 }
                 break;
-            case app_interaction::Kind::kOverlayShutdownAction: {
-                if (!s_shutdown_modal_state.visible ||
-                    (target.primary_index != 0 && target.primary_index != 1)) {
-                    return false;
-                }
-                const epaper_ui::ShutdownModalAction action =
-                    ShutdownActionForIndex(target.primary_index);
-                if (s_shutdown_modal_state.selected_action != action) {
-                    s_shutdown_modal_focus.SetIndex(target.primary_index);
-                    SyncShutdownModalStateFromFocusLocked();
-                    changed = true;
-                }
-                break;
-            }
             case app_interaction::Kind::kOverlayToastCloseAction:
                 if (!s_toast_state.visible || !s_toast_state.show_close_button ||
                     target.primary_index != 0 ||
@@ -795,28 +712,50 @@ app_interaction::InputResult ActivateTouchTarget(const app_interaction::Interact
 
         const OverlayRefreshSnapshot before = CaptureOverlayRefreshSnapshotLocked();
         switch (target.kind) {
-            case app_interaction::Kind::kOverlayStorageModalAction: {
-                if (!s_storage_modal_state.visible || s_shutdown_modal_state.visible ||
-                    target.primary_index < 0 ||
-                    target.primary_index >= StorageModalActionCountLocked()) {
+            case app_interaction::Kind::kOverlayCardModalAction: {
+                if (!s_card_modal_state.visible || target.primary_index < 0 ||
+                    target.primary_index >=
+                        epaper_ui::CardModalActionCount(s_card_modal_state)) {
                     return result;
                 }
-                s_storage_modal_focus.SetIndex(target.primary_index);
-                SyncStorageModalStateFromFocusLocked();
+                s_card_modal_focus.SetIndex(target.primary_index);
+                SyncCardModalStateFromFocusLocked();
                 result.consumed = true;
-                if (s_storage_modal_state.kind == epaper_ui::StorageModalKind::kConfirmFormat &&
-                    target.primary_index == 1) {
-                    result.request_format_sd_card = true;
+                switch (s_card_modal_purpose) {
+                    case CardModalPurpose::kShutdownConfirm:
+                        if (target.primary_index == 1) {
+                            s_shutdown_request_in_progress = true;
+                            result.request_shutdown = true;
+                        } else {
+                            play_click = true;
+                        }
+                        break;
+                    case CardModalPurpose::kStorageConfirmFormat:
+                        if (target.primary_index == 1) {
+                            result.request_format_sd_card = true;
+                        } else {
+                            play_click = true;
+                        }
+                        break;
+                    case CardModalPurpose::kStorageNoSdCard:
+                    case CardModalPurpose::kStorageFormatSuccess:
+                    case CardModalPurpose::kStorageFormatError:
+                        play_click = true;
+                        break;
+                    case CardModalPurpose::kStorageFormatting:
+                    case CardModalPurpose::kNone:
+                    default:
+                        break;
                 }
-                s_storage_modal_state = {};
-                s_storage_modal_focus.Configure(0);
+                s_card_modal_state = {};
+                s_card_modal_purpose = CardModalPurpose::kNone;
+                s_card_modal_focus.Configure(0);
                 AdvanceOverlayInteractionGenerationLocked();
                 request_refresh = true;
-                play_click = true;
                 break;
             }
             case app_interaction::Kind::kOverlaySelectModalItem:
-                if (!s_select_modal_state.visible || s_shutdown_modal_state.visible ||
+                if (!s_select_modal_state.visible || s_card_modal_state.visible ||
                     target.primary_index < 0 ||
                     target.primary_index >= static_cast<int>(s_select_modal_state.items.size())) {
                     return result;
@@ -832,29 +771,6 @@ app_interaction::InputResult ActivateTouchTarget(const app_interaction::Interact
                 request_refresh = true;
                 play_click = true;
                 break;
-            case app_interaction::Kind::kOverlayShutdownAction: {
-                if (!s_shutdown_modal_state.visible ||
-                    (target.primary_index != 0 && target.primary_index != 1)) {
-                    return result;
-                }
-                const epaper_ui::ShutdownModalAction action =
-                    ShutdownActionForIndex(target.primary_index);
-                s_shutdown_modal_focus.SetIndex(target.primary_index);
-                SyncShutdownModalStateFromFocusLocked();
-                s_shutdown_modal_state.selected_action = action;
-                s_shutdown_modal_state.visible = false;
-                s_shutdown_modal_focus.Configure(0);
-                AdvanceOverlayInteractionGenerationLocked();
-                result.consumed = true;
-                if (action == epaper_ui::ShutdownModalAction::kConfirm) {
-                    s_shutdown_request_in_progress = true;
-                    result.request_shutdown = true;
-                } else {
-                    play_click = true;
-                }
-                request_refresh = true;
-                break;
-            }
             case app_interaction::Kind::kOverlayToastCloseAction:
                 if (!s_toast_state.visible || !s_toast_state.show_close_button ||
                     target.primary_index != 0) {
@@ -911,18 +827,13 @@ app_interaction::InputResult ActivateTouchTarget(const app_interaction::Interact
     result.play_feedback = play_click;
     result.feedback_cue = app_interaction::FeedbackCue::kClick;
 
-    if (result.request_format_sd_card) {
-        ESP_LOGI(kTag, "Storage modal touch activate: format_confirmed=1");
-    } else if (result.consumed &&
-               target.kind == app_interaction::Kind::kOverlayStorageModalAction) {
-        ESP_LOGI(kTag, "Storage modal touch activate: format_confirmed=0");
-    } else if (result.select_modal_submitted) {
+    if (result.select_modal_submitted) {
         ESP_LOGI(kTag, "Select modal touch activate index=%d", result.select_modal_selected_index);
     } else if (result.consumed &&
-               target.kind == app_interaction::Kind::kOverlayShutdownAction) {
+               target.kind == app_interaction::Kind::kOverlayCardModalAction) {
         ESP_LOGI(kTag,
-                 "Shutdown modal touch activate action=%s",
-                 result.request_shutdown ? "confirm" : "cancel");
+                 "Card modal touch activate action=%ld",
+                 static_cast<long>(target.primary_index));
     } else if (result.consumed &&
                target.kind == app_interaction::Kind::kOverlayToastCloseAction) {
         ESP_LOGI(kTag, "Toast close activated by touch");
@@ -946,7 +857,54 @@ app_interaction::InputResult ActivateTouchTarget(const app_interaction::Interact
     return result;
 }
 
-esp_err_t ShowShutdownModal()
+namespace {
+
+esp_err_t ShowCardModal(CardModalPurpose purpose, const char* log_label)
+{
+    bool changed = false;
+    bool play_feedback = false;
+    app_interaction::FeedbackCue feedback_cue = app_interaction::FeedbackCue::kModalOpen;
+    display_service::OverlayRefreshPolicy refresh_policy =
+        display_service::OverlayRefreshPolicy::kRebuildUnderlay;
+    {
+        std::lock_guard<std::mutex> lock(s_state_mutex);
+        if (!s_initialized) {
+            return ESP_ERR_INVALID_STATE;
+        }
+        if (s_card_modal_purpose != purpose || !s_card_modal_state.visible) {
+            const OverlayRefreshSnapshot before = CaptureOverlayRefreshSnapshotLocked();
+            s_card_modal_state = BuildCardModalState(purpose);
+            s_card_modal_purpose = purpose;
+            s_card_modal_focus.Configure(
+                epaper_ui::CardModalActionCount(s_card_modal_state), 0);
+            s_card_modal_state.selected_action_index = std::max(0, s_card_modal_focus.index());
+            AdvanceOverlayInteractionGenerationLocked();
+            refresh_policy =
+                DetermineOverlayRefreshPolicy(before, CaptureOverlayRefreshSnapshotLocked());
+            changed = true;
+            // The formatting card is a transient progress state; the original
+            // ShowStorageModalFormatting did NOT queue any feedback. Every other
+            // purpose queues kModalOpen, except the format-error card which
+            // queued kError.
+            play_feedback = purpose != CardModalPurpose::kStorageFormatting;
+            feedback_cue = purpose == CardModalPurpose::kStorageFormatError
+                               ? app_interaction::FeedbackCue::kError
+                               : app_interaction::FeedbackCue::kModalOpen;
+        }
+    }
+
+    if (!changed) {
+        return ESP_OK;
+    }
+    if (play_feedback) {
+        std::lock_guard<std::mutex> lock(s_state_mutex);
+        QueuePendingFeedbackLocked(feedback_cue);
+    }
+    ESP_LOGI(kTag, "Card modal shown: %s", log_label);
+    return SyncOverlayState(true, refresh_policy);
+}
+
+esp_err_t DismissCardModal()
 {
     bool changed = false;
     display_service::OverlayRefreshPolicy refresh_policy =
@@ -957,12 +915,10 @@ esp_err_t ShowShutdownModal()
             return ESP_ERR_INVALID_STATE;
         }
         const OverlayRefreshSnapshot before = CaptureOverlayRefreshSnapshotLocked();
-        if (!s_shutdown_modal_state.visible ||
-            s_shutdown_modal_state.selected_action != epaper_ui::ShutdownModalAction::kCancel) {
-            s_shutdown_modal_state.visible = true;
-            s_shutdown_modal_focus.Configure(
-                2, ShutdownActionIndex(epaper_ui::ShutdownModalAction::kCancel));
-            SyncShutdownModalStateFromFocusLocked();
+        if (s_card_modal_state.visible) {
+            s_card_modal_state = {};
+            s_card_modal_purpose = CardModalPurpose::kNone;
+            s_card_modal_focus.Configure(0);
             AdvanceOverlayInteractionGenerationLocked();
             refresh_policy =
                 DetermineOverlayRefreshPolicy(before, CaptureOverlayRefreshSnapshotLocked());
@@ -974,263 +930,50 @@ esp_err_t ShowShutdownModal()
         return ESP_OK;
     }
 
-    ESP_LOGI(kTag, "Shutdown modal shown");
-    {
-        std::lock_guard<std::mutex> lock(s_state_mutex);
-        QueuePendingFeedbackLocked(app_interaction::FeedbackCue::kModalOpen);
-    }
+    ESP_LOGI(kTag, "Card modal dismissed");
     return SyncOverlayState(true, refresh_policy);
+}
+
+}  // namespace
+
+esp_err_t ShowShutdownModal()
+{
+    return ShowCardModal(CardModalPurpose::kShutdownConfirm, "shutdown_confirm");
 }
 
 esp_err_t DismissShutdownModal()
 {
-    bool changed = false;
-    display_service::OverlayRefreshPolicy refresh_policy =
-        display_service::OverlayRefreshPolicy::kRebuildUnderlay;
-    {
-        std::lock_guard<std::mutex> lock(s_state_mutex);
-        if (!s_initialized) {
-            return ESP_ERR_INVALID_STATE;
-        }
-        const OverlayRefreshSnapshot before = CaptureOverlayRefreshSnapshotLocked();
-        if (s_shutdown_modal_state.visible) {
-            s_shutdown_modal_state.visible = false;
-            s_shutdown_modal_state.selected_action = epaper_ui::ShutdownModalAction::kCancel;
-            s_shutdown_modal_focus.Configure(0);
-            AdvanceOverlayInteractionGenerationLocked();
-            refresh_policy =
-                DetermineOverlayRefreshPolicy(before, CaptureOverlayRefreshSnapshotLocked());
-            changed = true;
-        }
-    }
-
-    if (!changed) {
-        return ESP_OK;
-    }
-
-    ESP_LOGI(kTag, "Shutdown modal dismissed");
-    return SyncOverlayState(true, refresh_policy);
+    return DismissCardModal();
 }
 
 esp_err_t ShowStorageModalNoSdCard()
 {
-    bool changed = false;
-    bool play_feedback = false;
-    display_service::OverlayRefreshPolicy refresh_policy =
-        display_service::OverlayRefreshPolicy::kRebuildUnderlay;
-    {
-        std::lock_guard<std::mutex> lock(s_state_mutex);
-        if (!s_initialized) {
-            return ESP_ERR_INVALID_STATE;
-        }
-        const OverlayRefreshSnapshot before = CaptureOverlayRefreshSnapshotLocked();
-        epaper_ui::StorageModalState next_state = {
-            .visible = true,
-            .kind = epaper_ui::StorageModalKind::kNoSdCard,
-            .selected_action_index = 0,
-        };
-        if (s_storage_modal_state.kind != next_state.kind || !s_storage_modal_state.visible) {
-            s_storage_modal_state = next_state;
-            s_storage_modal_focus.Configure(1, 0);
-            SyncStorageModalStateFromFocusLocked();
-            AdvanceOverlayInteractionGenerationLocked();
-            refresh_policy =
-                DetermineOverlayRefreshPolicy(before, CaptureOverlayRefreshSnapshotLocked());
-            changed = true;
-            play_feedback = true;
-        }
-    }
-
-    if (!changed) {
-        return ESP_OK;
-    }
-    if (play_feedback) {
-        std::lock_guard<std::mutex> lock(s_state_mutex);
-        QueuePendingFeedbackLocked(app_interaction::FeedbackCue::kModalOpen);
-    }
-    ESP_LOGI(kTag, "Storage modal shown: no_sd_card");
-    return SyncOverlayState(true, refresh_policy);
+    return ShowCardModal(CardModalPurpose::kStorageNoSdCard, "no_sd_card");
 }
 
 esp_err_t ShowStorageModalConfirmFormat()
 {
-    bool changed = false;
-    bool play_feedback = false;
-    display_service::OverlayRefreshPolicy refresh_policy =
-        display_service::OverlayRefreshPolicy::kRebuildUnderlay;
-    {
-        std::lock_guard<std::mutex> lock(s_state_mutex);
-        if (!s_initialized) {
-            return ESP_ERR_INVALID_STATE;
-        }
-        const OverlayRefreshSnapshot before = CaptureOverlayRefreshSnapshotLocked();
-        epaper_ui::StorageModalState next_state = {
-            .visible = true,
-            .kind = epaper_ui::StorageModalKind::kConfirmFormat,
-            .selected_action_index = 0,
-        };
-        if (s_storage_modal_state.kind != next_state.kind || !s_storage_modal_state.visible ||
-            s_storage_modal_state.selected_action_index != next_state.selected_action_index) {
-            s_storage_modal_state = next_state;
-            s_storage_modal_focus.Configure(2, 0);
-            SyncStorageModalStateFromFocusLocked();
-            AdvanceOverlayInteractionGenerationLocked();
-            refresh_policy =
-                DetermineOverlayRefreshPolicy(before, CaptureOverlayRefreshSnapshotLocked());
-            changed = true;
-            play_feedback = true;
-        }
-    }
-
-    if (!changed) {
-        return ESP_OK;
-    }
-    if (play_feedback) {
-        std::lock_guard<std::mutex> lock(s_state_mutex);
-        QueuePendingFeedbackLocked(app_interaction::FeedbackCue::kModalOpen);
-    }
-    ESP_LOGI(kTag, "Storage modal shown: confirm_format");
-    return SyncOverlayState(true, refresh_policy);
+    return ShowCardModal(CardModalPurpose::kStorageConfirmFormat, "confirm_format");
 }
 
 esp_err_t ShowStorageModalFormatting()
 {
-    bool changed = false;
-    display_service::OverlayRefreshPolicy refresh_policy =
-        display_service::OverlayRefreshPolicy::kRebuildUnderlay;
-    {
-        std::lock_guard<std::mutex> lock(s_state_mutex);
-        if (!s_initialized) {
-            return ESP_ERR_INVALID_STATE;
-        }
-        const OverlayRefreshSnapshot before = CaptureOverlayRefreshSnapshotLocked();
-        if (!s_storage_modal_state.visible ||
-            s_storage_modal_state.kind != epaper_ui::StorageModalKind::kFormatting) {
-            s_storage_modal_state.visible = true;
-            s_storage_modal_state.kind = epaper_ui::StorageModalKind::kFormatting;
-            s_storage_modal_state.selected_action_index = 0;
-            s_storage_modal_focus.Configure(0);
-            AdvanceOverlayInteractionGenerationLocked();
-            refresh_policy =
-                DetermineOverlayRefreshPolicy(before, CaptureOverlayRefreshSnapshotLocked());
-            changed = true;
-        }
-    }
-
-    if (!changed) {
-        return ESP_OK;
-    }
-    ESP_LOGI(kTag, "Storage modal shown: formatting");
-    return SyncOverlayState(true, refresh_policy);
+    return ShowCardModal(CardModalPurpose::kStorageFormatting, "formatting");
 }
 
 esp_err_t ShowStorageModalFormatSuccess()
 {
-    bool changed = false;
-    bool play_feedback = false;
-    display_service::OverlayRefreshPolicy refresh_policy =
-        display_service::OverlayRefreshPolicy::kRebuildUnderlay;
-    {
-        std::lock_guard<std::mutex> lock(s_state_mutex);
-        if (!s_initialized) {
-            return ESP_ERR_INVALID_STATE;
-        }
-        const OverlayRefreshSnapshot before = CaptureOverlayRefreshSnapshotLocked();
-        epaper_ui::StorageModalState next_state = {
-            .visible = true,
-            .kind = epaper_ui::StorageModalKind::kFormatSuccess,
-            .selected_action_index = 0,
-        };
-        if (s_storage_modal_state.kind != next_state.kind || !s_storage_modal_state.visible) {
-            s_storage_modal_state = next_state;
-            s_storage_modal_focus.Configure(1, 0);
-            SyncStorageModalStateFromFocusLocked();
-            AdvanceOverlayInteractionGenerationLocked();
-            refresh_policy =
-                DetermineOverlayRefreshPolicy(before, CaptureOverlayRefreshSnapshotLocked());
-            changed = true;
-            play_feedback = true;
-        }
-    }
-
-    if (!changed) {
-        return ESP_OK;
-    }
-    if (play_feedback) {
-        std::lock_guard<std::mutex> lock(s_state_mutex);
-        QueuePendingFeedbackLocked(app_interaction::FeedbackCue::kModalOpen);
-    }
-    ESP_LOGI(kTag, "Storage modal shown: format_success");
-    return SyncOverlayState(true, refresh_policy);
+    return ShowCardModal(CardModalPurpose::kStorageFormatSuccess, "format_success");
 }
 
 esp_err_t ShowStorageModalFormatError()
 {
-    bool changed = false;
-    bool play_feedback = false;
-    display_service::OverlayRefreshPolicy refresh_policy =
-        display_service::OverlayRefreshPolicy::kRebuildUnderlay;
-    {
-        std::lock_guard<std::mutex> lock(s_state_mutex);
-        if (!s_initialized) {
-            return ESP_ERR_INVALID_STATE;
-        }
-        const OverlayRefreshSnapshot before = CaptureOverlayRefreshSnapshotLocked();
-        epaper_ui::StorageModalState next_state = {
-            .visible = true,
-            .kind = epaper_ui::StorageModalKind::kFormatError,
-            .selected_action_index = 0,
-        };
-        if (s_storage_modal_state.kind != next_state.kind || !s_storage_modal_state.visible) {
-            s_storage_modal_state = next_state;
-            s_storage_modal_focus.Configure(1, 0);
-            SyncStorageModalStateFromFocusLocked();
-            AdvanceOverlayInteractionGenerationLocked();
-            refresh_policy =
-                DetermineOverlayRefreshPolicy(before, CaptureOverlayRefreshSnapshotLocked());
-            changed = true;
-            play_feedback = true;
-        }
-    }
-
-    if (!changed) {
-        return ESP_OK;
-    }
-    if (play_feedback) {
-        std::lock_guard<std::mutex> lock(s_state_mutex);
-        QueuePendingFeedbackLocked(app_interaction::FeedbackCue::kError);
-    }
-    ESP_LOGI(kTag, "Storage modal shown: format_error");
-    return SyncOverlayState(true, refresh_policy);
+    return ShowCardModal(CardModalPurpose::kStorageFormatError, "format_error");
 }
 
 esp_err_t DismissStorageModal()
 {
-    bool changed = false;
-    display_service::OverlayRefreshPolicy refresh_policy =
-        display_service::OverlayRefreshPolicy::kRebuildUnderlay;
-    {
-        std::lock_guard<std::mutex> lock(s_state_mutex);
-        if (!s_initialized) {
-            return ESP_ERR_INVALID_STATE;
-        }
-        const OverlayRefreshSnapshot before = CaptureOverlayRefreshSnapshotLocked();
-        if (s_storage_modal_state.visible) {
-            s_storage_modal_state = {};
-            s_storage_modal_focus.Configure(0);
-            AdvanceOverlayInteractionGenerationLocked();
-            refresh_policy =
-                DetermineOverlayRefreshPolicy(before, CaptureOverlayRefreshSnapshotLocked());
-            changed = true;
-        }
-    }
-
-    if (!changed) {
-        return ESP_OK;
-    }
-
-    ESP_LOGI(kTag, "Storage modal dismissed");
-    return SyncOverlayState(true, refresh_policy);
+    return DismissCardModal();
 }
 
 esp_err_t ShowSelectModal(const epaper_ui::SelectModalState& state)
@@ -1402,38 +1145,30 @@ bool MoveFocus(int delta)
         }
 
         const OverlayRefreshSnapshot before = CaptureOverlayRefreshSnapshotLocked();
-        if (s_keyboard_state.visible && !s_shutdown_modal_state.visible &&
-            !s_storage_modal_state.visible && !s_select_modal_state.visible) {
+        if (s_card_modal_state.visible) {
+            if (s_card_modal_focus.item_count() <= 0) {
+                return false;
+            }
+
+            if (s_card_modal_focus.Move(delta > 0 ? 1 : -1)) {
+                SyncCardModalStateFromFocusLocked();
+                refresh_policy =
+                    DetermineOverlayRefreshPolicy(before, CaptureOverlayRefreshSnapshotLocked());
+                changed = true;
+            }
+        } else if (s_keyboard_state.visible && !s_select_modal_state.visible) {
             if (epaper_ui::KeyboardController::MoveFocus(s_keyboard_state, delta > 0 ? 1 : -1)) {
                 refresh_policy =
                     DetermineOverlayRefreshPolicy(before, CaptureOverlayRefreshSnapshotLocked());
                 changed = true;
             }
-        } else if (s_storage_modal_state.visible && !s_shutdown_modal_state.visible) {
-            if (s_storage_modal_focus.item_count() <= 0) {
-                return false;
-            }
-
-            if (s_storage_modal_focus.Move(delta > 0 ? 1 : -1)) {
-                SyncStorageModalStateFromFocusLocked();
-                refresh_policy =
-                    DetermineOverlayRefreshPolicy(before, CaptureOverlayRefreshSnapshotLocked());
-                changed = true;
-            }
-        } else if (s_select_modal_state.visible && !s_shutdown_modal_state.visible) {
+        } else if (s_select_modal_state.visible) {
             if (s_select_modal_focus.item_count() <= 0) {
                 return false;
             }
 
             if (s_select_modal_focus.Move(delta > 0 ? 1 : -1)) {
                 SyncSelectModalStateFromFocusLocked();
-                refresh_policy =
-                    DetermineOverlayRefreshPolicy(before, CaptureOverlayRefreshSnapshotLocked());
-                changed = true;
-            }
-        } else if (s_shutdown_modal_state.visible) {
-            if (s_shutdown_modal_focus.Move(delta > 0 ? 1 : -1)) {
-                SyncShutdownModalStateFromFocusLocked();
                 refresh_policy =
                     DetermineOverlayRefreshPolicy(before, CaptureOverlayRefreshSnapshotLocked());
                 changed = true;
@@ -1497,14 +1232,62 @@ app_interaction::InputResult HandleButtonEvent(const button_service::ButtonEvent
             result.consumed = true;
             return result;
         }
-        if (!s_shutdown_modal_state.visible && !s_storage_modal_state.visible &&
-            !s_select_modal_state.visible && !s_keyboard_state.visible) {
+        if (!s_card_modal_state.visible && !s_select_modal_state.visible &&
+            !s_keyboard_state.visible) {
             return result;
         }
 
         const OverlayRefreshSnapshot before = CaptureOverlayRefreshSnapshotLocked();
-        if (s_keyboard_state.visible && !s_shutdown_modal_state.visible &&
-            !s_storage_modal_state.visible && !s_select_modal_state.visible) {
+        if (s_card_modal_state.visible) {
+            result.consumed = true;
+            switch (event.event) {
+                case button_service::ButtonEvent::kSingleClick:
+                    if (event.button == button_service::ButtonId::kPowerOk &&
+                        epaper_ui::CardModalActionCount(s_card_modal_state) > 0) {
+                        const int index = s_card_modal_state.selected_action_index;
+                        switch (s_card_modal_purpose) {
+                            case CardModalPurpose::kShutdownConfirm:
+                                if (index == 1) {
+                                    s_shutdown_request_in_progress = true;
+                                    result.request_shutdown = true;
+                                } else {
+                                    play_click = true;
+                                }
+                                dismiss_modal = true;
+                                break;
+                            case CardModalPurpose::kStorageConfirmFormat:
+                                if (index == 1) {
+                                    result.request_format_sd_card = true;
+                                } else {
+                                    play_click = true;
+                                }
+                                break;
+                            case CardModalPurpose::kStorageNoSdCard:
+                            case CardModalPurpose::kStorageFormatSuccess:
+                            case CardModalPurpose::kStorageFormatError:
+                                play_click = true;
+                                break;
+                            case CardModalPurpose::kStorageFormatting:
+                            case CardModalPurpose::kNone:
+                            default:
+                                break;
+                        }
+                        s_card_modal_state = {};
+                        s_card_modal_purpose = CardModalPurpose::kNone;
+                        s_card_modal_focus.Configure(0);
+                        AdvanceOverlayInteractionGenerationLocked();
+                        request_refresh = true;
+                        refresh_policy = DetermineOverlayRefreshPolicy(
+                            before, CaptureOverlayRefreshSnapshotLocked());
+                    }
+                    break;
+                default:
+                    break;
+            }
+            goto done_locked;
+        }
+
+        if (s_keyboard_state.visible && !s_select_modal_state.visible) {
             result.consumed = true;
             keyboard_handler = s_keyboard_event_handler;
             keyboard_context = s_keyboard_event_context;
@@ -1533,33 +1316,7 @@ app_interaction::InputResult HandleButtonEvent(const button_service::ButtonEvent
             goto done_locked;
         }
 
-        if (s_storage_modal_state.visible && !s_shutdown_modal_state.visible) {
-            result.consumed = true;
-            switch (event.event) {
-                case button_service::ButtonEvent::kSingleClick:
-                    if (event.button == button_service::ButtonId::kPowerOk &&
-                        StorageModalActionCountLocked() > 0) {
-                        const bool confirmed =
-                            s_storage_modal_state.kind ==
-                                epaper_ui::StorageModalKind::kConfirmFormat &&
-                            s_storage_modal_state.selected_action_index == 1;
-                        result.request_format_sd_card = confirmed;
-                        s_storage_modal_state = {};
-                        s_storage_modal_focus.Configure(0);
-                        AdvanceOverlayInteractionGenerationLocked();
-                        request_refresh = true;
-                        play_click = true;
-                        refresh_policy = DetermineOverlayRefreshPolicy(
-                            before, CaptureOverlayRefreshSnapshotLocked());
-                    }
-                    break;
-                default:
-                    break;
-            }
-            goto done_locked;
-        }
-
-        if (s_select_modal_state.visible && !s_shutdown_modal_state.visible) {
+        if (s_select_modal_state.visible) {
             result.consumed = true;
             switch (event.event) {
                 case button_service::ButtonEvent::kSingleClick:
@@ -1581,37 +1338,6 @@ app_interaction::InputResult HandleButtonEvent(const button_service::ButtonEvent
             }
             goto done_locked;
         }
-
-        result.consumed = true;
-        switch (event.event) {
-            case button_service::ButtonEvent::kSingleClick:
-                if (event.button == button_service::ButtonId::kPowerOk) {
-                    if (s_shutdown_modal_state.selected_action ==
-                        epaper_ui::ShutdownModalAction::kConfirm) {
-                        s_shutdown_request_in_progress = true;
-                        result.request_shutdown = true;
-                    } else {
-                        play_click = true;
-                    }
-                    s_shutdown_modal_state.visible = false;
-                    s_shutdown_modal_state.selected_action =
-                        epaper_ui::ShutdownModalAction::kCancel;
-                    s_shutdown_modal_focus.Configure(0);
-                    AdvanceOverlayInteractionGenerationLocked();
-                    request_refresh = true;
-                    dismiss_modal = true;
-                    refresh_policy = DetermineOverlayRefreshPolicy(
-                        before, CaptureOverlayRefreshSnapshotLocked());
-                }
-                break;
-            case button_service::ButtonEvent::kDoubleClick:
-            case button_service::ButtonEvent::kPressDown:
-            case button_service::ButtonEvent::kPressUp:
-            case button_service::ButtonEvent::kLongPressStart:
-            case button_service::ButtonEvent::kLongPressUp:
-            default:
-                break;
-        }
     }
 
 done_locked:
@@ -1622,12 +1348,12 @@ done_locked:
         (request_refresh || result.request_format_sd_card) &&
         !dismiss_modal && !dismiss_select_modal &&
         !result.select_modal_submitted) {
-        ESP_LOGI(kTag, "Storage modal button action=%s",
+        ESP_LOGI(kTag, "Card modal button action=%s",
                  result.request_format_sd_card ? "confirm" : "dismiss");
     }
     if (dismiss_modal) {
         ESP_LOGI(kTag,
-                 "Shutdown modal button action=%s",
+                 "Card modal button action=%s",
                  result.request_shutdown ? "confirm" : "cancel");
     }
     if (dismiss_select_modal) {
