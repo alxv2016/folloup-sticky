@@ -967,6 +967,15 @@ void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
                  TouchPhaseName(event.phase),
                  static_cast<unsigned>(event.count));
     }
+
+    // Touch is fully inert while the lock screen is active: no hit-testing, no
+    // buzzer/feedback, and no activity reset (accidental touches must not keep a
+    // locked device awake). Unlocking is button-only (POWER_OK double-click);
+    // buttons are gated separately in HandleDispatchedButtonEvent.
+    if (lock_screen_runtime::IsActive()) {
+        return;
+    }
+
     if (event.phase == touch_service::TouchPhase::kBegin ||
         event.phase == touch_service::TouchPhase::kMove) {
         device_sleep_runtime::NotifyUserActivity();
