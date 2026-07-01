@@ -421,8 +421,6 @@ const char* OverlayRefreshPolicyName(OverlayRefreshPolicy policy)
     switch (policy) {
         case OverlayRefreshPolicy::kRebuildUnderlay:
             return "rebuild_underlay";
-        case OverlayRefreshPolicy::kRebuildUnderlayFull:
-            return "rebuild_underlay_full";
         case OverlayRefreshPolicy::kReuseUnderlaySnapshot:
             return "reuse_underlay_snapshot";
         default:
@@ -572,11 +570,10 @@ esp_err_t EnqueueDisplayCommand(const DisplayCommand& incoming)
 
     std::lock_guard<std::mutex> lock(s_command_queue_mutex);
 
+    // Overlay refreshes are always partial; only screen refreshes / screen sets
+    // carry a full refresh worth preserving.
     const auto implies_full_refresh = [](const DisplayCommand& command) {
         switch (command.type) {
-            case DisplayCommandType::kRefreshOverlay:
-                return command.overlay_refresh_policy ==
-                       OverlayRefreshPolicy::kRebuildUnderlayFull;
             case DisplayCommandType::kRefreshCurrent:
             case DisplayCommandType::kSetScreen:
                 return command.refresh_request.refresh_mode == RefreshMode::kFull;
@@ -616,18 +613,17 @@ esp_err_t EnqueueDisplayCommand(const DisplayCommand& incoming)
         // full and leave ghosting. Never lose a queued full: promote the survivor
         // so a full-screen refresh still happens.
         if (implies_full_refresh(pending) && !implies_full_refresh(merged)) {
-            switch (merged.type) {
-                case DisplayCommandType::kRefreshOverlay:
-                    merged.overlay_refresh_policy =
-                        OverlayRefreshPolicy::kRebuildUnderlayFull;
-                    break;
-                case DisplayCommandType::kRefreshCurrent:
-                    merged.refresh_request.refresh_mode = RefreshMode::kFull;
-                    merged.refresh_request.scope = RefreshScope::kScreen;
-                    break;
-                case DisplayCommandType::kSetScreen:
-                    merged.refresh_request.refresh_mode = RefreshMode::kFull;
-                    break;
+            if (merged.type == DisplayCommandType::kSetScreen) {
+                // Keep the screen transition, just make it a full refresh.
+                merged.refresh_request.refresh_mode = RefreshMode::kFull;
+            } else {
+                // A full-screen refresh of the current screen also repaints the
+                // current overlays, so it safely subsumes a dropped overlay or
+                // screen partial.
+                merged.type = DisplayCommandType::kRefreshCurrent;
+                merged.screen = s_current_screen.load(std::memory_order_relaxed);
+                merged.refresh_request.refresh_mode = RefreshMode::kFull;
+                merged.refresh_request.scope = RefreshScope::kScreen;
             }
         }
     }
@@ -726,15 +722,12 @@ esp_err_t RefreshCurrentScreenLocked(bool full_refresh)
 
 esp_err_t RefreshOverlayStateLocked(OverlayRefreshPolicy policy)
 {
-    if (policy == OverlayRefreshPolicy::kRebuildUnderlay ||
-        policy == OverlayRefreshPolicy::kRebuildUnderlayFull || !s_underlay_snapshot_valid) {
-        const bool full_refresh = policy == OverlayRefreshPolicy::kRebuildUnderlayFull;
+    if (policy == OverlayRefreshPolicy::kRebuildUnderlay || !s_underlay_snapshot_valid) {
         ESP_LOGI(kTag,
-                 "Overlay refresh path: policy=%s snapshot_valid=%d full=%d",
+                 "Overlay refresh path: policy=%s snapshot_valid=%d",
                  OverlayRefreshPolicyName(policy),
-                 s_underlay_snapshot_valid ? 1 : 0,
-                 full_refresh ? 1 : 0);
-        return RefreshCurrentScreenLocked(full_refresh);
+                 s_underlay_snapshot_valid ? 1 : 0);
+        return RefreshCurrentScreenLocked(false);
     }
 
     EpaperPanel& panel = Panel();
@@ -884,17 +877,12 @@ RefreshRequest MergeRefreshRequest(const RefreshRequest& lhs, const RefreshReque
 
 OverlayRefreshPolicy MergeOverlayRefreshPolicy(OverlayRefreshPolicy lhs, OverlayRefreshPolicy rhs)
 {
-    // Strongest policy wins so a coalesced batch never downgrades a dismissal's
-    // full refresh: full > rebuild(partial) > reuse-snapshot.
-    if (lhs == OverlayRefreshPolicy::kRebuildUnderlayFull ||
-        rhs == OverlayRefreshPolicy::kRebuildUnderlayFull) {
-        return OverlayRefreshPolicy::kRebuildUnderlayFull;
-    }
-    if (lhs == OverlayRefreshPolicy::kRebuildUnderlay ||
-        rhs == OverlayRefreshPolicy::kRebuildUnderlay) {
-        return OverlayRefreshPolicy::kRebuildUnderlay;
-    }
-    return OverlayRefreshPolicy::kReuseUnderlaySnapshot;
+    // A rebuild (partial underlay rebuild) subsumes a snapshot recomposite, so it
+    // wins when a batch coalesces the two.
+    return lhs == OverlayRefreshPolicy::kRebuildUnderlay ||
+                   rhs == OverlayRefreshPolicy::kRebuildUnderlay
+               ? OverlayRefreshPolicy::kRebuildUnderlay
+               : OverlayRefreshPolicy::kReuseUnderlaySnapshot;
 }
 
 esp_err_t Init()
