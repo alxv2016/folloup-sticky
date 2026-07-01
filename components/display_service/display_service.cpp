@@ -594,6 +594,18 @@ esp_err_t EnqueueDisplayCommand(const DisplayCommand& incoming)
             // (e.g. de-ghosting / base reseed) is not silently downgraded to partial.
             merged.refresh_request.refresh_mode = MergeRefreshMode(
                 pending.refresh_request.refresh_mode, incoming.refresh_request.refresh_mode);
+        } else if (pending.type == DisplayCommandType::kSetScreen &&
+                   incoming.type != DisplayCommandType::kSetScreen) {
+            // A queued screen change must not be dropped by a refresh of the (old)
+            // current screen. The single-slot queue would otherwise let an incoming
+            // refresh -- e.g. a status-bar/page refresh from an async event that
+            // fires right after navigation (like a WiFi scan starting on wifi-page
+            // entry) -- overwrite the pending kSetScreen, silently losing the
+            // navigation. Keep the set-screen (it fully renders the new screen and
+            // its overlays, subsuming the refresh) and carry the stronger mode.
+            merged = pending;
+            merged.refresh_request.refresh_mode = MergeRefreshMode(
+                pending.refresh_request.refresh_mode, incoming.refresh_request.refresh_mode);
         }
 
         // The queue is a single slot, so xQueueOverwrite discards whatever is
