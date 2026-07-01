@@ -9,6 +9,7 @@
 #include <mutex>
 #include <string>
 #include <sys/stat.h>
+#include <vector>
 #include <unistd.h>
 
 #include "cJSON.h"
@@ -23,19 +24,9 @@ constexpr const char* kTag = "RecordingArchive";
 constexpr int64_t kMinValidEpoch = 1704067200;  // 2024-01-01 UTC
 constexpr int kMetadataVersion = 1;
 
-struct ArchiveMetadata {
-    int version = kMetadataVersion;
-    std::string recording_id = {};
-    int64_t created_unix_seconds = 0;
-    std::string created_local_date = {};
-    bool time_valid = false;
-    uint32_t duration_ms = 0;
-    bool has_transcript = false;
-    RecordingTag tag = RecordingTag::kNote;
-    bool completed = false;
-    bool follow_up = false;
-    bool follow_up_completed = false;
-};
+// The on-disk metadata shape is the public RecordingMetadata; the scan/mutation code
+// works with it directly so there is a single source of truth for the sidecar format.
+using ArchiveMetadata = RecordingMetadata;
 
 std::mutex s_mutex;
 Snapshot s_snapshot = {};
@@ -672,6 +663,157 @@ esp_err_t MutateMetadataOnMountedFilesystem(const char* mount_point, void* conte
     return mutate->applied ? ESP_OK : ESP_FAIL;
 }
 
+int64_t FileModifiedSeconds(const std::string& path)
+{
+    struct stat st = {};
+    if (stat(path.c_str(), &st) != 0) {
+        return 0;
+    }
+    return static_cast<int64_t>(st.st_mtime);
+}
+
+void ListEntriesInDirectory(const std::string& directory, std::vector<RecordingEntry>* entries)
+{
+    DIR* dir = opendir(directory.c_str());
+    if (dir == nullptr) {
+        return;  // directory may not exist yet
+    }
+
+    struct dirent* dir_entry = nullptr;
+    while ((dir_entry = readdir(dir)) != nullptr) {
+        const std::string name = dir_entry->d_name;
+        if (name.size() < 6 || name.compare(name.size() - 5, 5, ".json") != 0) {
+            continue;
+        }
+
+        const std::string metadata_path = JoinPath(directory, name);
+        std::string json;
+        ArchiveMetadata metadata = {};
+        if (!ReadTextFile(metadata_path, &json) || !ParseMetadata(json, &metadata)) {
+            continue;
+        }
+
+        const std::string base_path = JoinPath(directory, name.substr(0, name.size() - 5));
+        RecordingEntry entry = {};
+        entry.recording_id =
+            !metadata.recording_id.empty() ? metadata.recording_id : name.substr(0, name.size() - 5);
+        entry.recording_path = base_path + ".wav";
+        entry.transcript_path = base_path + ".txt";
+        entry.metadata_path = metadata_path;
+        entry.modified_unix_seconds = FileModifiedSeconds(metadata_path);
+        entry.metadata = metadata;
+        if (metadata.has_transcript) {
+            std::string transcript;
+            if (ReadTextFile(entry.transcript_path, &transcript)) {
+                entry.transcript_text = std::move(transcript);
+            }
+        }
+        entries->push_back(std::move(entry));
+    }
+    closedir(dir);
+}
+
+struct ListEntriesContext {
+    std::vector<RecordingEntry>* entries = nullptr;
+};
+
+esp_err_t ListEntriesOnMountedFilesystem(const char* mount_point, void* context)
+{
+    auto* list = static_cast<ListEntriesContext*>(context);
+    if (mount_point == nullptr || list == nullptr || list->entries == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    ListEntriesInDirectory(JoinPath(mount_point, "recordings"), list->entries);
+    ListEntriesInDirectory(JoinPath(mount_point, "todos"), list->entries);
+    return ESP_OK;
+}
+
+struct DeleteContext {
+    const char* recording_id = nullptr;
+    bool deleted = false;
+};
+
+bool FileExists(const std::string& path)
+{
+    struct stat st = {};
+    return stat(path.c_str(), &st) == 0;
+}
+
+// Soft-delete: recordings are never unlinked outright. Their sidecar files are moved into a
+// mirrored "trash/<subdir>/" tree on the SD card, keeping the same id. This removes them from
+// the app (the scan/list paths only look in recordings/ and todos/) while leaving the bytes
+// recoverable on the card. Matches the reference firmware's behavior.
+esp_err_t DeleteRecordingOnMountedFilesystem(const char* mount_point, void* context)
+{
+    auto* del = static_cast<DeleteContext*>(context);
+    if (mount_point == nullptr || del == nullptr || del->recording_id == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    // Find which archive subdir currently holds the recording (anchored by its .wav).
+    const char* subdir = nullptr;
+    std::string base_path;
+    for (const char* candidate_subdir : {"recordings", "todos"}) {
+        const std::string candidate =
+            JoinPath(JoinPath(mount_point, candidate_subdir), del->recording_id);
+        if (FileExists(candidate + ".wav")) {
+            subdir = candidate_subdir;
+            base_path = candidate;
+            break;
+        }
+    }
+    if (subdir == nullptr) {
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    const std::string trash_root = JoinPath(mount_point, "trash");
+    const std::string trash_dir = JoinPath(trash_root, subdir);
+    if (!EnsureDirectoryExists(trash_root) || !EnsureDirectoryExists(trash_dir)) {
+        return ESP_FAIL;
+    }
+    const std::string trash_base = JoinPath(trash_dir, del->recording_id);
+
+    constexpr std::array<const char*, 3> kSuffixes = {".wav", ".json", ".txt"};
+    std::array<bool, kSuffixes.size()> source_exists = {};
+    for (size_t index = 0; index < kSuffixes.size(); ++index) {
+        source_exists[index] = FileExists(base_path + kSuffixes[index]);
+        // Refuse to clobber a same-id file already in the trash rather than silently overwrite.
+        if (source_exists[index] && FileExists(trash_base + kSuffixes[index])) {
+            ESP_LOGW(kTag, "Trash target already exists: %s%s", trash_base.c_str(),
+                     kSuffixes[index]);
+            return ESP_FAIL;
+        }
+    }
+
+    // Move each present sidecar; roll any completed moves back on failure so a recording can
+    // never end up split across the live and trash directories.
+    std::array<bool, kSuffixes.size()> moved = {};
+    for (size_t index = 0; index < kSuffixes.size(); ++index) {
+        if (!source_exists[index]) {
+            continue;
+        }
+        const std::string src = base_path + kSuffixes[index];
+        const std::string dst = trash_base + kSuffixes[index];
+        errno = 0;
+        if (std::rename(src.c_str(), dst.c_str()) != 0) {
+            ESP_LOGW(kTag, "Move to trash failed: %s -> %s errno=%d (%s)", src.c_str(), dst.c_str(),
+                     errno, std::strerror(errno));
+            for (size_t rollback = 0; rollback < index; ++rollback) {
+                if (moved[rollback]) {
+                    (void)std::rename((trash_base + kSuffixes[rollback]).c_str(),
+                                      (base_path + kSuffixes[rollback]).c_str());
+                }
+            }
+            del->deleted = false;
+            return ESP_FAIL;
+        }
+        moved[index] = true;
+    }
+
+    del->deleted = true;
+    return ESP_OK;
+}
+
 }  // namespace
 
 SaveResult SaveClip(const recording_service::RecordedClip& clip, const SaveOptions& options)
@@ -724,6 +866,28 @@ SaveResult SaveTranscript(const std::string& recording_id, const std::string& tr
         result.error_message = esp_err_to_name(err);
     }
     return result;
+}
+
+std::vector<RecordingEntry> ListRecordings()
+{
+    std::vector<RecordingEntry> entries;
+    ListEntriesContext context = {.entries = &entries};
+    (void)storage_service::RunWithMountedFilesystem(ListEntriesOnMountedFilesystem, &context);
+    return entries;
+}
+
+bool DeleteRecording(const std::string& recording_id)
+{
+    if (recording_id.empty()) {
+        return false;
+    }
+    DeleteContext context = {};
+    context.recording_id = recording_id.c_str();
+    (void)storage_service::RunWithMountedFilesystem(DeleteRecordingOnMountedFilesystem, &context);
+    if (context.deleted) {
+        (void)Refresh();  // recompute archive counts + notify subscribers
+    }
+    return context.deleted;
 }
 
 const char* TagName(RecordingTag tag)

@@ -137,4 +137,18 @@ NavigationModel BuildDashboardPageNavigationModel()
     return model;
 }
 
+NavigationModel BuildVibeCheckPageNavigationModel()
+{
+    NavigationModel model = {};
+    model.scope = NavigationScope::kVibeCheck;
+
+    AddItem(model, NavigationItemSection::kVibeCheckPageControls,
+            NavigationItemRole::kVibeCheckPageCard, 0);
+    AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterSettings, 1);
+    AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterWifi, 2);
+    AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterTime, 3);
+    AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterHome, 0);
+    return model;
+}
+
 }  // namespace page_navigation

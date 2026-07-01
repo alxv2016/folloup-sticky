@@ -43,6 +43,7 @@
 #include "dashboard_page_runtime.h"
 #include "recording_archive_service.h"
 #include "time_page_runtime.h"
+#include "vibe_check_page_runtime.h"
 #include "wifi_page_runtime.h"
 
 namespace app_shell {
@@ -223,6 +224,27 @@ esp_err_t ShowSettingsScreen(display_service::RefreshMode refresh_mode)
                                              "show_settings_screen");
 }
 
+esp_err_t ShowVibeCheckScreen(display_service::RefreshMode refresh_mode)
+{
+    SyncStatusBarState("show_vibe_check_screen");
+    page_input_runtime::ResetFocusForScreen(display_service::ScreenId::kVibeCheck);
+    page_input_runtime::ConfigureTouchProviderForScreen(display_service::ScreenId::kVibeCheck);
+    footer_runtime::SetLayoutState(FooterLayoutForScreen(display_service::ScreenId::kVibeCheck));
+    footer_runtime::SetProjectionState(
+        page_input_runtime::BuildFooterProjectionForScreen(display_service::ScreenId::kVibeCheck));
+    const esp_err_t footer_err = footer_runtime::UpdateDisplayState();
+    if (footer_err != ESP_OK && footer_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Footer sync before vibe check screen failed: %s",
+                 esp_err_to_name(footer_err));
+    }
+    const esp_err_t vibe_err = vibe_check_page_runtime::SyncFromService(false);
+    if (vibe_err != ESP_OK && vibe_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Vibe check page sync before show failed: %s", esp_err_to_name(vibe_err));
+    }
+    return display_service::SetCurrentScreen(display_service::ScreenId::kVibeCheck, refresh_mode,
+                                             "show_vibe_check_screen");
+}
+
 esp_err_t ShowWifiScreen(display_service::RefreshMode refresh_mode)
 {
     SyncStatusBarState("show_wifi_screen");
@@ -312,6 +334,20 @@ app_interaction::InputResult HandleFooterActivate(footer_runtime::FooterFocusIte
                  static_cast<int>(item), esp_err_to_name(err));
     }
     return result;
+}
+
+// Routes a dashboard menu tap/press to its page. Returns false for items whose destination
+// page does not exist yet, letting dashboard_page_runtime fall back to its "coming soon" toast.
+bool HandleDashboardMenuItem(int menu_index, void*)
+{
+    if (menu_index == static_cast<int>(epaper_ui::DashboardMenuItem::kVibeCheck)) {
+        const esp_err_t err = ShowVibeCheckScreen(display_service::RefreshMode::kFull);
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(kTag, "Show vibe check screen failed: %s", esp_err_to_name(err));
+        }
+        return true;
+    }
+    return false;
 }
 
 void ConfirmPendingOtaImage()
@@ -896,6 +932,10 @@ void HandleDispatchedButtonEvent(const button_service::ButtonEventInfo& event)
             // lock-screen refresh, making the keys feel live behind the lock.
             break;
         case button_service::ButtonEvent::kDoubleClick:
+            // POWER_OK double-click toggles the lock screen. DOWN double-click is reserved as
+            // the app-wide "exit an entered UI" gesture and is handled by the per-screen page
+            // input (WiFi network list, Vibe Check card, ...); it is intentionally a no-op at
+            // this level. Any other button just plays the double-click cue.
             if (event.button == button_service::ButtonId::kPowerOk) {
                 const bool was_active = lock_screen_runtime::IsActive();
                 const esp_err_t err = lock_screen_runtime::Toggle();
@@ -905,17 +945,6 @@ void HandleDispatchedButtonEvent(const button_service::ButtonEventInfo& event)
                 } else {
                     PlayFeedback(was_active ? feedback_service::FeedbackEvent::kUnlock
                                             : feedback_service::FeedbackEvent::kLock);
-                }
-            } else if (event.button == button_service::ButtonId::kDown) {
-                if (!lock_screen_runtime::IsActive() &&
-                    display_service::GetCurrentScreen() == display_service::ScreenId::kHome) {
-                    const esp_err_t err = ShowSettingsScreen(display_service::RefreshMode::kFull);
-                    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-                        ESP_LOGW(kTag, "DOWN double-click settings navigation failed: %s",
-                                 esp_err_to_name(err));
-                    } else {
-                        PlayFeedback(feedback_service::FeedbackEvent::kButtonDoubleClick);
-                    }
                 }
             } else if (event.button != button_service::ButtonId::kDown) {
                 PlayFeedback(feedback_service::FeedbackEvent::kButtonDoubleClick);
@@ -1200,6 +1229,7 @@ void InitRecordingSessionService()
 void InitFooterRuntime()
 {
     footer_runtime::SetActivateHandler(HandleFooterActivate, nullptr);
+    dashboard_page_runtime::SetMenuItemHandler(HandleDashboardMenuItem, nullptr);
     page_input_runtime::ConfigureTouchProviderForScreen(display_service::ScreenId::kHome);
     footer_runtime::SetLayoutState(FooterLayoutForScreen(display_service::ScreenId::kHome));
     footer_runtime::SetProjectionState(

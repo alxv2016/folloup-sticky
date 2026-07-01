@@ -16,6 +16,7 @@
 #include "epaper_ui/toast.h"
 #include "epaper_ui/dashboard_page.h"
 #include "epaper_ui/time_page.h"
+#include "epaper_ui/vibe_check_page.h"
 #include "epaper_ui/wifi_page.h"
 #include "epaper_panel.h"
 #include "esp_check.h"
@@ -78,6 +79,7 @@ epaper_ui::SettingsPageState s_settings_page_state = {};
 epaper_ui::WifiPageState s_wifi_page_state = {};
 epaper_ui::TimePageState s_time_page_state = {};
 epaper_ui::DashboardPageState s_dashboard_page_state = {};
+epaper_ui::VibeCheckPageState s_vibe_check_page_state = {};
 epaper_ui::LockScreenState s_lock_screen_state = {};
 epaper_ui::KeyboardState s_keyboard_state = {};
 epaper_ui::CardModalState s_card_modal_state = {};
@@ -93,6 +95,7 @@ struct RenderSnapshot {
     epaper_ui::WifiPageState wifi_page = {};
     epaper_ui::TimePageState time_page = {};
     epaper_ui::DashboardPageState dashboard_page = {};
+    epaper_ui::VibeCheckPageState vibe_check_page = {};
     epaper_ui::LockScreenState lock_screen = {};
     epaper_ui::KeyboardState keyboard = {};
     epaper_ui::CardModalState card_modal = {};
@@ -175,6 +178,7 @@ const RenderSnapshot& CaptureRenderSnapshot()
     snapshot.wifi_page = s_wifi_page_state;
     snapshot.time_page = s_time_page_state;
     snapshot.dashboard_page = s_dashboard_page_state;
+    snapshot.vibe_check_page = s_vibe_check_page_state;
     snapshot.lock_screen = s_lock_screen_state;
     snapshot.keyboard = s_keyboard_state;
     snapshot.card_modal = s_card_modal_state;
@@ -372,6 +376,20 @@ void DrawTimeUnderlay(uint8_t* framebuffer, const RenderSnapshot& snapshot)
                             snapshot.global_footer);
 }
 
+void DrawVibeCheckUnderlay(uint8_t* framebuffer, const RenderSnapshot& snapshot)
+{
+    EpaperPanel& panel = Panel();
+    panel.Clear(true);
+    epaper_ui::DrawVibeCheckPage(framebuffer,
+                                 STICKY_EPD_WIDTH,
+                                 STICKY_EPD_HEIGHT,
+                                 kPortraitWidth,
+                                 kPortraitHeight,
+                                 snapshot.vibe_check_page,
+                                 snapshot.status_bar,
+                                 snapshot.global_footer);
+}
+
 void LogMetrics(const EpaperPanelMetrics& metrics)
 {
     ESP_LOGI(kTag,
@@ -547,6 +565,31 @@ esp_err_t ApplyTime(bool full_refresh)
     return ESP_OK;
 }
 
+esp_err_t ApplyVibeCheck(bool full_refresh)
+{
+    const RenderSnapshot& snapshot = CaptureRenderSnapshot();
+    EpaperPanel& panel = Panel();
+    DrawVibeCheckUnderlay(panel.framebuffer(), snapshot);
+    CaptureUnderlaySnapshot(panel.framebuffer());
+    DrawCurrentOverlays(panel.framebuffer(), snapshot);
+
+    DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
+    if (bus_guard.err() != ESP_OK) {
+        return bus_guard.err();
+    }
+
+    RefreshBusyGuard refresh_busy;
+    const esp_err_t err = full_refresh ? panel.RefreshFullBase()
+                                       : panel.RefreshPartialFullScreen();
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    LogMetrics(panel.metrics());
+    s_current_screen.store(ScreenId::kVibeCheck, std::memory_order_relaxed);
+    return ESP_OK;
+}
+
 bool HasVisibleOverlay(const RenderSnapshot& snapshot)
 {
     return snapshot.keyboard.visible || snapshot.card_modal.visible ||
@@ -660,6 +703,9 @@ esp_err_t RefreshCurrentScreenRegionLocked()
         case ScreenId::kTime:
             DrawTimeUnderlay(panel.framebuffer(), snapshot);
             break;
+        case ScreenId::kVibeCheck:
+            DrawVibeCheckUnderlay(panel.framebuffer(), snapshot);
+            break;
         case ScreenId::kLockScreen:
             DrawLockScreenUnderlay(panel.framebuffer(), snapshot);
             break;
@@ -717,6 +763,8 @@ esp_err_t RefreshCurrentScreenLocked(bool full_refresh)
             return ApplyWifi(full_refresh);
         case ScreenId::kTime:
             return ApplyTime(full_refresh);
+        case ScreenId::kVibeCheck:
+            return ApplyVibeCheck(full_refresh);
         case ScreenId::kLockScreen:
             return ApplyLockScreen(full_refresh);
         default:
@@ -812,6 +860,8 @@ void DisplayTask(void*)
                 err = ApplySettings(command.refresh_request.refresh_mode == RefreshMode::kFull);
             } else if (command.screen == ScreenId::kTime) {
                 err = ApplyTime(command.refresh_request.refresh_mode == RefreshMode::kFull);
+            } else if (command.screen == ScreenId::kVibeCheck) {
+                err = ApplyVibeCheck(command.refresh_request.refresh_mode == RefreshMode::kFull);
             } else {
                 err = ApplyHomeScreen(command.refresh_request.refresh_mode == RefreshMode::kFull);
             }
@@ -1008,6 +1058,17 @@ esp_err_t SetDashboardPageState(const epaper_ui::DashboardPageState& state)
 
     std::lock_guard<std::mutex> lock(s_state_mutex);
     s_dashboard_page_state = state;
+    return ESP_OK;
+}
+
+esp_err_t SetVibeCheckPageState(const epaper_ui::VibeCheckPageState& state)
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    std::lock_guard<std::mutex> lock(s_state_mutex);
+    s_vibe_check_page_state = state;
     return ESP_OK;
 }
 

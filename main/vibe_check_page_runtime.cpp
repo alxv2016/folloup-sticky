@@ -1,28 +1,25 @@
-#include "dashboard_page_runtime.h"
+#include "vibe_check_page_runtime.h"
 
 #include <climits>
 #include <mutex>
+#include <string>
+#include <vector>
 
-#include "dashboard_page_coordinator.h"
-#include "epaper_ui/dashboard_page.h"
+#include "epaper_ui/vibe_check_page.h"
 #include "esp_log.h"
-#include "overlay_runtime.h"
 #include "page_navigation/page_focus_projection.h"
 #include "recording_archive_service.h"
 #include "ui_refresh_runtime.h"
+#include "vibe_check_page_coordinator.h"
 
-namespace dashboard_page_runtime {
+namespace vibe_check_page_runtime {
 namespace {
 
-constexpr const char* kTag = "DashboardPageRuntime";
+constexpr const char* kTag = "VibeCheckPageRuntime";
 
 std::mutex s_mutex;
-DashboardPageCoordinator s_coordinator = {};
+VibeCheckPageCoordinator s_coordinator = {};
 int32_t s_interaction_generation = 1;
-uint32_t s_last_welcome_period = 0;
-bool s_welcome_period_valid = false;
-MenuItemHandler s_menu_item_handler = nullptr;
-void* s_menu_item_context = nullptr;
 
 void AdvanceInteractionGenerationLocked()
 {
@@ -31,6 +28,12 @@ void AdvanceInteractionGenerationLocked()
     } else {
         ++s_interaction_generation;
     }
+}
+
+int CardFocusIndexLocked()
+{
+    return s_coordinator.navigation_model().IndexOfRole(
+        page_navigation::NavigationItemRole::kVibeCheckPageCard);
 }
 
 footer_runtime::FooterFocusItem FooterItemForSelectedIndex(int selected_index)
@@ -68,7 +71,7 @@ page_navigation::NavigationItemRole FooterRoleForFooterItem(footer_runtime::Foot
     }
 }
 
-epaper_ui::DashboardPageState BuildStateLocked()
+epaper_ui::VibeCheckPageState BuildStateLocked()
 {
     return s_coordinator.BuildState();
 }
@@ -76,7 +79,8 @@ epaper_ui::DashboardPageState BuildStateLocked()
 footer_runtime::ProjectionState BuildFooterProjectionStateLocked()
 {
     const page_navigation::PageFocusProjection projection = page_navigation::ProjectPageFocus(
-        s_coordinator.navigation_model(), page_navigation::NavigationItemSection::kDashboardPageMenu,
+        s_coordinator.navigation_model(),
+        page_navigation::NavigationItemSection::kVibeCheckPageControls,
         s_coordinator.focus().index(), -1, -1);
     footer_runtime::ProjectionState state = {};
     state.focused_item = FooterItemForSelectedIndex(projection.footer_selected_index);
@@ -86,11 +90,11 @@ footer_runtime::ProjectionState BuildFooterProjectionStateLocked()
 bool FooterProjectionChangedForFocusIndexes(int old_focus_index, int new_focus_index)
 {
     const page_navigation::PageFocusProjection old_projection = page_navigation::ProjectPageFocus(
-        s_coordinator.navigation_model(), page_navigation::NavigationItemSection::kDashboardPageMenu,
-        old_focus_index, -1, -1);
+        s_coordinator.navigation_model(),
+        page_navigation::NavigationItemSection::kVibeCheckPageControls, old_focus_index, -1, -1);
     const page_navigation::PageFocusProjection new_projection = page_navigation::ProjectPageFocus(
-        s_coordinator.navigation_model(), page_navigation::NavigationItemSection::kDashboardPageMenu,
-        new_focus_index, -1, -1);
+        s_coordinator.navigation_model(),
+        page_navigation::NavigationItemSection::kVibeCheckPageControls, new_focus_index, -1, -1);
     return FooterItemForSelectedIndex(old_projection.footer_selected_index) !=
            FooterItemForSelectedIndex(new_projection.footer_selected_index);
 }
@@ -100,7 +104,7 @@ bool FooterProjectionChangedForFocusIndexes(int old_focus_index, int new_focus_i
 esp_err_t UpdateDisplayState()
 {
     std::lock_guard<std::mutex> lock(s_mutex);
-    return display_service::SetDashboardPageState(BuildStateLocked());
+    return display_service::SetVibeCheckPageState(BuildStateLocked());
 }
 
 esp_err_t UpdateDisplayStateAndRequestRefresh(display_service::RefreshMode refresh_mode)
@@ -113,7 +117,7 @@ esp_err_t UpdateDisplayStateAndRequestRefresh(display_service::RefreshMode refre
 esp_err_t UpdateDisplayStateAndRequestRefresh(
     const display_service::RefreshRequest& refresh_request)
 {
-    return ui_refresh_runtime::Schedule(ui_refresh_runtime::SurfaceKey::kDashboardPage,
+    return ui_refresh_runtime::Schedule(ui_refresh_runtime::SurfaceKey::kVibeCheckPage,
                                         &UpdateDisplayState, refresh_request);
 }
 
@@ -125,7 +129,7 @@ page_actions::FocusMoveOutcome MoveFocus(int delta)
     {
         std::lock_guard<std::mutex> lock(s_mutex);
         old_focus_index = s_coordinator.focus().index();
-        result = dashboard_page_interactions::HandleMoveFocus(s_coordinator, delta);
+        result = vibe_check_page_interactions::HandleMoveFocus(s_coordinator, delta);
         if (!result.handled) {
             return result;
         }
@@ -136,10 +140,10 @@ page_actions::FocusMoveOutcome MoveFocus(int delta)
     return result;
 }
 
-dashboard_page_interactions::ActivateResult ActivateFocusedItem()
+vibe_check_page_interactions::ActivateResult ActivateFocusedItem()
 {
     std::lock_guard<std::mutex> lock(s_mutex);
-    return dashboard_page_interactions::HandlePrimaryActivate(s_coordinator);
+    return vibe_check_page_interactions::HandlePrimaryActivate(s_coordinator);
 }
 
 bool ResolveTouchTarget(int x, int y, app_interaction::InteractiveTarget* target)
@@ -147,37 +151,49 @@ bool ResolveTouchTarget(int x, int y, app_interaction::InteractiveTarget* target
     if (target != nullptr) {
         *target = {};
     }
-    const epaper_ui::DashboardPageState state = [&]() {
+    epaper_ui::VibeCheckPageState state;
+    int32_t generation = 0;
+    {
         std::lock_guard<std::mutex> lock(s_mutex);
-        return BuildStateLocked();
-    }();
+        state = BuildStateLocked();
+        generation = s_interaction_generation;
+    }
 
-    int menu_index = -1;
-    if (!epaper_ui::HitTestDashboardMenuItem(display_service::PortraitWidth(),
-                                             display_service::PortraitHeight(), state, x, y,
-                                             &menu_index)) {
-        return false;
+    epaper_ui::VibeCardActionSelection action = epaper_ui::VibeCardActionSelection::kNone;
+    if (epaper_ui::HitTestVibeCheckAction(display_service::PortraitWidth(),
+                                          display_service::PortraitHeight(), state, x, y, &action)) {
+        if (target != nullptr) {
+            *target = {
+                .owner = app_interaction::Owner::kPage,
+                .kind = app_interaction::Kind::kPageAction,
+                .primary_index = static_cast<int32_t>(action),
+                .secondary_index = generation,
+            };
+        }
+        return true;
     }
-    // Menu items occupy focus indices 0..n-1, so the menu index is the focus index.
-    if (target != nullptr) {
-        *target = {
-            .owner = app_interaction::Owner::kPage,
-            .kind = app_interaction::Kind::kPageAction,
-            .primary_index = menu_index,
-            .secondary_index = s_interaction_generation,
-        };
+
+    if (epaper_ui::HitTestVibeCheckCard(display_service::PortraitWidth(),
+                                        display_service::PortraitHeight(), state, x, y)) {
+        if (target != nullptr) {
+            *target = {
+                .owner = app_interaction::Owner::kPage,
+                .kind = app_interaction::Kind::kPageComposite,
+                .primary_index = 0,
+                .secondary_index = generation,
+            };
+        }
+        return true;
     }
-    return true;
+    return false;
 }
 
 page_actions::FocusUpdateOutcome FocusTouchTarget(const app_interaction::InteractiveTarget& target)
 {
     page_actions::FocusUpdateOutcome result = {};
-    if (target.owner != app_interaction::Owner::kPage ||
-        target.kind != app_interaction::Kind::kPageAction) {
+    if (target.owner != app_interaction::Owner::kPage) {
         return result;
     }
-    bool changed = false;
     int old_focus_index = -1;
     int new_focus_index = -1;
     {
@@ -186,11 +202,15 @@ page_actions::FocusUpdateOutcome FocusTouchTarget(const app_interaction::Interac
             return result;
         }
         old_focus_index = s_coordinator.focus().index();
-        changed = s_coordinator.SetFocusIndex(target.primary_index);
+        s_coordinator.SetFocusIndex(CardFocusIndexLocked());
+        if (target.kind == app_interaction::Kind::kPageAction) {
+            s_coordinator.EnterCardAtAction(static_cast<int>(target.primary_index));
+        } else if (target.kind == app_interaction::Kind::kPageComposite) {
+            s_coordinator.ExitCard();
+        } else {
+            return result;
+        }
         new_focus_index = s_coordinator.focus().index();
-    }
-    if (!changed) {
-        return result;
     }
     result.handled = true;
     result.apply_page_state = true;
@@ -199,20 +219,27 @@ page_actions::FocusUpdateOutcome FocusTouchTarget(const app_interaction::Interac
     return result;
 }
 
-dashboard_page_interactions::ActivateResult ActivateTouchTarget(
+vibe_check_page_interactions::ActivateResult ActivateTouchTarget(
     const app_interaction::InteractiveTarget& target)
 {
-    dashboard_page_interactions::ActivateResult result = {};
-    if (target.owner != app_interaction::Owner::kPage ||
-        target.kind != app_interaction::Kind::kPageAction) {
+    vibe_check_page_interactions::ActivateResult result = {};
+    if (target.owner != app_interaction::Owner::kPage) {
         return result;
     }
     std::lock_guard<std::mutex> lock(s_mutex);
     if (target.secondary_index != s_interaction_generation) {
         return result;
     }
-    (void)s_coordinator.SetFocusIndex(target.primary_index);
-    return dashboard_page_interactions::HandlePrimaryActivate(s_coordinator);
+    s_coordinator.SetFocusIndex(CardFocusIndexLocked());
+    if (target.kind == app_interaction::Kind::kPageAction) {
+        s_coordinator.EnterCardAtAction(static_cast<int>(target.primary_index));
+        return vibe_check_page_interactions::HandlePrimaryActivate(s_coordinator);
+    }
+    if (target.kind == app_interaction::Kind::kPageComposite) {
+        // A tap on the card body just focuses it; the action buttons are tapped directly.
+        result.handled = true;
+    }
+    return result;
 }
 
 footer_runtime::ProjectionState BuildFooterProjectionState()
@@ -237,6 +264,7 @@ page_actions::FocusUpdateOutcome FocusFooterItem(footer_runtime::FooterFocusItem
             return result;
         }
         old_focus_index = s_coordinator.focus().index();
+        s_coordinator.ExitCard();
         if (!s_coordinator.SetFocusIndex(focus_index)) {
             return result;
         }
@@ -263,54 +291,91 @@ void ResetFocus()
 
 esp_err_t SyncFromService(bool request_refresh_if_active)
 {
+    std::vector<recording_archive_service::RecordingEntry> entries =
+        recording_archive_service::ListRecordings();
     {
         std::lock_guard<std::mutex> lock(s_mutex);
-        s_coordinator.RefreshFromArchive(recording_archive_service::GetSnapshot());
-        // Re-baseline the rotation so RefreshWelcomeIfRotated only fires on later rollovers.
-        s_last_welcome_period = DashboardPageCoordinator::WelcomePeriodsSinceEpoch();
-        s_welcome_period_valid = true;
+        s_coordinator.RefreshFromArchive(entries);
     }
     const esp_err_t err =
         request_refresh_if_active
             ? UpdateDisplayStateAndRequestRefresh(display_service::RefreshMode::kPartial)
             : UpdateDisplayState();
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        ESP_LOGW(kTag, "Dashboard sync failed: %s", esp_err_to_name(err));
+        ESP_LOGW(kTag, "Vibe check sync failed: %s", esp_err_to_name(err));
     }
     return err;
 }
 
-esp_err_t RefreshWelcomeIfRotated()
+bool ExitFocusedCard()
 {
-    const uint32_t period = DashboardPageCoordinator::WelcomePeriodsSinceEpoch();
+    bool exited = false;
     {
         std::lock_guard<std::mutex> lock(s_mutex);
-        if (s_welcome_period_valid && period == s_last_welcome_period) {
-            return ESP_OK;  // still in the same interval; nothing to repaint
-        }
-        s_last_welcome_period = period;
-        s_welcome_period_valid = true;
+        exited = s_coordinator.ExitCard();
     }
-    return UpdateDisplayStateAndRequestRefresh(display_service::RefreshMode::kPartial);
+    if (exited) {
+        (void)UpdateDisplayStateAndRequestRefresh(display_service::RefreshMode::kPartial);
+    }
+    return exited;
 }
 
-void SetMenuItemHandler(MenuItemHandler handler, void* context)
+void EnterFocusedCard()
 {
-    s_menu_item_handler = handler;
-    s_menu_item_context = context;
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        s_coordinator.EnterCard();
+    }
+    (void)UpdateDisplayStateAndRequestRefresh(display_service::RefreshMode::kPartial);
 }
 
-void OpenMenuItem(int menu_index)
+void RefreshIdea()
 {
-    if (s_menu_item_handler != nullptr && s_menu_item_handler(menu_index, s_menu_item_context)) {
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        s_coordinator.RandomizeIdea();
+    }
+    (void)UpdateDisplayStateAndRequestRefresh(display_service::RefreshMode::kPartial);
+}
+
+void DeleteCurrentIdea()
+{
+    std::string recording_id;
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        recording_id = s_coordinator.current_recording_id();
+    }
+    if (recording_id.empty()) {
         return;
     }
-    ESP_LOGI(kTag, "Menu item %d (%s) not yet implemented", menu_index,
-             epaper_ui::DashboardMenuItemLabel(menu_index));
-    epaper_ui::ToastState toast = {};
-    toast.visible = true;
-    toast.body_text = "Coming soon";
-    (void)overlay_runtime::ShowToastForDuration(toast, 1500);
+    if (!recording_archive_service::DeleteRecording(recording_id)) {
+        ESP_LOGW(kTag, "Delete idea failed: id=%s", recording_id.c_str());
+    }
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        s_coordinator.RemoveCurrentIdea();
+    }
+    (void)UpdateDisplayStateAndRequestRefresh(display_service::RefreshMode::kPartial);
 }
 
-}  // namespace dashboard_page_runtime
+void PinCurrentIdea()
+{
+    std::string recording_id;
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        recording_id = s_coordinator.current_recording_id();
+    }
+    if (recording_id.empty()) {
+        return;
+    }
+    if (!recording_archive_service::MarkRecordingFollowUp(recording_id, true, false)) {
+        ESP_LOGW(kTag, "Pin idea failed: id=%s", recording_id.c_str());
+    }
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        s_coordinator.RemoveCurrentIdea();
+    }
+    (void)UpdateDisplayStateAndRequestRefresh(display_service::RefreshMode::kPartial);
+}
+
+}  // namespace vibe_check_page_runtime

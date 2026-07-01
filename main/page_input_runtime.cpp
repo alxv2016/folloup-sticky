@@ -10,6 +10,8 @@
 #include "time_page_interactions.h"
 #include "time_page_runtime.h"
 #include "ui_refresh_runtime.h"
+#include "vibe_check_page_interactions.h"
+#include "vibe_check_page_runtime.h"
 #include "wifi_page_interactions.h"
 #include "wifi_page_runtime.h"
 #include "wifi_service.h"
@@ -644,6 +646,163 @@ app_interaction::InputResult ActivateDashboardTouchTarget(
     return result.interaction_result;
 }
 
+esp_err_t ApplyVibeCheckPageAndFooterDisplayState()
+{
+    const esp_err_t page_err = vibe_check_page_runtime::UpdateDisplayState();
+    if (page_err != ESP_OK && page_err != ESP_ERR_INVALID_STATE) {
+        return page_err;
+    }
+    const esp_err_t footer_err = footer_runtime::UpdateDisplayState();
+    if (footer_err != ESP_OK && footer_err != ESP_ERR_INVALID_STATE) {
+        return footer_err;
+    }
+    return page_err != ESP_OK ? page_err : footer_err;
+}
+
+void ApplyVibeCheckPageStateUpdate(const display_service::RefreshRequest& refresh_request)
+{
+    (void)vibe_check_page_runtime::UpdateDisplayStateAndRequestRefresh(refresh_request);
+}
+
+void ApplyVibeCheckFocusUpdate(const page_actions::FocusUpdateOutcome& outcome)
+{
+    if (!outcome.handled) {
+        return;
+    }
+    if (outcome.sync_footer_projection) {
+        footer_runtime::SetProjectionState(vibe_check_page_runtime::BuildFooterProjectionState());
+    }
+    if (outcome.apply_page_state) {
+        const display_service::RefreshRequest refresh_request = {
+            .refresh_mode = display_service::RefreshMode::kPartial,
+            .scope = display_service::RefreshScope::kRegion,
+        };
+        if (outcome.sync_footer_projection) {
+            (void)ui_refresh_runtime::Schedule(ui_refresh_runtime::SurfaceKey::kVibeCheckPage,
+                                               &ApplyVibeCheckPageAndFooterDisplayState,
+                                               refresh_request);
+            return;
+        }
+        ApplyVibeCheckPageStateUpdate(refresh_request);
+    }
+}
+
+ButtonResult ApplyVibeCheckActivateResult(
+    const vibe_check_page_interactions::ActivateResult& activation)
+{
+    ButtonResult result = {};
+    if (!activation.handled) {
+        return result;
+    }
+
+    result.handled = true;
+    result.interaction_result = MakeConsumedResult(activation.play_activate_cue);
+
+    vibe_check_page_interactions::ActivateCallbacks callbacks = {};
+    callbacks.show_home = [&result]() {
+        result.footer_item = footer_runtime::FooterFocusItem::kHome;
+    };
+    callbacks.show_settings = [&result]() {
+        result.footer_item = footer_runtime::FooterFocusItem::kSettings;
+    };
+    callbacks.show_wifi = [&result]() {
+        result.footer_item = footer_runtime::FooterFocusItem::kWifi;
+    };
+    callbacks.show_time = [&result]() {
+        result.footer_item = footer_runtime::FooterFocusItem::kTime;
+    };
+    callbacks.enter_card = []() { vibe_check_page_runtime::EnterFocusedCard(); };
+    callbacks.refresh_idea = []() { vibe_check_page_runtime::RefreshIdea(); };
+    callbacks.delete_idea = []() { vibe_check_page_runtime::DeleteCurrentIdea(); };
+    callbacks.pin_idea = []() { vibe_check_page_runtime::PinCurrentIdea(); };
+    vibe_check_page_interactions::ApplyPrimaryActivateResult(activation, callbacks);
+    if (result.footer_item != footer_runtime::FooterFocusItem::kNone) {
+        result.interaction_result.play_feedback = false;
+        result.interaction_result.feedback_cue = app_interaction::FeedbackCue::kNone;
+    }
+    return result;
+}
+
+FocusMoveResult ApplyVibeCheckMoveResult(const page_actions::FocusMoveOutcome& outcome)
+{
+    FocusMoveResult result = {};
+    if (!outcome.handled) {
+        return result;
+    }
+    result.handled = true;
+    result.interaction_result = MakeConsumedResult(outcome.play_navigation_cue);
+    ApplyVibeCheckFocusUpdate({
+        .handled = outcome.handled,
+        .apply_page_state = outcome.apply_page_state,
+        .sync_footer_projection = outcome.sync_footer_projection,
+    });
+    return result;
+}
+
+bool ResolveVibeCheckTouchTarget(int x, int y, app_interaction::InteractiveTarget* target, void*)
+{
+    return vibe_check_page_runtime::ResolveTouchTarget(x, y, target);
+}
+
+bool FocusVibeCheckTouchTarget(const app_interaction::InteractiveTarget& target, void*)
+{
+    const page_actions::FocusUpdateOutcome outcome =
+        vibe_check_page_runtime::FocusTouchTarget(target);
+    ApplyVibeCheckFocusUpdate(outcome);
+    return outcome.handled;
+}
+
+bool FocusVibeCheckFooterTarget(const app_interaction::InteractiveTarget& target)
+{
+    const page_actions::FocusUpdateOutcome outcome =
+        vibe_check_page_runtime::FocusFooterItem(FooterItemFromTargetIndex(target.primary_index));
+    ApplyVibeCheckFocusUpdate(outcome);
+    return outcome.handled;
+}
+
+app_interaction::InputResult ActivateVibeCheckTouchTarget(
+    const app_interaction::InteractiveTarget& target, void*)
+{
+    const ButtonResult result =
+        ApplyVibeCheckActivateResult(vibe_check_page_runtime::ActivateTouchTarget(target));
+    return result.interaction_result;
+}
+
+ButtonResult HandleVibeCheckButtonEvent(const button_service::ButtonEventInfo& event)
+{
+    ButtonResult result = {};
+
+    // No dedicated back key: a DOWN double-click leaves the card's action row.
+    if (event.button == button_service::ButtonId::kDown &&
+        event.event == button_service::ButtonEvent::kDoubleClick) {
+        if (vibe_check_page_runtime::ExitFocusedCard()) {
+            result.handled = true;
+            result.interaction_result = MakeConsumedResult(true);
+        }
+        return result;
+    }
+
+    if (event.button != button_service::ButtonId::kPowerOk) {
+        return result;
+    }
+
+    switch (event.event) {
+        case button_service::ButtonEvent::kSingleClick:
+            return ApplyVibeCheckActivateResult(vibe_check_page_runtime::ActivateFocusedItem());
+        case button_service::ButtonEvent::kPressDown:
+        case button_service::ButtonEvent::kPressUp:
+        case button_service::ButtonEvent::kPressRepeat:
+        case button_service::ButtonEvent::kLongPressStart:
+        case button_service::ButtonEvent::kLongPressUp:
+            result.handled = true;
+            result.interaction_result.consumed = true;
+            return result;
+        case button_service::ButtonEvent::kDoubleClick:
+        default:
+            return result;
+    }
+}
+
 page_interaction_runtime::TouchProvider TouchProviderForScreen(display_service::ScreenId screen)
 {
     switch (screen) {
@@ -673,6 +832,13 @@ page_interaction_runtime::TouchProvider TouchProviderForScreen(display_service::
                 .resolve_touch_target = &ResolveDashboardTouchTarget,
                 .focus_touch_target = &FocusDashboardTouchTarget,
                 .activate_touch_target = &ActivateDashboardTouchTarget,
+                .context = nullptr,
+            };
+        case display_service::ScreenId::kVibeCheck:
+            return {
+                .resolve_touch_target = &ResolveVibeCheckTouchTarget,
+                .focus_touch_target = &FocusVibeCheckTouchTarget,
+                .activate_touch_target = &ActivateVibeCheckTouchTarget,
                 .context = nullptr,
             };
         case display_service::ScreenId::kLockScreen:
@@ -716,7 +882,8 @@ ButtonResult HandleWifiButtonEvent(const button_service::ButtonEventInfo& event)
             }
             return ApplyWifiActivateResult(wifi_page_runtime::ActivateFocusedItem());
         case button_service::ButtonEvent::kDoubleClick:
-            if (event.button != button_service::ButtonId::kUp) {
+            // App-wide gesture: DOWN double-click exits an entered UI (here, the network list).
+            if (event.button != button_service::ButtonId::kDown) {
                 return result;
             }
             return ApplyWifiSecondaryActivateResult(
@@ -809,6 +976,8 @@ footer_runtime::ProjectionState BuildFooterProjectionForScreen(display_service::
             return time_page_runtime::BuildFooterProjectionState();
         case display_service::ScreenId::kHome:
             return dashboard_page_runtime::BuildFooterProjectionState();
+        case display_service::ScreenId::kVibeCheck:
+            return vibe_check_page_runtime::BuildFooterProjectionState();
         case display_service::ScreenId::kLockScreen:
         default:
             return {};
@@ -829,6 +998,9 @@ void ResetFocusForScreen(display_service::ScreenId screen)
             return;
         case display_service::ScreenId::kHome:
             dashboard_page_runtime::ResetFocus();
+            return;
+        case display_service::ScreenId::kVibeCheck:
+            vibe_check_page_runtime::ResetFocus();
             return;
         case display_service::ScreenId::kLockScreen:
         default:
@@ -852,6 +1024,8 @@ bool FocusFooterTouchTargetForCurrentScreen(const app_interaction::InteractiveTa
             return FocusTimeFooterTarget(target);
         case display_service::ScreenId::kHome:
             return FocusDashboardFooterTarget(target);
+        case display_service::ScreenId::kVibeCheck:
+            return FocusVibeCheckFooterTarget(target);
         case display_service::ScreenId::kLockScreen:
         default:
             return false;
@@ -869,6 +1043,8 @@ FocusMoveResult MoveFocusForCurrentScreen(int delta, bool page_jump)
             return ApplyTimeMoveResult(time_page_runtime::MoveFocus(delta));
         case display_service::ScreenId::kHome:
             return ApplyDashboardMoveResult(dashboard_page_runtime::MoveFocus(delta));
+        case display_service::ScreenId::kVibeCheck:
+            return ApplyVibeCheckMoveResult(vibe_check_page_runtime::MoveFocus(delta));
         case display_service::ScreenId::kLockScreen:
         default:
             return {};
@@ -886,6 +1062,8 @@ ButtonResult HandleButtonEventForCurrentScreen(const button_service::ButtonEvent
             return HandleTimeButtonEvent(event);
         case display_service::ScreenId::kHome:
             return HandleDashboardButtonEvent(event);
+        case display_service::ScreenId::kVibeCheck:
+            return HandleVibeCheckButtonEvent(event);
         case display_service::ScreenId::kLockScreen:
         default:
             return {};
