@@ -728,6 +728,69 @@ esp_err_t ListEntriesOnMountedFilesystem(const char* mount_point, void* context)
     return ESP_OK;
 }
 
+struct LoadClipContext {
+    const char* recording_id = nullptr;
+    recording_service::RecordedClipPtr* out_clip = nullptr;
+};
+
+// Read an archived PCM16-mono WAV back into a RecordedClip so it can be re-transcribed.
+esp_err_t LoadClipOnMountedFilesystem(const char* mount_point, void* context)
+{
+    auto* load = static_cast<LoadClipContext*>(context);
+    if (mount_point == nullptr || load == nullptr || load->recording_id == nullptr ||
+        load->out_clip == nullptr) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    std::string base_path;
+    if (!ResolveExistingBasePath(mount_point, load->recording_id, &base_path)) {
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    const std::string wav_path = base_path + ".wav";
+    FILE* file = std::fopen(wav_path.c_str(), "rb");
+    if (file == nullptr) {
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    WavHeader header = {};
+    if (std::fread(&header, 1, sizeof(header), file) != sizeof(header) ||
+        std::memcmp(header.riff, "RIFF", 4) != 0 || std::memcmp(header.wave, "WAVE", 4) != 0) {
+        std::fclose(file);
+        return ESP_FAIL;
+    }
+
+    // Trust the on-disk data chunk size, but clamp to what the file actually holds.
+    long file_size = 0;
+    if (std::fseek(file, 0, SEEK_END) == 0) {
+        file_size = std::ftell(file);
+    }
+    const size_t available_bytes =
+        file_size > static_cast<long>(sizeof(header)) ? static_cast<size_t>(file_size) - sizeof(header) : 0;
+    size_t data_bytes = std::min(static_cast<size_t>(header.data_size), available_bytes);
+    size_t sample_count = data_bytes / sizeof(int16_t);
+    if (sample_count == 0 || std::fseek(file, sizeof(header), SEEK_SET) != 0) {
+        std::fclose(file);
+        return ESP_FAIL;
+    }
+
+    recording_service::RecordedClip::Chunk chunk;
+    chunk.resize(sample_count);
+    const size_t read = std::fread(chunk.data(), sizeof(int16_t), sample_count, file);
+    std::fclose(file);
+    if (read == 0) {
+        return ESP_FAIL;
+    }
+    chunk.resize(read);
+
+    const uint32_t sample_rate = header.sample_rate != 0 ? header.sample_rate : 16000;
+    recording_service::RecordedClip::ChunkList chunks;
+    chunks.push_back(std::move(chunk));
+    *load->out_clip = std::make_shared<recording_service::RecordedClip>(sample_rate, read,
+                                                                        std::move(chunks));
+    return ESP_OK;
+}
+
 struct DeleteContext {
     const char* recording_id = nullptr;
     bool deleted = false;
@@ -888,6 +951,19 @@ bool DeleteRecording(const std::string& recording_id)
         (void)Refresh();  // recompute archive counts + notify subscribers
     }
     return context.deleted;
+}
+
+recording_service::RecordedClipPtr LoadClip(const std::string& recording_id)
+{
+    if (recording_id.empty()) {
+        return nullptr;
+    }
+    recording_service::RecordedClipPtr clip;
+    LoadClipContext context = {};
+    context.recording_id = recording_id.c_str();
+    context.out_clip = &clip;
+    (void)storage_service::RunWithMountedFilesystem(LoadClipOnMountedFilesystem, &context);
+    return clip;
 }
 
 const char* TagName(RecordingTag tag)

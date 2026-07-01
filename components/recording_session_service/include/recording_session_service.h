@@ -86,6 +86,10 @@ bool HandlePowerPressDown(const Context& context);
 bool HandlePowerLongPressStart(const Context& context);
 bool HandlePowerPressUp(const Context& context);
 bool SubmitTagSelection(int selected_index);
+// Re-run transcription on an already-archived recording (e.g. an audio-only idea). Reuses the
+// live transcription pipeline: on success the transcript is saved to SD and the usual toasts
+// fire. Returns false if it can't start (busy, clip unreadable, provider not ready).
+bool BeginArchivedTranscription(const std::string& recording_id);
 
 void HandleRecordingEvent(const recording_service::Event& event);
 void HandleTranscriptionEvent(const transcription_service::Event& event);

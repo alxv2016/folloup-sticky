@@ -25,6 +25,9 @@ ActivateResult HandlePrimaryActivate(VibeCheckPageCoordinator& coordinator)
                 case epaper_ui::VibeCardActionSelection::kCheck:
                     result.intent = ActivateIntent::kPinIdea;
                     break;
+                case epaper_ui::VibeCardActionSelection::kTranscribe:
+                    result.intent = ActivateIntent::kTranscribeIdea;
+                    break;
                 case epaper_ui::VibeCardActionSelection::kNone:
                 default:
                     break;
@@ -101,6 +104,11 @@ void ApplyPrimaryActivateResult(const ActivateResult& result, const ActivateCall
         case ActivateIntent::kPinIdea:
             if (callbacks.pin_idea) {
                 callbacks.pin_idea();
+            }
+            break;
+        case ActivateIntent::kTranscribeIdea:
+            if (callbacks.transcribe_idea) {
+                callbacks.transcribe_idea();
             }
             break;
         case ActivateIntent::kNone:

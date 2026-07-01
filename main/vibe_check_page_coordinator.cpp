@@ -19,20 +19,6 @@ constexpr const char* kMessageText =
 constexpr const char* kEmptyStateMessage = "Get the ball rolling! Capture some ideas!";
 constexpr const char* kAudioOnlyMessage = "Audio only note...";
 
-epaper_ui::VibeCardActionSelection ActionSelectionForIndex(int index)
-{
-    switch (index) {
-        case 0:
-            return epaper_ui::VibeCardActionSelection::kRefresh;
-        case 1:
-            return epaper_ui::VibeCardActionSelection::kClose;
-        case 2:
-            return epaper_ui::VibeCardActionSelection::kCheck;
-        default:
-            return epaper_ui::VibeCardActionSelection::kNone;
-    }
-}
-
 // "Mon Jan 3" from the stored YYYY-MM-DD; falls back to the raw date or "Today".
 std::string FormatArchiveDateLabel(const RecordingMetadata& metadata)
 {
@@ -144,12 +130,12 @@ bool VibeCheckPageCoordinator::MoveFocus(int delta)
     if (delta == 0) {
         return false;
     }
-    // While the action row is live, UP/DOWN steps through the three actions. Because this
+    // While the action row is live, UP/DOWN steps through the card's actions. Because this
     // device has no dedicated back key, stepping past either edge leaves the card and hands
     // the movement back to page navigation (card <-> footer) so focus can never get trapped.
     if (card_active_ && HasIdeas()) {
         const int next = action_focus_.index() + delta;
-        if (next < 0 || next >= epaper_ui::kVibeCardActionCount) {
+        if (next < 0 || next >= ActionCount()) {
             card_active_ = false;
             return focus_.Move(delta);
         }
@@ -175,24 +161,69 @@ page_navigation::NavigationItemRole VibeCheckPageCoordinator::FocusedRole() cons
     return item != nullptr ? item->role : NavigationItemRole::kUnknown;
 }
 
+bool VibeCheckPageCoordinator::HasTranscribeAction() const
+{
+    const recording_archive_service::RecordingEntry* entry = FindCurrentIdea();
+    return entry != nullptr && !entry->metadata.has_transcript;
+}
+
+int VibeCheckPageCoordinator::ActionCount() const
+{
+    return HasTranscribeAction() ? epaper_ui::kVibeCardActionCount + 1
+                                 : epaper_ui::kVibeCardActionCount;
+}
+
+epaper_ui::VibeCardActionSelection VibeCheckPageCoordinator::ActionSelectionAt(int index) const
+{
+    // Audio-only ideas lead with Transcribe; every idea then has Refresh / Close / Check.
+    int cursor = index;
+    if (HasTranscribeAction()) {
+        if (cursor == 0) {
+            return epaper_ui::VibeCardActionSelection::kTranscribe;
+        }
+        --cursor;
+    }
+    switch (cursor) {
+        case 0:
+            return epaper_ui::VibeCardActionSelection::kRefresh;
+        case 1:
+            return epaper_ui::VibeCardActionSelection::kClose;
+        case 2:
+            return epaper_ui::VibeCardActionSelection::kCheck;
+        default:
+            return epaper_ui::VibeCardActionSelection::kNone;
+    }
+}
+
+int VibeCheckPageCoordinator::ActionIndexFor(epaper_ui::VibeCardActionSelection selection) const
+{
+    const int count = ActionCount();
+    for (int index = 0; index < count; ++index) {
+        if (ActionSelectionAt(index) == selection) {
+            return index;
+        }
+    }
+    return -1;
+}
+
 bool VibeCheckPageCoordinator::EnterCard()
 {
     if (card_active_ || !HasIdeas()) {
         return false;
     }
     card_active_ = true;
-    action_focus_.Configure(epaper_ui::kVibeCardActionCount, 0);
+    action_focus_.Configure(ActionCount(), 0);
     return true;
 }
 
-bool VibeCheckPageCoordinator::EnterCardAtAction(int action_index)
+bool VibeCheckPageCoordinator::EnterCardAtSelection(epaper_ui::VibeCardActionSelection selection)
 {
     if (!HasIdeas()) {
         return false;
     }
     card_active_ = true;
-    action_focus_.Configure(epaper_ui::kVibeCardActionCount,
-                            std::max(0, std::min(action_index, epaper_ui::kVibeCardActionCount - 1)));
+    const int index = ActionIndexFor(selection);
+    action_focus_.Configure(ActionCount(), index >= 0 ? index : 0);
     return true;
 }
 
@@ -212,7 +243,7 @@ bool VibeCheckPageCoordinator::HasIdeas() const
 
 epaper_ui::VibeCardActionSelection VibeCheckPageCoordinator::selected_action() const
 {
-    return card_active_ && HasIdeas() ? ActionSelectionForIndex(action_focus_.index())
+    return card_active_ && HasIdeas() ? ActionSelectionAt(action_focus_.index())
                                       : epaper_ui::VibeCardActionSelection::kNone;
 }
 
@@ -317,6 +348,8 @@ void VibeCheckPageCoordinator::RebuildCardState()
     }
 
     card_state_.tag_text = FormatArchiveDateLabel(entry->metadata);
+    // Audio-only ideas (no transcript yet) offer the right-edge Transcribe (Star) action.
+    card_state_.show_transcribe_action = !entry->metadata.has_transcript;
     card_state_.header.icon_asset =
         entry->metadata.has_transcript ? &epaper_icons::kTranscribe : &epaper_icons::kAudio;
     card_state_.header.time_text = FormatArchiveTimeLabel(*entry);

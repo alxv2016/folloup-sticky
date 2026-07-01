@@ -29,7 +29,7 @@ public:
     // Card interaction: enter the card (arms the action row), or leave it.
     bool EnterCard();
     // Enter the card with a specific action pre-focused (used when a button is tapped).
-    bool EnterCardAtAction(int action_index);
+    bool EnterCardAtSelection(epaper_ui::VibeCardActionSelection selection);
     bool ExitCard();
     bool card_active() const { return card_active_; }
     bool HasIdeas() const;
@@ -54,6 +54,12 @@ private:
     void SelectRandomIdea(bool avoid_current);
     const recording_archive_service::RecordingEntry* FindCurrentIdea() const;
     static bool IsIdeaCandidate(const recording_archive_service::RecordingEntry& entry);
+    // The current idea's actions. Audio-only ideas (no transcript yet) gain a leading
+    // Transcribe action; every idea has Refresh / Close / Check.
+    bool HasTranscribeAction() const;
+    int ActionCount() const;
+    epaper_ui::VibeCardActionSelection ActionSelectionAt(int index) const;
+    int ActionIndexFor(epaper_ui::VibeCardActionSelection selection) const;
 
     page_navigation::NavigationModel navigation_model_ =
         page_navigation::BuildVibeCheckPageNavigationModel();

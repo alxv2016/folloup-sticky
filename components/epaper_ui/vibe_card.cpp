@@ -102,6 +102,8 @@ struct VibeCardLayout {
     int footer_y = 0;
     bool has_actions = false;
     std::array<UiRect, kVibeCardActionCount> actions = {};
+    bool has_transcribe = false;
+    UiRect transcribe_action = {};
 };
 
 VibeCardLayout ComputeLayout(int origin_x,
@@ -188,6 +190,13 @@ VibeCardLayout ComputeLayout(int origin_x,
                                  button_size};
     }
     layout.has_actions = true;
+
+    // Transcribe Star: bottom-left of the card, on the same row as the action buttons (which
+    // are right-aligned), so all buttons share one baseline.
+    if (state.show_transcribe_action) {
+        layout.has_transcribe = true;
+        layout.transcribe_action = {layout.content.x, button_y, button_size, button_size};
+    }
     return layout;
 }
 
@@ -229,6 +238,12 @@ bool HitTestVibeCardAction(int origin_x,
         return false;
     }
     const VibeCardLayout layout = ComputeLayout(origin_x, origin_y, portrait_width, state, style);
+    if (layout.has_transcribe && layout.transcribe_action.Contains(x, y)) {
+        if (action != nullptr) {
+            *action = VibeCardActionSelection::kTranscribe;
+        }
+        return true;
+    }
     if (!layout.has_actions) {
         return false;
     }
@@ -398,6 +413,16 @@ void DrawVibeCard(uint8_t* framebuffer,
         };
         DrawButtonIcon(framebuffer, raw_width, raw_height, portrait_width, portrait_height,
                        action_bounds.x, action_bounds.y, button_state, style.footer_button);
+    }
+
+    if (layout.has_transcribe) {
+        const ButtonIconState star_state = {
+            .asset = &epaper_icons::kStar,
+            .selected = state.footer.selected_action == VibeCardActionSelection::kTranscribe,
+        };
+        DrawButtonIcon(framebuffer, raw_width, raw_height, portrait_width, portrait_height,
+                       layout.transcribe_action.x, layout.transcribe_action.y, star_state,
+                       style.footer_button);
     }
 }
 

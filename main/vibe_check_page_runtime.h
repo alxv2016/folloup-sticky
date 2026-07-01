@@ -42,6 +42,9 @@ void EnterFocusedCard();
 void RefreshIdea();
 void DeleteCurrentIdea();
 void PinCurrentIdea();
+// Re-run transcription on the current audio-only idea (reuses the live transcription flow +
+// toasts). The card is refreshed by app_shell once the async result lands.
+void TranscribeCurrentIdea();
 
 }  // namespace vibe_check_page_runtime
 

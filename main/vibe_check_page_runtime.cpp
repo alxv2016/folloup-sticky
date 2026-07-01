@@ -1,14 +1,20 @@
 #include "vibe_check_page_runtime.h"
 
+#include <atomic>
 #include <climits>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
 
 #include "epaper_ui/vibe_check_page.h"
 #include "esp_log.h"
+#include "followup_task_config.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "page_navigation/page_focus_projection.h"
 #include "recording_archive_service.h"
+#include "recording_session_service.h"
 #include "ui_refresh_runtime.h"
 #include "vibe_check_page_coordinator.h"
 
@@ -20,6 +26,23 @@ constexpr const char* kTag = "VibeCheckPageRuntime";
 std::mutex s_mutex;
 VibeCheckPageCoordinator s_coordinator = {};
 int32_t s_interaction_generation = 1;
+
+// Re-transcribe runs on its own short-lived worker: loading the WAV back into memory and
+// starting the transcription pipeline is far too heavy for the small-stack input task that
+// dispatches the tap/press (it overflows the touch task). The flag serializes it to one at a
+// time; BeginArchivedTranscription also refuses to start over an in-flight request.
+constexpr uint32_t kTranscribeWorkerStackWords = 8192;
+std::atomic<bool> s_transcribe_worker_active{false};
+
+void TranscribeWorker(void* arg)
+{
+    std::unique_ptr<std::string> recording_id(static_cast<std::string*>(arg));
+    if (recording_id != nullptr) {
+        (void)recording_session_service::BeginArchivedTranscription(*recording_id);
+    }
+    s_transcribe_worker_active.store(false, std::memory_order_release);
+    vTaskDelete(nullptr);
+}
 
 void AdvanceInteractionGenerationLocked()
 {
@@ -204,7 +227,8 @@ page_actions::FocusUpdateOutcome FocusTouchTarget(const app_interaction::Interac
         old_focus_index = s_coordinator.focus().index();
         s_coordinator.SetFocusIndex(CardFocusIndexLocked());
         if (target.kind == app_interaction::Kind::kPageAction) {
-            s_coordinator.EnterCardAtAction(static_cast<int>(target.primary_index));
+            s_coordinator.EnterCardAtSelection(
+                static_cast<epaper_ui::VibeCardActionSelection>(target.primary_index));
         } else if (target.kind == app_interaction::Kind::kPageComposite) {
             s_coordinator.ExitCard();
         } else {
@@ -232,7 +256,8 @@ vibe_check_page_interactions::ActivateResult ActivateTouchTarget(
     }
     s_coordinator.SetFocusIndex(CardFocusIndexLocked());
     if (target.kind == app_interaction::Kind::kPageAction) {
-        s_coordinator.EnterCardAtAction(static_cast<int>(target.primary_index));
+        s_coordinator.EnterCardAtSelection(
+            static_cast<epaper_ui::VibeCardActionSelection>(target.primary_index));
         return vibe_check_page_interactions::HandlePrimaryActivate(s_coordinator);
     }
     if (target.kind == app_interaction::Kind::kPageComposite) {
@@ -376,6 +401,37 @@ void PinCurrentIdea()
         s_coordinator.RemoveCurrentIdea();
     }
     (void)UpdateDisplayStateAndRequestRefresh(display_service::RefreshMode::kPartial);
+}
+
+void TranscribeCurrentIdea()
+{
+    std::string recording_id;
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        recording_id = s_coordinator.current_recording_id();
+    }
+    if (recording_id.empty()) {
+        return;
+    }
+
+    // Kick off on a dedicated worker (never on the input task that dispatched us): loading the
+    // WAV and starting transcription is too stack-heavy for the touch task. The worker reuses the
+    // live transcription pipeline, so the same toasts fire and the transcript is saved to SD;
+    // app_shell re-syncs this page on completion so the card shows the result.
+    bool expected = false;
+    if (!s_transcribe_worker_active.compare_exchange_strong(expected, true,
+                                                            std::memory_order_acq_rel)) {
+        return;  // a re-transcribe is already running
+    }
+    auto* recording_id_arg = new std::string(std::move(recording_id));
+    const BaseType_t created = xTaskCreatePinnedToCore(
+        TranscribeWorker, "vibe_txcribe", kTranscribeWorkerStackWords, recording_id_arg,
+        followup_task_config::kPriorityGemini, nullptr, followup_task_config::kAppCore);
+    if (created != pdPASS) {
+        delete recording_id_arg;
+        s_transcribe_worker_active.store(false, std::memory_order_release);
+        ESP_LOGW(kTag, "Failed to start transcribe worker");
+    }
 }
 
 }  // namespace vibe_check_page_runtime

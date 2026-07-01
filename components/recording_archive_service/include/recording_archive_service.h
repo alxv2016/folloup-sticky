@@ -94,6 +94,9 @@ bool Refresh();
 std::vector<RecordingEntry> ListRecordings();
 // Delete a recording and all of its sidecar files (.wav/.json/.txt), then re-aggregate.
 bool DeleteRecording(const std::string& recording_id);
+// Load an archived recording's WAV back into an in-memory clip (e.g. to re-transcribe it).
+// Runs SD I/O on the caller's task; returns nullptr when the clip can't be read.
+recording_service::RecordedClipPtr LoadClip(const std::string& recording_id);
 
 // Flip per-recording metadata flags and re-aggregate. Inert until a page invokes them.
 bool MarkRecordingCompleted(const std::string& recording_id, bool completed);

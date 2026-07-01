@@ -22,8 +22,13 @@ enum class VibeCardActionSelection : int {
     kRefresh = 0,
     kClose = 1,
     kCheck = 2,
+    // Transcribe an audio-only idea. Rendered as a separate Star button on the card's right
+    // edge (not part of the bottom action row), shown only when show_transcribe_action is set.
+    kTranscribe = 3,
 };
 
+// Count of buttons in the bottom action row (Refresh / Close / Check). The transcribe Star is
+// a separate right-edge button and is not included here.
 inline constexpr int kVibeCardActionCount = 3;
 
 struct VibeCardFooterState {
@@ -41,6 +46,9 @@ struct VibeCardState {
     const EmbeddedImageAsset* empty_state_icon_asset = nullptr;
     std::string empty_state_message = {};
     VibeCardFooterState footer = {};
+    // Show the right-edge Star (transcribe) button. Set for audio-only ideas that have no
+    // transcript yet; tapping it re-runs transcription.
+    bool show_transcribe_action = false;
 
     bool operator==(const VibeCardState& other) const = default;
 };

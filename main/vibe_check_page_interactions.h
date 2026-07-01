@@ -19,6 +19,7 @@ enum class ActivateIntent : uint8_t {
     kRefreshIdea,
     kDeleteIdea,
     kPinIdea,
+    kTranscribeIdea,
 };
 
 struct ActivateResult {
@@ -38,6 +39,7 @@ struct ActivateCallbacks {
     std::function<void()> refresh_idea;
     std::function<void()> delete_idea;
     std::function<void()> pin_idea;
+    std::function<void()> transcribe_idea;
 };
 
 ActivateResult HandlePrimaryActivate(VibeCheckPageCoordinator& coordinator);

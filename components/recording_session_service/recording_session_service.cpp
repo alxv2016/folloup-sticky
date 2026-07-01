@@ -263,6 +263,63 @@ const std::array<TagOption, 4>& TagOptions()
     return kTagOptions;
 }
 
+bool BeginArchivedTranscription(const std::string& recording_id)
+{
+    if (Init() != ESP_OK || recording_id.empty()) {
+        return false;
+    }
+
+    // Reuse the recording->transcription pipeline for an already-archived clip: load its WAV
+    // back into memory, hand it to the same transcription service, and let the existing
+    // HandleTranscriptionEvent path save the transcript and drive the toasts.
+    if (transcription_service::GetSnapshot().request_in_flight) {
+        return false;  // a recording or another re-transcribe is already running
+    }
+
+    recording_service::RecordedClipPtr clip = recording_archive_service::LoadClip(recording_id);
+    if (!clip || clip->empty()) {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        s_snapshot.phase = Phase::kFailed;
+        s_snapshot.request_in_flight = false;
+        s_snapshot.last_status_message = "Couldn't load recording audio";
+        s_snapshot.last_error_code = "clip_load_failed";
+        s_snapshot.last_error_message = "Failed to read WAV from SD";
+        NotifyLocked();
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        s_snapshot.clip_saved = true;  // the recording already lives on SD
+        s_snapshot.transcript_saved = false;
+        s_pending_recording_id = recording_id;
+    }
+
+    if (transcription_service::BeginTranscription(clip)) {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        s_snapshot.phase = Phase::kTranscribing;
+        s_snapshot.request_in_flight = true;
+        s_snapshot.last_status_message = kTranscribingStatus;
+        s_snapshot.last_error_code.clear();
+        s_snapshot.last_error_message.clear();
+        NotifyLocked();
+        return true;
+    }
+
+    // Couldn't start (e.g. Gemini not ready): surface the transcription error as a failure.
+    const transcription_service::Snapshot ts = transcription_service::GetSnapshot();
+    std::lock_guard<std::mutex> lock(s_mutex);
+    s_snapshot.phase = Phase::kFailed;
+    s_snapshot.request_in_flight = false;
+    s_snapshot.last_status_message =
+        ts.last_status_message.empty() ? "Transcription unavailable" : ts.last_status_message;
+    s_snapshot.last_error_code = ts.last_error_code;
+    s_snapshot.last_error_message = ts.last_error_message;
+    s_pending_recording_id.clear();
+    NotifyLocked();
+    return false;
+}
+
 bool HandlePowerPressDown(const Context& context)
 {
     if (Init() != ESP_OK) {

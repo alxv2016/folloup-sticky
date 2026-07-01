@@ -570,6 +570,13 @@ void HandleRecordingSessionEvent(const recording_session_service::Event& event, 
             epaper_ui::ToastState toast = {};
             if (event.snapshot.transcript_saved) {
                 toast = BuildToast("Transcript saved to SD", EmbeddedIconId::kFileTranscript);
+            } else if (!event.snapshot.last_error_code.empty()) {
+                // Transcription was attempted but failed. Surface it as a failure (the recording
+                // itself is still on SD) with a specific message for a quota/rate-limit error.
+                const bool quota_exceeded =
+                    event.snapshot.last_error_code == "RESOURCE_EXHAUSTED";
+                toast = BuildToast(quota_exceeded ? "Gemini quota exceeded" : "Transcription failed",
+                                   EmbeddedIconId::kClose);
             } else if (event.snapshot.clip_saved) {
                 toast = BuildToast("Recording saved to SD", EmbeddedIconId::kCheck);
             } else {
@@ -580,6 +587,16 @@ void HandleRecordingSessionEvent(const recording_session_service::Event& event, 
             if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
                 ESP_LOGW(kTag, "Show recording completion toast failed: %s",
                          esp_err_to_name(err));
+            }
+            // A transcript just landed (e.g. re-transcribing a Vibe Check idea): reload the
+            // page so the card swaps "Audio only note..." for the transcript and drops the Star.
+            if (event.snapshot.transcript_saved &&
+                display_service::GetCurrentScreen() == display_service::ScreenId::kVibeCheck) {
+                const esp_err_t sync_err = vibe_check_page_runtime::SyncFromService(true);
+                if (sync_err != ESP_OK && sync_err != ESP_ERR_INVALID_STATE) {
+                    ESP_LOGW(kTag, "Vibe check sync after transcription failed: %s",
+                             esp_err_to_name(sync_err));
+                }
             }
             break;
         }

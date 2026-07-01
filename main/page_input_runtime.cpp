@@ -715,6 +715,7 @@ ButtonResult ApplyVibeCheckActivateResult(
     callbacks.refresh_idea = []() { vibe_check_page_runtime::RefreshIdea(); };
     callbacks.delete_idea = []() { vibe_check_page_runtime::DeleteCurrentIdea(); };
     callbacks.pin_idea = []() { vibe_check_page_runtime::PinCurrentIdea(); };
+    callbacks.transcribe_idea = []() { vibe_check_page_runtime::TranscribeCurrentIdea(); };
     vibe_check_page_interactions::ApplyPrimaryActivateResult(activation, callbacks);
     if (result.footer_item != footer_runtime::FooterFocusItem::kNone) {
         result.interaction_result.play_feedback = false;
