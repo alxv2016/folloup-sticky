@@ -421,6 +421,8 @@ const char* OverlayRefreshPolicyName(OverlayRefreshPolicy policy)
     switch (policy) {
         case OverlayRefreshPolicy::kRebuildUnderlay:
             return "rebuild_underlay";
+        case OverlayRefreshPolicy::kRebuildUnderlayFull:
+            return "rebuild_underlay_full";
         case OverlayRefreshPolicy::kReuseUnderlaySnapshot:
             return "reuse_underlay_snapshot";
         default:
@@ -687,12 +689,15 @@ esp_err_t RefreshCurrentScreenLocked(bool full_refresh)
 
 esp_err_t RefreshOverlayStateLocked(OverlayRefreshPolicy policy)
 {
-    if (policy == OverlayRefreshPolicy::kRebuildUnderlay || !s_underlay_snapshot_valid) {
+    if (policy == OverlayRefreshPolicy::kRebuildUnderlay ||
+        policy == OverlayRefreshPolicy::kRebuildUnderlayFull || !s_underlay_snapshot_valid) {
+        const bool full_refresh = policy == OverlayRefreshPolicy::kRebuildUnderlayFull;
         ESP_LOGI(kTag,
-                 "Overlay refresh path: policy=%s snapshot_valid=%d",
+                 "Overlay refresh path: policy=%s snapshot_valid=%d full=%d",
                  OverlayRefreshPolicyName(policy),
-                 s_underlay_snapshot_valid ? 1 : 0);
-        return RefreshCurrentScreenLocked(false);
+                 s_underlay_snapshot_valid ? 1 : 0,
+                 full_refresh ? 1 : 0);
+        return RefreshCurrentScreenLocked(full_refresh);
     }
 
     EpaperPanel& panel = Panel();
@@ -842,10 +847,17 @@ RefreshRequest MergeRefreshRequest(const RefreshRequest& lhs, const RefreshReque
 
 OverlayRefreshPolicy MergeOverlayRefreshPolicy(OverlayRefreshPolicy lhs, OverlayRefreshPolicy rhs)
 {
-    return lhs == OverlayRefreshPolicy::kRebuildUnderlay ||
-                   rhs == OverlayRefreshPolicy::kRebuildUnderlay
-               ? OverlayRefreshPolicy::kRebuildUnderlay
-               : OverlayRefreshPolicy::kReuseUnderlaySnapshot;
+    // Strongest policy wins so a coalesced batch never downgrades a dismissal's
+    // full refresh: full > rebuild(partial) > reuse-snapshot.
+    if (lhs == OverlayRefreshPolicy::kRebuildUnderlayFull ||
+        rhs == OverlayRefreshPolicy::kRebuildUnderlayFull) {
+        return OverlayRefreshPolicy::kRebuildUnderlayFull;
+    }
+    if (lhs == OverlayRefreshPolicy::kRebuildUnderlay ||
+        rhs == OverlayRefreshPolicy::kRebuildUnderlay) {
+        return OverlayRefreshPolicy::kRebuildUnderlay;
+    }
+    return OverlayRefreshPolicy::kReuseUnderlaySnapshot;
 }
 
 esp_err_t Init()
