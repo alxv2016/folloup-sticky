@@ -3,7 +3,6 @@
 #include "esp_check.h"
 #include "esp_log.h"
 #include "project_assets.h"
-#include "recording_session_service.h"
 #include "recording_service.h"
 #include "ui_refresh_runtime.h"
 
@@ -76,21 +75,14 @@ void ApplyProjectedSelection(epaper_ui::GlobalFooterState* state, FooterFocusIte
 
 bool IsMicActive()
 {
-    bool active = false;
-    if (recording_service::IsInitialized()) {
-        const recording_service::UiState recording_state = recording_service::GetUiState();
-        active = recording_state.armed || recording_state.recording;
+    // The mic indicator reflects live audio capture only (armed or recording).
+    // Post-capture phases (saving/transcribing) are surfaced by their own
+    // overlays/toasts, so keeping the mic highlighted through them is misleading.
+    if (!recording_service::IsInitialized()) {
+        return false;
     }
-
-    const recording_session_service::Snapshot session_snapshot =
-        recording_session_service::GetSnapshot();
-    if (session_snapshot.initialized &&
-        (session_snapshot.phase == recording_session_service::Phase::kSaving ||
-         session_snapshot.phase == recording_session_service::Phase::kTranscribing)) {
-        active = true;
-    }
-
-    return active;
+    const recording_service::UiState recording_state = recording_service::GetUiState();
+    return recording_state.armed || recording_state.recording;
 }
 
 FooterFocusItem FooterFocusItemFromTargetIndex(int32_t index)

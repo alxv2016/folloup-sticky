@@ -842,19 +842,10 @@ void HandleDispatchedButtonEvent(const button_service::ButtonEventInfo& event)
         return;
     }
 
-    const page_input_runtime::ButtonResult page_button_result =
-        page_input_runtime::HandleButtonEventForCurrentScreen(event);
-    if (page_button_result.handled) {
-        PlayInteractionFeedback(page_button_result.interaction_result);
-        if (page_button_result.footer_item != footer_runtime::FooterFocusItem::kNone) {
-            const app_interaction::InputResult footer_result =
-                HandleFooterActivate(page_button_result.footer_item, nullptr);
-            PlayInteractionFeedback(footer_result);
-        }
-        FlushOverlayFeedback();
-        return;
-    }
-
+    // The POWER_OK press/hold gesture (arm on press-down, start on long-press,
+    // stop/cancel on release) is a global recording control, so it must be
+    // evaluated before per-screen page input. Taps (single/double click) fall
+    // through the switch's default below and are routed to the page handlers.
     if (event.button == button_service::ButtonId::kPowerOk) {
         const recording_session_service::Context recording_context =
             BuildRecordingSessionContext();
@@ -875,6 +866,19 @@ void HandleDispatchedButtonEvent(const button_service::ButtonEventInfo& event)
         if (handled) {
             return;
         }
+    }
+
+    const page_input_runtime::ButtonResult page_button_result =
+        page_input_runtime::HandleButtonEventForCurrentScreen(event);
+    if (page_button_result.handled) {
+        PlayInteractionFeedback(page_button_result.interaction_result);
+        if (page_button_result.footer_item != footer_runtime::FooterFocusItem::kNone) {
+            const app_interaction::InputResult footer_result =
+                HandleFooterActivate(page_button_result.footer_item, nullptr);
+            PlayInteractionFeedback(footer_result);
+        }
+        FlushOverlayFeedback();
+        return;
     }
 
     switch (event.event) {
