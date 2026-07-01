@@ -32,7 +32,7 @@ constexpr std::array<TagOption, 4> kTagOptions = {{
     {.tag = recording_archive_service::RecordingTag::kNote, .label_text = "Note"},
     {.tag = recording_archive_service::RecordingTag::kTask, .label_text = "Task"},
     {.tag = recording_archive_service::RecordingTag::kIdea, .label_text = "Idea"},
-    {.tag = recording_archive_service::RecordingTag::kNote, .label_text = "Discard"},
+    {.label_text = "Discard", .is_discard = true},
 }};
 
 struct GuardrailResult {
@@ -400,7 +400,7 @@ bool SubmitTagSelection(int selected_index)
         }
     }
 
-    if (selected_index == 3) {
+    if (kTagOptions[static_cast<size_t>(selected_index)].is_discard) {
         recording_service::DiscardClip();
         std::lock_guard<std::mutex> lock(s_mutex);
         s_snapshot.phase = Phase::kComplete;

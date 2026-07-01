@@ -60,16 +60,24 @@ struct WavHeader {
 
 static_assert(sizeof(WavHeader) == 44, "WAV header must be 44 bytes");
 
+// A recording's tag decides whether it belongs to the Todos list or the Notes
+// list. This is the single source of truth for that split: routing to disk and
+// the archive counts both derive from it, so a newly added tag can never fall
+// through and be silently uncounted (Idea previously hit the counting switch's
+// default and never surfaced under Notes despite being saved).
+bool IsTodoRecordingTag(RecordingTag tag)
+{
+    return tag == RecordingTag::kTask;
+}
+
+bool IsNotesRecordingTag(RecordingTag tag)
+{
+    return !IsTodoRecordingTag(tag);
+}
+
 const char* ArchiveSubdirectory(RecordingTag tag)
 {
-    switch (tag) {
-        case RecordingTag::kTask:
-            return "todos";
-        case RecordingTag::kIdea:
-        case RecordingTag::kNote:
-        default:
-            return "recordings";
-    }
+    return IsTodoRecordingTag(tag) ? "todos" : "recordings";
 }
 
 std::string JoinPath(const std::string& left, const std::string& right)
@@ -591,21 +599,16 @@ void ScanDirectoryInto(const std::string& directory, Snapshot* snapshot)
         if (metadata.follow_up) {
             snapshot->follow_up_recording_count++;
         }
-        switch (metadata.tag) {
-            case RecordingTag::kNote:
-                snapshot->notes_recording_count++;
-                break;
-            case RecordingTag::kTask:
-                snapshot->todo_recording_count++;
-                if (metadata.completed) {
-                    snapshot->completed_todo_count++;
-                } else {
-                    snapshot->incomplete_todo_count++;
-                }
-                break;
-            case RecordingTag::kIdea:
-            default:
-                break;
+        if (IsTodoRecordingTag(metadata.tag)) {
+            snapshot->todo_recording_count++;
+            if (metadata.completed) {
+                snapshot->completed_todo_count++;
+            } else {
+                snapshot->incomplete_todo_count++;
+            }
+        } else {
+            // Note + Idea both live under Notes.
+            snapshot->notes_recording_count++;
         }
     }
     closedir(dir);

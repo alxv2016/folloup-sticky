@@ -69,6 +69,10 @@ struct Event {
 struct TagOption {
     recording_archive_service::RecordingTag tag = recording_archive_service::RecordingTag::kNote;
     std::string_view label_text = {};
+    // When true, selecting this option throws the recording away instead of
+    // archiving it; the `tag` field is unused. Marks intent explicitly so the
+    // discard path can't break if the option order changes.
+    bool is_discard = false;
 };
 
 using EventHandler = void (*)(const Event& event, void* context);
