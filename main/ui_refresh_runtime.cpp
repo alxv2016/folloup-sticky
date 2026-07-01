@@ -220,6 +220,17 @@ void UiRefreshTask(void*)
                 const bool overlay_owns_screen = overlay_runtime::IsInputCaptured();
                 esp_err_t err = ESP_OK;
                 if (any_screen_refresh && !overlay_owns_screen) {
+                    // When this batch also dismissed a large overlay (keyboard/select),
+                    // the screen rebuild below supersedes the (otherwise dropped) overlay
+                    // refresh. A page's own dismiss refresh is usually partial, which would
+                    // leave the large overlay's footprint as ghosting, so honor the central
+                    // full-on-dismiss decision by promoting this screen refresh to full.
+                    if (any_overlay_refresh &&
+                        merged_overlay_refresh_policy ==
+                            display_service::OverlayRefreshPolicy::kRebuildUnderlayFull) {
+                        merged_refresh_request.refresh_mode = display_service::RefreshMode::kFull;
+                        merged_refresh_request.scope = display_service::RefreshScope::kScreen;
+                    }
                     err = display_service::RequestRefreshCurrentScreen(merged_refresh_request,
                                                                        screen_source);
                     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {

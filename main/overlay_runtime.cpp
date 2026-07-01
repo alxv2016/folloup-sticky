@@ -235,13 +235,23 @@ OverlayRefreshSnapshot CaptureOverlayRefreshSnapshotLocked()
 display_service::OverlayRefreshPolicy DetermineOverlayRefreshPolicy(
     const OverlayRefreshSnapshot& before, const OverlayRefreshSnapshot& after)
 {
-    // A visibility change (overlay shown, dismissed, or swapped) rebuilds the
-    // underlay with a PARTIAL refresh. Dismissals deliberately do NOT force a full
-    // refresh: the ghosting we saw on dismiss was not a partial-refresh weakness,
-    // it was the SD save cutting into a partial refresh mid-transaction on the
-    // shared SPI bus. That is now prevented by serializing SD I/O with the display
-    // (StorageBusGuard), so a partial refresh that is allowed to finish clears
-    // cleanly -- no need for the expensive full-screen refresh on every dismiss.
+    // Dismissing a LARGE overlay (keyboard, select list) needs a full refresh:
+    // clearing that much high-contrast area with a partial refresh leaves e-paper
+    // ghosting even now that SD I/O is serialized with the display on the shared
+    // bus. (The bus serialization fixed the *other* ghosting cause -- SD writes
+    // cutting into a partial refresh mid-transaction -- which is why small
+    // overlays clear fine with partial.) This is the single, central place that
+    // decides full-vs-partial on dismiss, by overlay type, so pages don't each
+    // choose (and drift).
+    const bool large_overlay_dismissed =
+        (before.keyboard_visible && !after.keyboard_visible) ||
+        (before.select_visible && !after.select_visible);
+    if (large_overlay_dismissed) {
+        return display_service::OverlayRefreshPolicy::kRebuildUnderlayFull;
+    }
+
+    // Any other visibility change (overlay shown or moved, or a small card
+    // modal / toast dismissed) rebuilds the underlay with a partial refresh.
     const bool visibility_changed = before.shutdown_visible != after.shutdown_visible ||
                                     before.storage_visible != after.storage_visible ||
                                     before.select_visible != after.select_visible ||

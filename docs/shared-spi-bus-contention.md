@@ -54,15 +54,31 @@ interleaved SD transaction corrupts a refresh in progress.
    promotes the survivor to a full-screen refresh so the full is never lost. See
    `components/display_service/display_service.cpp`.
 
-## What we deliberately did NOT do
+## Two distinct ghosting causes — don't conflate them
 
-We briefly forced a **full** e-paper refresh on every overlay/modal dismiss
-(`OverlayRefreshPolicy::kRebuildUnderlayFull`) to "clear the ghost." That was
-treating the symptom: it added an expensive (~1.65s) full-screen flash to every
-modal close and did not address the real cause. Once SD I/O is serialized with
-the display, a **partial** refresh finishes uncorrupted and clears cleanly, so
-overlay dismissals use `kRebuildUnderlay` (partial). Do not reintroduce a
-forced full refresh on dismiss to fix ghosting — fix bus serialization instead.
+There are two separate reasons an overlay dismiss can ghost, with two separate
+fixes:
+
+1. **SD cutting into a partial refresh (this bug).** Fixed by bus serialization
+   (`StorageBusGuard`, above). Do **not** paper over this with a bigger refresh —
+   serialize the bus. We briefly forced a full refresh on *every* dismiss to mask
+   it; that was wrong (a ~1.65s flash on every modal close) and was reverted.
+
+2. **Large high-contrast overlays (keyboard, tall select lists).** Even with the
+   bus serialized and a partial refresh allowed to finish, clearing a *large*
+   area of high-contrast pixels leaves residual e-paper ghosting — this is a
+   physical partial-refresh limitation, not a race. These specific overlays get a
+   **full** refresh on dismiss (`OverlayRefreshPolicy::kRebuildUnderlayFull`).
+
+The full-on-dismiss decision is centralized by overlay type in
+`overlay_runtime::DetermineOverlayRefreshPolicy`: dismissing the **keyboard** or
+**select** overlay returns `kRebuildUnderlayFull`; dismissing a small card modal
+or toast stays `kRebuildUnderlay` (partial). It is made authoritative so a page's
+own partial dismiss refresh cannot downgrade it — `MergeOverlayRefreshPolicy`
+ranks full highest, `EnqueueDisplayCommand` never drops a queued full, and the
+`UiRefreshTask` promotes a coalesced screen refresh to full when the batch also
+carried a large-overlay dismiss. Pages must not re-decide refresh mode on
+dismiss; let the central policy own it.
 
 ## Rule for future work
 

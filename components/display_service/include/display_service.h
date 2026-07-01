@@ -41,11 +41,18 @@ struct RefreshRequest {
 };
 
 enum class OverlayRefreshPolicy {
-    // Rebuild the underlay from the current screen with a partial refresh. Used
-    // when overlay visibility changes (shown, dismissed, or swapped). Partial is
-    // sufficient because SD I/O is serialized with the display on the shared SPI
-    // bus, so a partial refresh always finishes without being corrupted.
+    // Rebuild the underlay from the current screen with a PARTIAL refresh. Used
+    // for overlay show/move and for dismissing SMALL overlays (card modals,
+    // toasts). Partial is enough here because SD I/O is serialized with the
+    // display on the shared SPI bus, so a partial refresh finishes uncorrupted.
     kRebuildUnderlay,
+    // Rebuild the underlay with a FULL refresh. Used only when dismissing a LARGE
+    // overlay (keyboard, select list): clearing that much high-contrast area with
+    // a partial refresh leaves e-paper ghosting even with the bus serialized.
+    // This is centrally decided in DetermineOverlayRefreshPolicy by overlay type,
+    // and made authoritative (see MergeOverlayRefreshPolicy + the UI-refresh
+    // promotion) so a page's own partial dismiss refresh cannot downgrade it.
+    kRebuildUnderlayFull,
     // Recomposite overlays over the cached underlay snapshot (partial). Used for
     // in-overlay updates that don't change which overlays are visible.
     kReuseUnderlaySnapshot,
