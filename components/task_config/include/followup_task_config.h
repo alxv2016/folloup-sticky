@@ -25,6 +25,10 @@ inline constexpr UBaseType_t kPriorityWifiCallbacks = 3;
 inline constexpr UBaseType_t kPriorityStorage = 2;
 inline constexpr UBaseType_t kPriorityTimezoneSync = 2;
 inline constexpr UBaseType_t kPriorityGemini = 2;
+// Background battery/RTC telemetry poll. Low priority on purpose: it caches
+// last-good values off the UI path, so a poll that loses a race to SD/display
+// bus activity simply retries on the next cycle without ever blocking a refresh.
+inline constexpr UBaseType_t kPrioritySensorPoll = 2;
 // Highest priority on purpose: the buzzer worker only fires a short tone then
 // vTaskDelays (it never holds the CPU), so it cannot starve anything. The high
 // priority guarantees StopTone runs on time even while a long CPU-bound full-page

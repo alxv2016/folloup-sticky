@@ -1,10 +1,13 @@
 #include "power_service.h"
 
+#include <mutex>
+
 #include "bq27220.h"
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "esp_log.h"
 #include "esp_sleep.h"
+#include "followup_task_config.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "pcf8563.h"
@@ -23,6 +26,14 @@ constexpr TickType_t kPowerButtonReleasePollDelay = pdMS_TO_TICKS(20);
 constexpr uint32_t kPowerButtonReleaseStableSamples = 10;
 constexpr uint32_t kPowerButtonReleaseMaxSamples = 250;
 
+// Battery/RTC telemetry sits on the shared sensor I2C bus and reads slowly under
+// load. A dedicated low-priority task polls it in the background and caches the
+// last-good values, so UI refreshes (status bar) never do synchronous sensor I2C
+// and never block on bus contention during SD writes / display refreshes.
+constexpr TickType_t kSensorPollInterval = pdMS_TO_TICKS(2000);
+constexpr uint32_t kSensorPollTaskStackWords = 3072;
+constexpr uint32_t kSensorFailWarnThreshold = 5;
+
 i2c_master_bus_handle_t s_sensor_bus = nullptr;
 i2c_master_dev_handle_t s_rtc_device = nullptr;
 i2c_master_dev_handle_t s_battery_device = nullptr;
@@ -33,6 +44,15 @@ bool s_charge_pins_ready = false;
 bool s_power_input_ready = false;
 bool s_rtc_ready = false;
 bool s_battery_ready = false;
+
+// Cached telemetry published by the poll task and copied (never read via I2C) by
+// ReadStatus. The mutex is held only for the struct copies, never across I2C.
+std::mutex s_snapshot_mutex;
+BatteryStatus s_cached_battery = {};
+RtcStatus s_cached_rtc = {};
+TaskHandle_t s_sensor_task = nullptr;
+uint32_t s_battery_fail_streak = 0;
+uint32_t s_rtc_fail_streak = 0;
 
 const char* ChargeStateName(ChargeState state)
 {
@@ -137,7 +157,8 @@ void FillRtcStatus(RtcStatus* rtc)
     pcf8563::InterruptStatus interrupt_status = {};
     esp_err_t err = pcf8563::ReadInterruptStatus(s_rtc_device, &interrupt_status);
     if (err != ESP_OK) {
-        ESP_LOGW(kTag, "PCF8563 interrupt status read failed: %s",
+        // Transient contention is expected; the poll task warns only if it persists.
+        ESP_LOGD(kTag, "PCF8563 interrupt status read failed: %s",
                  esp_err_to_name(err));
         return;
     }
@@ -163,7 +184,8 @@ void FillBatteryStatus(BatteryStatus* battery)
 
     Bq27220Data_t data = {};
     if (!bq27220_read_data(s_battery_device, data)) {
-        ESP_LOGW(kTag, "BQ27220 telemetry read failed");
+        // Transient contention is expected; the poll task warns only if it persists.
+        ESP_LOGD(kTag, "BQ27220 telemetry read failed");
         return;
     }
 
@@ -208,6 +230,50 @@ void FillBatteryStatus(BatteryStatus* battery)
     if (sticky_board::ReadBq27220InterruptLevel(&interrupt_level) == ESP_OK) {
         battery->interrupt_level_available = true;
         battery->interrupt_level = interrupt_level;
+    }
+}
+
+// Reads battery + RTC over I2C and publishes them to the cache. A failed read
+// keeps the previous last-good value (so the UI never flickers to "unavailable"
+// on a single blip); a sustained run of failures is logged once.
+void PollSensorsOnce()
+{
+    BatteryStatus battery = {};
+    FillBatteryStatus(&battery);
+
+    RtcStatus rtc = {};
+    FillRtcStatus(&rtc);
+
+    {
+        std::lock_guard<std::mutex> lock(s_snapshot_mutex);
+        if (battery.available) {
+            s_cached_battery = battery;
+        }
+        if (rtc.available) {
+            s_cached_rtc = rtc;
+        }
+    }
+
+    if (battery.available) {
+        s_battery_fail_streak = 0;
+    } else if (++s_battery_fail_streak == kSensorFailWarnThreshold) {
+        ESP_LOGW(kTag, "BQ27220 telemetry unavailable for %u consecutive polls",
+                 static_cast<unsigned>(s_battery_fail_streak));
+    }
+
+    if (rtc.available) {
+        s_rtc_fail_streak = 0;
+    } else if (++s_rtc_fail_streak == kSensorFailWarnThreshold) {
+        ESP_LOGW(kTag, "PCF8563 status unavailable for %u consecutive polls",
+                 static_cast<unsigned>(s_rtc_fail_streak));
+    }
+}
+
+void SensorPollTask(void*)
+{
+    for (;;) {
+        PollSensorsOnce();
+        vTaskDelay(kSensorPollInterval);
     }
 }
 
@@ -384,6 +450,24 @@ esp_err_t Init()
         ESP_LOGW(kTag, "Sensor I2C bus init failed: %s", esp_err_to_name(err));
     }
 
+    // Warm the telemetry cache once (the bus is quiet at boot) and start the
+    // background poller so later UI refreshes never do synchronous sensor I2C.
+    PollSensorsOnce();
+    if (s_sensor_task == nullptr) {
+        const BaseType_t created = xTaskCreatePinnedToCore(
+            SensorPollTask,
+            "sensor_poll",
+            kSensorPollTaskStackWords,
+            nullptr,
+            followup_task_config::kPrioritySensorPoll,
+            &s_sensor_task,
+            followup_task_config::kSystemCore);
+        if (created != pdPASS) {
+            s_sensor_task = nullptr;
+            ESP_LOGW(kTag, "Sensor poll task create failed; telemetry will be stale");
+        }
+    }
+
     s_initialized = true;
     ESP_LOGI(kTag, "Power service initialized");
     return ESP_OK;
@@ -433,8 +517,13 @@ esp_err_t ReadStatus(Status* out_status)
         }
     }
 
-    FillBatteryStatus(&status.battery);
-    FillRtcStatus(&status.rtc);
+    // Battery/RTC come from the background poll cache so this call (on the UI
+    // refresh path) never blocks on sensor I2C.
+    {
+        std::lock_guard<std::mutex> lock(s_snapshot_mutex);
+        status.battery = s_cached_battery;
+        status.rtc = s_cached_rtc;
+    }
 
     *out_status = status;
     return ESP_OK;
