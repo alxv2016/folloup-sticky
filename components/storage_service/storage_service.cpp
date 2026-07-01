@@ -686,20 +686,32 @@ esp_err_t RunWithMountedFilesystem(MountedFilesystemHandler handler, void* conte
     SdCard& card = Card();
     esp_err_t err = ESP_OK;
     {
-        std::lock_guard<std::mutex> card_lock(s_card_mutex);
-        err = MountCardLocked(card);
-        if (err == ESP_OK) {
-            err = handler(card.mount_point().c_str(), context);
-            if (ShouldRetryMountedFilesystemOperation(err, card)) {
-                ESP_LOGW(kTag,
-                         "Mounted filesystem operation failed: %s; remounting SD and retrying once",
-                         esp_err_to_name(err));
-                card.Unmount();
-                err = MountCardLocked(card);
-                if (err == ESP_OK) {
-                    err = handler(card.mount_point().c_str(), context);
-                } else {
-                    ESP_LOGW(kTag, "SD remount before retry failed: %s", esp_err_to_name(err));
+        // Hold the shared SPI bus for the whole SD operation so it can't run
+        // concurrently with a display refresh. Both devices share one bus; without
+        // this the SD traffic contends with (and can corrupt) the e-paper's
+        // command/data stream, throttling refreshes and hanging the panel on BUSY.
+        // Acquire the bus BEFORE s_card_mutex to match the format path's lock order.
+        StorageBusGuard bus_guard;
+        err = bus_guard.Acquire();
+        if (err != ESP_OK) {
+            ESP_LOGW(kTag, "Shared storage bus acquire failed for mounted op: %s",
+                     esp_err_to_name(err));
+        } else {
+            std::lock_guard<std::mutex> card_lock(s_card_mutex);
+            err = MountCardLocked(card);
+            if (err == ESP_OK) {
+                err = handler(card.mount_point().c_str(), context);
+                if (ShouldRetryMountedFilesystemOperation(err, card)) {
+                    ESP_LOGW(kTag,
+                             "Mounted filesystem operation failed: %s; remounting SD and retrying once",
+                             esp_err_to_name(err));
+                    card.Unmount();
+                    err = MountCardLocked(card);
+                    if (err == ESP_OK) {
+                        err = handler(card.mount_point().c_str(), context);
+                    } else {
+                        ESP_LOGW(kTag, "SD remount before retry failed: %s", esp_err_to_name(err));
+                    }
                 }
             }
         }
