@@ -26,7 +26,7 @@ void FillCurrentDate(epaper_ui::CurrentDateState* date)
     char weekday[16] = {};
     char date_text[24] = {};
     std::strftime(weekday, sizeof(weekday), "%A", &local_tm);
-    std::strftime(date_text, sizeof(date_text), "%b %d", &local_tm);
+    std::strftime(date_text, sizeof(date_text), "%b %d, %Y", &local_tm);
     date->weekday_text = weekday;
     date->date_text = date_text;
 }
@@ -119,7 +119,8 @@ epaper_ui::DashboardPageState DashboardPageCoordinator::BuildState() const
         const int total = archive_.todo_recording_count;
         const int done = archive_.completed_todo_count;
         if (total > 0) {
-            state.current_progress.status_text = std::to_string(done) + "/" + std::to_string(total);
+            state.current_progress.status_text =
+                std::to_string(done) + "/" + std::to_string(total) + " completed";
             state.current_progress.progress_percent = (done * 100) / total;
         } else {
             state.current_progress.status_text = "No tasks yet";
