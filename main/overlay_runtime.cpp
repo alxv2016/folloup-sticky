@@ -235,20 +235,13 @@ OverlayRefreshSnapshot CaptureOverlayRefreshSnapshotLocked()
 display_service::OverlayRefreshPolicy DetermineOverlayRefreshPolicy(
     const OverlayRefreshSnapshot& before, const OverlayRefreshSnapshot& after)
 {
-    // Any overlay going from visible to hidden is a dismissal. The panel area it
-    // covered must be redrawn from the underlay, and a partial refresh leaves
-    // e-paper ghosting there, so force a full refresh. This is the single global
-    // hook that gives every modal/overlay a clean full refresh on dismiss.
-    const bool overlay_dismissed =
-        (before.shutdown_visible && !after.shutdown_visible) ||
-        (before.storage_visible && !after.storage_visible) ||
-        (before.select_visible && !after.select_visible) ||
-        (before.keyboard_visible && !after.keyboard_visible) ||
-        (before.toast_visible && !after.toast_visible);
-    if (overlay_dismissed) {
-        return display_service::OverlayRefreshPolicy::kRebuildUnderlayFull;
-    }
-
+    // A visibility change (overlay shown, dismissed, or swapped) rebuilds the
+    // underlay with a PARTIAL refresh. Dismissals deliberately do NOT force a full
+    // refresh: the ghosting we saw on dismiss was not a partial-refresh weakness,
+    // it was the SD save cutting into a partial refresh mid-transaction on the
+    // shared SPI bus. That is now prevented by serializing SD I/O with the display
+    // (StorageBusGuard), so a partial refresh that is allowed to finish clears
+    // cleanly -- no need for the expensive full-screen refresh on every dismiss.
     const bool visibility_changed = before.shutdown_visible != after.shutdown_visible ||
                                     before.storage_visible != after.storage_visible ||
                                     before.select_visible != after.select_visible ||
