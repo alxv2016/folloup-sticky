@@ -1658,6 +1658,12 @@ weather UI, and persistence should be layered above this service later.
   inserted, the firmware must initialize MicroSD first and keep it mounted
   before bringing up the e-paper panel. If the card is removed, display init
   behaves normally without that constraint.
+- Because the e-paper panel and MicroSD share `SPI2_HOST`, all access to that bus
+  must be serialized through `shared_bus_service` (`StorageBusGuard` /
+  `DisplayBusGuard`). SD I/O that runs concurrently with a display refresh
+  corrupts the refresh and causes e-paper ghosting. See
+  [shared-spi-bus-contention.md](shared-spi-bus-contention.md) for the failure
+  we hit, the root cause, and the rule for adding new shared-bus peripherals.
 - The e-paper panel is 800 x 480 raw landscape pixels. The bring-up
   `display_service` draws portrait content by mapping logical 480 x 800
   coordinates into the raw SSD1677 framebuffer.
