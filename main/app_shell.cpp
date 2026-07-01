@@ -883,27 +883,11 @@ void HandleDispatchedButtonEvent(const button_service::ButtonEventInfo& event)
 
     switch (event.event) {
         case button_service::ButtonEvent::kSingleClick:
-            if (lock_screen_runtime::IsActive() &&
-                event.button == button_service::ButtonId::kUp) {
-                PlayInteractionFeedback(
-                    MakeFeedbackResult(app_interaction::FeedbackCue::kClick));
-                const esp_err_t err =
-                    lock_screen_runtime::RequestRefresh(display_service::RefreshMode::kPartial);
-                if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-                    ESP_LOGW(kTag, "Lock screen partial refresh failed: %s",
-                             esp_err_to_name(err));
-                }
-            } else if (lock_screen_runtime::IsActive() &&
-                       event.button == button_service::ButtonId::kDown) {
-                PlayInteractionFeedback(
-                    MakeFeedbackResult(app_interaction::FeedbackCue::kClick));
-                const esp_err_t err =
-                    lock_screen_runtime::RequestRefresh(display_service::RefreshMode::kFull);
-                if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-                    ESP_LOGW(kTag, "Lock screen full refresh failed: %s",
-                             esp_err_to_name(err));
-                }
-            }
+            // Intentionally inert. UP/DOWN navigation is driven on press-down/
+            // repeat via input_focus_runtime, and POWER_OK activation via page
+            // input above. In particular, UP/DOWN must not drive anything while
+            // the lock screen is active -- this previously buzzed and forced a
+            // lock-screen refresh, making the keys feel live behind the lock.
             break;
         case button_service::ButtonEvent::kDoubleClick:
             if (event.button == button_service::ButtonId::kPowerOk) {
