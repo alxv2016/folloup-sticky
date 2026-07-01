@@ -240,6 +240,12 @@ esp_err_t ShowWifiScreen(display_service::RefreshMode refresh_mode)
     if (wifi_err != ESP_OK && wifi_err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(kTag, "WiFi page sync before show failed: %s", esp_err_to_name(wifi_err));
     }
+    // Kick off a scan on entry so the list fills with all nearby networks (not just
+    // the connected one, which is all the empty snapshot yields). The scan is async;
+    // when it completes wifi_service fires an event -> HandleWifiEvent -> the page
+    // re-syncs with the results. Safe to call unconditionally: StartNetworkScan is a
+    // no-op when WiFi is disabled or a scan is already running.
+    (void)wifi_service::StartNetworkScan();
     return display_service::SetCurrentScreen(display_service::ScreenId::kWifi, refresh_mode,
                                              "show_wifi_screen");
 }
