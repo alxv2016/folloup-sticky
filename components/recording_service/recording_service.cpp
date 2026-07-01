@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "followup_task_config.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -150,9 +151,21 @@ std::mutex s_mutex;
 EventHandler s_event_handler = nullptr;
 void* s_event_context = nullptr;
 TaskHandle_t s_capture_task = nullptr;
+// How long POWER must be held after arming before the mic shows its
+// recording-preview state. Above the ~180ms tap / single-click ceiling
+// (button_service kShortPressMs) so a tap never flashes the mic, and below the
+// 300ms long-press (kLongPressMs) so the preview appears a little before
+// recording actually engages.
+constexpr int64_t kMicPreviewArmDelayUs = 220 * 1000;
+
 bool s_initialized = false;
 bool s_capture_armed = false;
 bool s_recording = false;
+// True once a hold has lasted past kMicPreviewArmDelayUs while armed (but before
+// recording). Drives the mic indicator's "about to record" preview so it lights
+// during the hold without flashing on quick taps.
+bool s_capture_preview = false;
+esp_timer_handle_t s_preview_timer = nullptr;
 bool s_has_clip = false;
 bool s_saving = false;
 bool s_exporting = false;
@@ -212,6 +225,7 @@ UiState BuildUiStateLocked()
     state.initialized = s_initialized;
     state.armed = s_capture_armed;
     state.recording = s_recording;
+    state.preview = s_capture_preview;
     state.has_clip = s_has_clip;
     state.saving = s_saving;
     state.exporting = s_exporting;
@@ -320,6 +334,32 @@ void Notify()
 
     if (handler != nullptr) {
         handler(BuildEvent(), context);
+    }
+}
+
+void StopPreviewTimer()
+{
+    if (s_preview_timer != nullptr) {
+        esp_timer_stop(s_preview_timer);
+    }
+}
+
+// Fires kMicPreviewArmDelayUs after arming. If POWER is still held (armed, not
+// yet recording), light the mic preview so it appears during the hold, a little
+// before the long-press starts recording. A quick tap disarms before this fires,
+// so the timer is stopped and the mic never flashes.
+void ArmPreviewTimerCallback(void*)
+{
+    bool notify = false;
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        if (s_capture_armed && !s_recording && !s_capture_preview) {
+            s_capture_preview = true;
+            notify = true;
+        }
+    }
+    if (notify) {
+        Notify();
     }
 }
 
@@ -468,7 +508,23 @@ esp_err_t Init()
         s_saving = false;
         s_exporting = false;
         s_stop_reason = StopReason::kNone;
+        s_capture_preview = false;
         s_initialized = true;
+    }
+
+    if (s_preview_timer == nullptr) {
+        const esp_timer_create_args_t timer_args = {
+            .callback = &ArmPreviewTimerCallback,
+            .arg = nullptr,
+            .dispatch_method = ESP_TIMER_TASK,
+            .name = "mic_preview",
+            .skip_unhandled_events = true,
+        };
+        const esp_err_t timer_err = esp_timer_create(&timer_args, &s_preview_timer);
+        if (timer_err != ESP_OK) {
+            s_preview_timer = nullptr;
+            ESP_LOGW(kTag, "Mic preview timer create failed: %s", esp_err_to_name(timer_err));
+        }
     }
 
     if (s_capture_task == nullptr) {
@@ -532,6 +588,7 @@ esp_err_t Arm()
         std::lock_guard<std::mutex> lock(s_mutex);
         s_capture_armed = true;
         s_recording = false;
+        s_capture_preview = false;
         s_saving = false;
         s_exporting = false;
         s_stop_reason = StopReason::kNone;
@@ -540,6 +597,13 @@ esp_err_t Arm()
         s_clip_buffer.Clear();
         s_last_clip.reset();
         s_has_clip = false;
+    }
+
+    // Arm the mic-preview lead: if POWER is still held past the tap window, the
+    // mic lights before recording engages (see kMicPreviewArmDelayUs).
+    if (s_preview_timer != nullptr) {
+        esp_timer_stop(s_preview_timer);
+        (void)esp_timer_start_once(s_preview_timer, kMicPreviewArmDelayUs);
     }
 
     ESP_LOGI(kTag, "Recording armed");
@@ -562,9 +626,11 @@ esp_err_t Start(StartMode mode)
             });
         }
         s_recording = true;
+        s_capture_preview = false;
         s_stop_reason = StopReason::kNone;
     }
 
+    StopPreviewTimer();
     ESP_LOGI(kTag, "Recording started: mode=%s",
              mode == StartMode::kIncludePreroll ? "include_preroll" : "fresh");
     Notify();
@@ -583,6 +649,7 @@ esp_err_t Finish()
         had_recording = s_recording;
         s_recording = false;
         s_capture_armed = false;
+        s_capture_preview = false;
         s_stop_reason = StopReason::kFinished;
         if (had_recording) {
             s_last_clip = s_clip_buffer.Finalize(microphone_service::kSampleRateHz);
@@ -590,6 +657,7 @@ esp_err_t Finish()
         }
     }
 
+    StopPreviewTimer();
     microphone_service::Disable();
     ESP_LOGI(kTag, "Recording finished: had_recording=%d", had_recording ? 1 : 0);
     Notify();
@@ -605,6 +673,7 @@ esp_err_t Cancel()
         }
         s_capture_armed = false;
         s_recording = false;
+        s_capture_preview = false;
         s_saving = false;
         s_exporting = false;
         s_stop_reason = StopReason::kCanceled;
@@ -614,6 +683,7 @@ esp_err_t Cancel()
         s_has_clip = false;
     }
 
+    StopPreviewTimer();
     microphone_service::Disable();
     ESP_LOGI(kTag, "Recording canceled");
     Notify();
@@ -628,10 +698,12 @@ void DiscardClip()
         s_has_clip = false;
         s_saving = false;
         s_exporting = false;
+        s_capture_preview = false;
         if (!s_capture_armed && !s_recording) {
             s_stop_reason = StopReason::kNone;
         }
     }
+    StopPreviewTimer();
     Notify();
 }
 

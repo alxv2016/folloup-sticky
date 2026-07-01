@@ -38,6 +38,10 @@ struct UiState {
     bool initialized = false;
     bool armed = false;
     bool recording = false;
+    // Held-past-tap preview: armed long enough that recording is imminent. Drives
+    // the mic indicator so it lights a little before recording engages, without
+    // flashing on quick taps.
+    bool preview = false;
     bool has_clip = false;
     bool saving = false;
     bool exporting = false;

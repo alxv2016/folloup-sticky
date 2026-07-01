@@ -75,14 +75,17 @@ void ApplyProjectedSelection(epaper_ui::GlobalFooterState* state, FooterFocusIte
 
 bool IsMicActive()
 {
-    // The mic indicator reflects live audio capture only (armed or recording).
-    // Post-capture phases (saving/transcribing) are surfaced by their own
-    // overlays/toasts, so keeping the mic highlighted through them is misleading.
+    // The mic indicator reflects recording (and the brief pre-record preview),
+    // NOT the armed state: arming happens on press-down, so keying off it made the
+    // mic flash on every quick tap/single-click. The preview lights a little
+    // before recording engages so it still feels responsive (see the recorder's
+    // kMicPreviewArmDelayUs). Post-capture phases (saving/transcribing) are
+    // surfaced by their own overlays/toasts, not the mic.
     if (!recording_service::IsInitialized()) {
         return false;
     }
     const recording_service::UiState recording_state = recording_service::GetUiState();
-    return recording_state.armed || recording_state.recording;
+    return recording_state.preview || recording_state.recording;
 }
 
 FooterFocusItem FooterFocusItemFromTargetIndex(int32_t index)

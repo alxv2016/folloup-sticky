@@ -13,9 +13,10 @@ namespace {
 constexpr const char* kTag = "ButtonService";
 constexpr uint16_t kShortPressMs = 180;
 // Hold duration before BUTTON_LONG_PRESS_START fires. The power-button long-press starts
-// a recording, so this is effectively the hold-to-record latency; 500ms matches the
-// Followup reference (was 2000ms, which made the recording trigger feel sluggish).
-constexpr uint16_t kLongPressMs = 500;
+// a recording, so this is effectively the hold-to-record latency. Kept comfortably above
+// kShortPressMs (180ms tap ceiling) so a normal tap / single-click can't accidentally
+// record; lowered from 500ms so the recording trigger feels snappier.
+constexpr uint16_t kLongPressMs = 300;
 
 struct ButtonContext {
     const char* label = nullptr;
