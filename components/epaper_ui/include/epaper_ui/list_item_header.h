@@ -16,6 +16,8 @@ namespace epaper_ui {
 // trailing right-aligned tag pill. Middle text is ellipsized to fit the space that is left.
 struct ListItemHeaderState {
     const EmbeddedImageAsset* icon_asset = nullptr;
+    // Optional trailing status icon (e.g. the follow-up "pin"), drawn just left of the tag pill.
+    const EmbeddedImageAsset* tag_icon_asset = nullptr;
     std::string time_text = {};
     std::string minute_seconds_text = {};
     std::string tag_text = {};
@@ -39,6 +41,13 @@ struct ListItemHeaderStyle {
     int icon_slot_size = design::list_item_header::kIconSlotSize;
     int content_gap = design::list_item_header::kContentGap;
     int divider_dot_diameter = design::list_item_header::kDividerDotDiameter;
+    int tag_icon_slot_size = design::list_item_header::kTagIconSlotSize;
+    int tag_icon_gap = design::list_item_header::kTagIconGap;
+    // When selected on a filled background, stroke icons/text/dot with the knockout color so they
+    // stay legible (used by the timeline's selected item rows).
+    bool selected_content_outlined = false;
+    int selected_content_stroke_thickness = design::button::kStrokeThickness;
+    uint8_t selected_content_outline_color = design::color::kWhite;
     TagStyle tag = {};
 };
 
