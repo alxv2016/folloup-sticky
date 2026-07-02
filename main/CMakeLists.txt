@@ -15,7 +15,7 @@ idf_component_register(SRCS "vibe_check_page_runtime.cpp" "vibe_check_page_inter
                                 esp_hw_support esp_partition gemini_service imu_service power_service
                                 nvs_flash page_navigation project_assets recording_archive_service
                                 recording_service recording_session_service storage_service
-                                task_config timezone_service touch_service transcription_service
-                                wifi_service)
+                                summary_service task_config timezone_service touch_service
+                                transcription_service wifi_service)
 
 target_compile_features(${COMPONENT_LIB} PUBLIC cxx_std_17)

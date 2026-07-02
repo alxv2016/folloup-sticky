@@ -7,6 +7,10 @@
 #include "esp_err.h"
 #include "esp_http_server.h"
 
+namespace recording_service {
+class RecordedClip;
+}
+
 namespace gemini_service {
 
 enum class ApiKeySource : uint8_t {
@@ -63,6 +67,38 @@ struct Result {
     std::string message;
 };
 
+// Result of a synchronous text-generation (generateContent) call.
+struct TextResult {
+    bool success = false;
+    int http_status = 0;
+    std::string text = {};
+    std::string error_code = {};
+    std::string error_message = {};
+};
+
+// Result of a synchronous token-count (countTokens) call.
+struct TokenCountResult {
+    bool success = false;
+    int http_status = 0;
+    int total_tokens = 0;
+    std::string error_code = {};
+    std::string error_message = {};
+};
+
+// Result of a synchronous audio transcription (resumable upload + generateContent) call.
+struct TranscriptionResult {
+    bool success = false;
+    int http_status = 0;
+    std::string transcript = {};
+    std::string error_code = {};
+    std::string error_message = {};
+    uint32_t clip_duration_ms = 0;
+    size_t wav_bytes = 0;
+    uint32_t upload_chunk_count = 0;
+    uint64_t upload_elapsed_ms = 0;
+    uint64_t total_elapsed_ms = 0;
+};
+
 using EventHandler = void (*)(const Event& event, void* context);
 
 esp_err_t Init();
@@ -75,6 +111,11 @@ Result ClearStoredApiKey();
 bool HasApiKey();
 std::string GetEffectiveApiKey();
 std::string GetEffectiveModelName();
+// Synchronous Gemini calls (block on HTTP; run them from a worker task, never a UI/input
+// task). They use the effective API key + model and return the parsed result or an error.
+TextResult GenerateText(const std::string& prompt);
+TokenCountResult CountTokens(const std::string& prompt);
+TranscriptionResult Transcribe(const recording_service::RecordedClip& clip);
 bool BeginAuthentication();
 void SetNetworkState(bool connected, bool access_point_mode);
 void RegisterPortalRoutes(httpd_handle_t server);

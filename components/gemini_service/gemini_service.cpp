@@ -1,22 +1,28 @@
 #include "gemini_service.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
+#include <cstdio>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <new>
 #include <string>
+#include <strings.h>
 #include <utility>
 
 #include "cJSON.h"
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "followup_task_config.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nvs.h"
+#include "recording_service.h"
 #include "sdkconfig.h"
 
 namespace gemini_service {
@@ -33,7 +39,18 @@ constexpr const char* kPortalApiSettingsGeminiResetUri = "/api/settings/gemini/r
 constexpr const char* kPortalApiRuntimeGeminiUri = "/api/runtime/gemini";
 constexpr size_t kMaxPortalPayloadLen = 512;
 constexpr int kAuthTimeoutMs = 15000;
+constexpr int kGenerateTimeoutMs = 60000;  // text generation can be slow for large prompts
 constexpr uint32_t kAuthTaskStackWords = 8192;
+
+// Audio transcription (resumable file upload + generateContent-with-fileData).
+constexpr const char* kUploadUrl =
+    "https://generativelanguage.googleapis.com/upload/v1beta/files";
+constexpr const char* kAudioMimeType = "audio/wav";
+constexpr const char* kTranscriptPrompt =
+    "Generate a verbatim transcript of the speech in this audio. Respond with transcript text "
+    "only. Do not add commentary or formatting.";
+constexpr int kTranscribeTimeoutMs = 30000;
+constexpr size_t kHttpUploadChunkSamples = 2048;
 
 struct AuthResult {
     bool success = false;
@@ -49,6 +66,7 @@ struct HttpResponse {
     std::string body;
     std::string error_code;
     std::string error_message;
+    std::string upload_url;  // captured from the x-goog-upload-url header (resumable upload)
 };
 
 struct AuthTaskContext {
@@ -297,6 +315,10 @@ esp_err_t HttpEventHandler(esp_http_client_event_t* event)
         event->data_len > 0) {
         response->body.append(static_cast<const char*>(event->data),
                               static_cast<size_t>(event->data_len));
+    } else if (event->event_id == HTTP_EVENT_ON_HEADER && response != nullptr &&
+               event->header_key != nullptr && event->header_value != nullptr &&
+               strcasecmp(event->header_key, "x-goog-upload-url") == 0) {
+        response->upload_url = event->header_value;
     }
     return ESP_OK;
 }
@@ -714,6 +736,358 @@ esp_err_t HandlePortalRuntimeGet(httpd_req_t* request)
     return SendJsonResponse(request, 200, root);
 }
 
+// Synchronous JSON POST to a Gemini endpoint (generateContent / countTokens).
+HttpResponse PerformGeminiPost(const std::string& url, const std::string& api_key,
+                               const std::string& body)
+{
+    HttpResponse response = {};
+
+    esp_http_client_config_t config = {};
+    config.url = url.c_str();
+    config.method = HTTP_METHOD_POST;
+    config.crt_bundle_attach = esp_crt_bundle_attach;
+    config.timeout_ms = kGenerateTimeoutMs;
+    config.event_handler = &HttpEventHandler;
+    config.user_data = &response;
+
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (client == nullptr) {
+        response.error_code = "http_client_init_failed";
+        response.error_message = "Failed to initialize Gemini HTTP client";
+        return response;
+    }
+
+    esp_http_client_set_header(client, "x-goog-api-key", api_key.c_str());
+    esp_http_client_set_header(client, "Content-Type", "application/json");
+    esp_http_client_set_header(client, "Accept", "application/json");
+    esp_http_client_set_header(client, "User-Agent", "folloup-sticky");
+    esp_http_client_set_post_field(client, body.c_str(), static_cast<int>(body.size()));
+
+    const esp_err_t err = esp_http_client_perform(client);
+    response.status_code = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+
+    if (err != ESP_OK) {
+        response.error_code = "transport_error";
+        response.error_message = esp_err_to_name(err);
+    }
+    return response;
+}
+
+// A single text-part prompt: {"contents":[{"parts":[{"text": prompt}]}]}. temperature=0 keeps
+// summaries deterministic; countTokens ignores generationConfig, so it is harmless there.
+std::string BuildTextRequestBody(const std::string& prompt, bool include_generation_config)
+{
+    cJSON* root = cJSON_CreateObject();
+    cJSON* contents = cJSON_AddArrayToObject(root, "contents");
+    cJSON* content = cJSON_CreateObject();
+    cJSON_AddItemToArray(contents, content);
+    cJSON* parts = cJSON_AddArrayToObject(content, "parts");
+    cJSON* prompt_part = cJSON_CreateObject();
+    cJSON_AddStringToObject(prompt_part, "text", prompt.c_str());
+    cJSON_AddItemToArray(parts, prompt_part);
+    if (include_generation_config) {
+        cJSON* generation_config = cJSON_AddObjectToObject(root, "generationConfig");
+        cJSON_AddNumberToObject(generation_config, "temperature", 0);
+    }
+
+    char* raw = cJSON_PrintUnformatted(root);
+    std::string body = raw != nullptr ? raw : "";
+    if (raw != nullptr) {
+        cJSON_free(raw);
+    }
+    cJSON_Delete(root);
+    return body;
+}
+
+// Concatenate the text of every part in candidates[0].content.parts[].
+std::string ExtractCandidateText(cJSON* root)
+{
+    if (root == nullptr) {
+        return {};
+    }
+    cJSON* candidates = cJSON_GetObjectItemCaseSensitive(root, "candidates");
+    if (!cJSON_IsArray(candidates)) {
+        return {};
+    }
+    cJSON* candidate = cJSON_GetArrayItem(candidates, 0);
+    if (!cJSON_IsObject(candidate)) {
+        return {};
+    }
+    cJSON* content = cJSON_GetObjectItemCaseSensitive(candidate, "content");
+    if (!cJSON_IsObject(content)) {
+        return {};
+    }
+    cJSON* parts = cJSON_GetObjectItemCaseSensitive(content, "parts");
+    if (!cJSON_IsArray(parts)) {
+        return {};
+    }
+    std::string text;
+    cJSON* part = nullptr;
+    cJSON_ArrayForEach(part, parts)
+    {
+        const std::string part_text = JsonStringField(part, "text");
+        text += part_text;
+    }
+    return text;
+}
+
+std::string JsonNestedStringField(cJSON* root, const char* first, const char* second)
+{
+    if (root == nullptr) {
+        return {};
+    }
+    cJSON* item = cJSON_GetObjectItemCaseSensitive(root, first);
+    if (!cJSON_IsObject(item)) {
+        return {};
+    }
+    return JsonStringField(item, second);
+}
+
+void AppendLe16(uint16_t value, std::array<uint8_t, 44>* out, size_t* offset)
+{
+    if (out == nullptr || offset == nullptr || *offset + 2U > out->size()) {
+        return;
+    }
+    (*out)[(*offset)++] = static_cast<uint8_t>(value & 0xFF);
+    (*out)[(*offset)++] = static_cast<uint8_t>((value >> 8) & 0xFF);
+}
+
+void AppendLe32(uint32_t value, std::array<uint8_t, 44>* out, size_t* offset)
+{
+    if (out == nullptr || offset == nullptr || *offset + 4U > out->size()) {
+        return;
+    }
+    (*out)[(*offset)++] = static_cast<uint8_t>(value & 0xFF);
+    (*out)[(*offset)++] = static_cast<uint8_t>((value >> 8) & 0xFF);
+    (*out)[(*offset)++] = static_cast<uint8_t>((value >> 16) & 0xFF);
+    (*out)[(*offset)++] = static_cast<uint8_t>((value >> 24) & 0xFF);
+}
+
+std::array<uint8_t, 44> BuildWavHeaderPcm16Mono(size_t sample_count, uint32_t sample_rate_hz)
+{
+    constexpr uint16_t kChannels = 1;
+    constexpr uint16_t kBitsPerSample = 16;
+    constexpr uint16_t kBlockAlign = kChannels * (kBitsPerSample / 8U);
+    const uint32_t data_bytes = static_cast<uint32_t>(sample_count * sizeof(int16_t));
+    const uint32_t byte_rate = sample_rate_hz * kBlockAlign;
+
+    std::array<uint8_t, 44> header = {};
+    size_t offset = 0;
+    header[offset++] = 'R';
+    header[offset++] = 'I';
+    header[offset++] = 'F';
+    header[offset++] = 'F';
+    AppendLe32(36U + data_bytes, &header, &offset);
+    header[offset++] = 'W';
+    header[offset++] = 'A';
+    header[offset++] = 'V';
+    header[offset++] = 'E';
+    header[offset++] = 'f';
+    header[offset++] = 'm';
+    header[offset++] = 't';
+    header[offset++] = ' ';
+    AppendLe32(16U, &header, &offset);
+    AppendLe16(1U, &header, &offset);
+    AppendLe16(kChannels, &header, &offset);
+    AppendLe32(sample_rate_hz, &header, &offset);
+    AppendLe32(byte_rate, &header, &offset);
+    AppendLe16(kBlockAlign, &header, &offset);
+    AppendLe16(kBitsPerSample, &header, &offset);
+    header[offset++] = 'd';
+    header[offset++] = 'a';
+    header[offset++] = 't';
+    header[offset++] = 'a';
+    AppendLe32(data_bytes, &header, &offset);
+    return header;
+}
+
+bool ReadHttpResponseBody(esp_http_client_handle_t client, HttpResponse* response)
+{
+    if (client == nullptr || response == nullptr) {
+        return false;
+    }
+    std::array<char, 512> buffer = {};
+    while (true) {
+        const int read = esp_http_client_read(client, buffer.data(), buffer.size());
+        if (read < 0) {
+            response->error_code = "transport_error";
+            response->error_message = "Failed reading HTTP response body";
+            return false;
+        }
+        if (read == 0) {
+            break;
+        }
+        response->body.append(buffer.data(), static_cast<size_t>(read));
+    }
+    return true;
+}
+
+HttpResponse PerformUploadStart(const std::string& api_key, size_t num_bytes)
+{
+    HttpResponse response = {};
+
+    esp_http_client_config_t config = {};
+    config.url = kUploadUrl;
+    config.method = HTTP_METHOD_POST;
+    config.crt_bundle_attach = esp_crt_bundle_attach;
+    config.timeout_ms = kTranscribeTimeoutMs;
+    config.event_handler = &HttpEventHandler;
+    config.user_data = &response;
+
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (client == nullptr) {
+        response.error_code = "http_client_init_failed";
+        response.error_message = "Failed to initialize Gemini upload client";
+        return response;
+    }
+
+    char content_length[32] = {};
+    std::snprintf(content_length, sizeof(content_length), "%u", static_cast<unsigned>(num_bytes));
+    static constexpr const char* metadata = "{\"file\":{\"display_name\":\"STICKY_NOTE\"}}";
+    esp_http_client_set_header(client, "x-goog-api-key", api_key.c_str());
+    esp_http_client_set_header(client, "X-Goog-Upload-Protocol", "resumable");
+    esp_http_client_set_header(client, "X-Goog-Upload-Command", "start");
+    esp_http_client_set_header(client, "X-Goog-Upload-Header-Content-Length", content_length);
+    esp_http_client_set_header(client, "X-Goog-Upload-Header-Content-Type", kAudioMimeType);
+    esp_http_client_set_header(client, "Content-Type", "application/json");
+    esp_http_client_set_post_field(client, metadata, std::strlen(metadata));
+
+    const esp_err_t err = esp_http_client_perform(client);
+    response.status_code = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+    if (err != ESP_OK) {
+        response.error_code = "transport_error";
+        response.error_message = esp_err_to_name(err);
+    }
+    return response;
+}
+
+HttpResponse PerformUploadFinalizePcmWav(const std::string& upload_url,
+                                         const recording_service::RecordedClip& clip)
+{
+    HttpResponse response = {};
+
+    esp_http_client_config_t config = {};
+    config.url = upload_url.c_str();
+    config.method = HTTP_METHOD_POST;
+    config.crt_bundle_attach = esp_crt_bundle_attach;
+    config.timeout_ms = kTranscribeTimeoutMs;
+
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (client == nullptr) {
+        response.error_code = "http_client_init_failed";
+        response.error_message = "Failed to initialize Gemini upload finalize client";
+        return response;
+    }
+
+    const size_t total_bytes = clip.wav_byte_count();
+    char content_length[32] = {};
+    std::snprintf(content_length, sizeof(content_length), "%u", static_cast<unsigned>(total_bytes));
+    esp_http_client_set_header(client, "Content-Length", content_length);
+    esp_http_client_set_header(client, "Accept", "application/json");
+    esp_http_client_set_header(client, "X-Goog-Upload-Offset", "0");
+    esp_http_client_set_header(client, "X-Goog-Upload-Command", "upload, finalize");
+
+    esp_err_t err = esp_http_client_open(client, total_bytes);
+    if (err != ESP_OK) {
+        response.error_code = "transport_error";
+        response.error_message = esp_err_to_name(err);
+        esp_http_client_cleanup(client);
+        return response;
+    }
+
+    const std::array<uint8_t, 44> header =
+        BuildWavHeaderPcm16Mono(clip.sample_count(), clip.sample_rate_hz());
+    const int header_written = esp_http_client_write(
+        client, reinterpret_cast<const char*>(header.data()), static_cast<int>(header.size()));
+    if (header_written != static_cast<int>(header.size())) {
+        response.error_code = "transport_error";
+        response.error_message = "Failed writing WAV header";
+        esp_http_client_close(client);
+        esp_http_client_cleanup(client);
+        return response;
+    }
+
+    bool write_failed = false;
+    clip.ForEachChunk([&](const int16_t* chunk_data, size_t chunk_size) {
+        if (write_failed || chunk_data == nullptr || chunk_size == 0) {
+            return;
+        }
+        const int bytes_to_write = static_cast<int>(chunk_size * sizeof(int16_t));
+        const int written =
+            esp_http_client_write(client, reinterpret_cast<const char*>(chunk_data), bytes_to_write);
+        if (written != bytes_to_write) {
+            write_failed = true;
+        }
+    });
+    if (write_failed) {
+        response.error_code = "transport_error";
+        response.error_message = "Failed streaming Gemini audio upload";
+        esp_http_client_close(client);
+        esp_http_client_cleanup(client);
+        return response;
+    }
+
+    const int response_length = esp_http_client_fetch_headers(client);
+    response.status_code = esp_http_client_get_status_code(client);
+    if (response.status_code <= 0 && response_length < 0) {
+        response.error_code = "transport_error";
+        response.error_message = "Failed fetching Gemini upload response headers";
+        esp_http_client_close(client);
+        esp_http_client_cleanup(client);
+        return response;
+    }
+    ReadHttpResponseBody(client, &response);
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+    return response;
+}
+
+std::string BuildTranscriptRequestJson(const std::string& file_uri)
+{
+    cJSON* root = cJSON_CreateObject();
+    cJSON* contents = cJSON_AddArrayToObject(root, "contents");
+    cJSON* content = cJSON_CreateObject();
+    cJSON_AddItemToArray(contents, content);
+    cJSON* parts = cJSON_AddArrayToObject(content, "parts");
+
+    cJSON* prompt_part = cJSON_CreateObject();
+    cJSON_AddStringToObject(prompt_part, "text", kTranscriptPrompt);
+    cJSON_AddItemToArray(parts, prompt_part);
+
+    cJSON* audio_part = cJSON_CreateObject();
+    cJSON* file_data = cJSON_AddObjectToObject(audio_part, "fileData");
+    cJSON_AddStringToObject(file_data, "mimeType", kAudioMimeType);
+    cJSON_AddStringToObject(file_data, "fileUri", file_uri.c_str());
+    cJSON_AddItemToArray(parts, audio_part);
+
+    cJSON* generation_config = cJSON_AddObjectToObject(root, "generationConfig");
+    cJSON_AddNumberToObject(generation_config, "temperature", 0);
+
+    char* raw = cJSON_PrintUnformatted(root);
+    std::string json = raw != nullptr ? raw : "";
+    if (raw != nullptr) {
+        cJSON_free(raw);
+    }
+    cJSON_Delete(root);
+    return json;
+}
+
+HttpResponse PerformGenerateContentWithBody(const std::string& api_key,
+                                            const std::string& model_name,
+                                            const std::string& request_json)
+{
+    const std::string url = std::string(kGeminiApiBaseUrl) + model_name + ":generateContent";
+    return PerformGeminiPost(url, api_key, request_json);
+}
+
+uint32_t ResolveUploadChunkCount(const recording_service::RecordedClip& clip)
+{
+    return static_cast<uint32_t>((clip.sample_count() + kHttpUploadChunkSamples - 1U) /
+                                 kHttpUploadChunkSamples);
+}
+
 }  // namespace
 
 esp_err_t Init()
@@ -906,6 +1280,189 @@ std::string GetEffectiveApiKey()
 std::string GetEffectiveModelName()
 {
     return kDefaultModelName;
+}
+
+TextResult GenerateText(const std::string& prompt)
+{
+    TextResult result = {};
+    const std::string api_key = GetEffectiveApiKey();
+    const std::string model_name = GetEffectiveModelName();
+    if (api_key.empty() || model_name.empty()) {
+        result.error_code = "not_configured";
+        result.error_message = "No Gemini API key configured";
+        return result;
+    }
+    if (prompt.empty()) {
+        result.error_code = "empty_prompt";
+        result.error_message = "Prompt was empty";
+        return result;
+    }
+
+    const std::string url = std::string(kGeminiApiBaseUrl) + model_name + ":generateContent";
+    const HttpResponse http = PerformGeminiPost(url, api_key, BuildTextRequestBody(prompt, true));
+    result.http_status = http.status_code;
+    if (!http.error_code.empty()) {
+        result.error_code = http.error_code;
+        result.error_message = TrimForLog(http.error_message);
+        return result;
+    }
+
+    cJSON* root = cJSON_ParseWithLength(http.body.c_str(), http.body.size());
+    if (http.status_code >= 200 && http.status_code < 300) {
+        result.text = ExtractCandidateText(root);
+        result.success = !result.text.empty();
+        if (!result.success) {
+            result.error_code = "empty_response";
+            result.error_message = "Gemini returned no text";
+        }
+    } else {
+        PopulateHttpError(root, http, &result.error_code, &result.error_message);
+    }
+    if (root != nullptr) {
+        cJSON_Delete(root);
+    }
+    return result;
+}
+
+TokenCountResult CountTokens(const std::string& prompt)
+{
+    TokenCountResult result = {};
+    const std::string api_key = GetEffectiveApiKey();
+    const std::string model_name = GetEffectiveModelName();
+    if (api_key.empty() || model_name.empty()) {
+        result.error_code = "not_configured";
+        result.error_message = "No Gemini API key configured";
+        return result;
+    }
+    if (prompt.empty()) {
+        result.success = true;  // an empty prompt is trivially zero tokens
+        return result;
+    }
+
+    const std::string url = std::string(kGeminiApiBaseUrl) + model_name + ":countTokens";
+    const HttpResponse http = PerformGeminiPost(url, api_key, BuildTextRequestBody(prompt, false));
+    result.http_status = http.status_code;
+    if (!http.error_code.empty()) {
+        result.error_code = http.error_code;
+        result.error_message = TrimForLog(http.error_message);
+        return result;
+    }
+
+    cJSON* root = cJSON_ParseWithLength(http.body.c_str(), http.body.size());
+    if (http.status_code >= 200 && http.status_code < 300) {
+        cJSON* total = root != nullptr
+                           ? cJSON_GetObjectItemCaseSensitive(root, "totalTokens")
+                           : nullptr;
+        if (cJSON_IsNumber(total)) {
+            result.total_tokens = total->valueint;
+            result.success = true;
+        } else {
+            result.error_code = "empty_response";
+            result.error_message = "Gemini returned no token count";
+        }
+    } else {
+        PopulateHttpError(root, http, &result.error_code, &result.error_message);
+    }
+    if (root != nullptr) {
+        cJSON_Delete(root);
+    }
+    return result;
+}
+
+TranscriptionResult Transcribe(const recording_service::RecordedClip& clip)
+{
+    TranscriptionResult result = {};
+    result.clip_duration_ms = clip.duration_ms();
+    result.wav_bytes = clip.wav_byte_count();
+    result.upload_chunk_count = ResolveUploadChunkCount(clip);
+
+    const std::string api_key = GetEffectiveApiKey();
+    const std::string model_name = GetEffectiveModelName();
+    if (api_key.empty() || model_name.empty()) {
+        result.error_code = "not_configured";
+        result.error_message = "No Gemini API key configured";
+        return result;
+    }
+    if (clip.empty()) {
+        result.error_code = "empty_audio";
+        result.error_message = "No recorded audio available";
+        return result;
+    }
+
+    const int64_t task_started_us = esp_timer_get_time();
+
+    // 1. Start a resumable upload to obtain an upload URL.
+    HttpResponse upload_start = PerformUploadStart(api_key, clip.wav_byte_count());
+    if (!upload_start.error_code.empty() || upload_start.upload_url.empty() ||
+        upload_start.status_code < 200 || upload_start.status_code >= 300) {
+        result.http_status = upload_start.status_code;
+        result.error_code =
+            upload_start.error_code.empty() ? "upload_start_failed" : upload_start.error_code;
+        result.error_message = TrimForLog(
+            !upload_start.error_message.empty()
+                ? upload_start.error_message
+                : (!upload_start.body.empty() ? upload_start.body
+                                              : "Failed to start Gemini file upload"));
+        return result;
+    }
+
+    // 2. Stream the WAV (header + PCM chunks) and finalize the upload.
+    const int64_t upload_started_us = esp_timer_get_time();
+    HttpResponse upload_finalize = PerformUploadFinalizePcmWav(upload_start.upload_url, clip);
+    result.http_status = upload_finalize.status_code;
+    result.upload_elapsed_ms =
+        static_cast<uint64_t>((esp_timer_get_time() - upload_started_us) / 1000ULL);
+    if (!upload_finalize.error_code.empty() || upload_finalize.status_code < 200 ||
+        upload_finalize.status_code >= 300) {
+        result.error_code = upload_finalize.error_code.empty() ? "upload_finalize_failed"
+                                                               : upload_finalize.error_code;
+        result.error_message = TrimForLog(
+            !upload_finalize.error_message.empty()
+                ? upload_finalize.error_message
+                : (!upload_finalize.body.empty() ? upload_finalize.body
+                                                 : "Failed to upload Gemini audio file"));
+        return result;
+    }
+
+    cJSON* file_root =
+        cJSON_ParseWithLength(upload_finalize.body.c_str(), upload_finalize.body.size());
+    const std::string file_uri = JsonNestedStringField(file_root, "file", "uri");
+    if (file_root != nullptr) {
+        cJSON_Delete(file_root);
+    }
+    if (file_uri.empty()) {
+        result.error_code = "file_uri_missing";
+        result.error_message = "Gemini upload did not return a file URI";
+        return result;
+    }
+
+    // 3. generateContent referencing the uploaded file.
+    HttpResponse http =
+        PerformGenerateContentWithBody(api_key, model_name, BuildTranscriptRequestJson(file_uri));
+    result.http_status = http.status_code;
+    result.total_elapsed_ms =
+        static_cast<uint64_t>((esp_timer_get_time() - task_started_us) / 1000ULL);
+    if (!http.error_code.empty()) {
+        result.error_code = http.error_code;
+        result.error_message = TrimForLog(http.error_message);
+        return result;
+    }
+
+    cJSON* root = cJSON_ParseWithLength(http.body.c_str(), http.body.size());
+    if (http.status_code >= 200 && http.status_code < 300) {
+        result.transcript = TrimForLog(ExtractCandidateText(root), 1U << 20);
+        result.success = !result.transcript.empty();
+        if (!result.success) {
+            result.error_code = "empty_transcript";
+            result.error_message = "Gemini returned no transcript text";
+        }
+    } else {
+        PopulateHttpError(root, http, &result.error_code, &result.error_message);
+    }
+    if (root != nullptr) {
+        cJSON_Delete(root);
+    }
+    return result;
 }
 
 bool BeginAuthentication()
