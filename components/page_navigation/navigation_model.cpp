@@ -169,4 +169,37 @@ NavigationModel BuildSummarizePageNavigationModel()
     return model;
 }
 
+NavigationModel BuildNotesPageNavigationModel(int timeline_group_count)
+{
+    NavigationModel model = {};
+    model.scope = NavigationScope::kNotes;
+
+    const int group_count = timeline_group_count > 0 ? timeline_group_count : 0;
+    for (int index = 0; index < group_count; ++index) {
+        AddItem(model, NavigationItemSection::kNotesPageTimelineGroups,
+                NavigationItemRole::kNotesPageTimelineGroup, index);
+    }
+    AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterSettings, 1);
+    AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterWifi, 2);
+    AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterTime, 3);
+    AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterHome, 0);
+    return model;
+}
+
+NavigationModel BuildDetailsPageNavigationModel()
+{
+    NavigationModel model = {};
+    model.scope = NavigationScope::kDetails;
+
+    AddItem(model, NavigationItemSection::kDetailsPageControls,
+            NavigationItemRole::kDetailsPageScrollContainer, 0);
+    AddItem(model, NavigationItemSection::kDetailsPageControls,
+            NavigationItemRole::kDetailsPageBackButton, 1);
+    AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterSettings, 1);
+    AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterWifi, 2);
+    AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterTime, 3);
+    AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterHome, 0);
+    return model;
+}
+
 }  // namespace page_navigation
