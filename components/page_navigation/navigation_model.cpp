@@ -151,4 +151,22 @@ NavigationModel BuildVibeCheckPageNavigationModel()
     return model;
 }
 
+NavigationModel BuildSummarizePageNavigationModel()
+{
+    NavigationModel model = {};
+    model.scope = NavigationScope::kSummarize;
+
+    AddItem(model, NavigationItemSection::kSummarizePageControls,
+            NavigationItemRole::kSummarizePageSegmentControl, 0);
+    AddItem(model, NavigationItemSection::kSummarizePageControls,
+            NavigationItemRole::kSummarizePageScrollContainer, 1);
+    AddItem(model, NavigationItemSection::kSummarizePageControls,
+            NavigationItemRole::kSummarizePageGetSummaryButton, 2);
+    AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterSettings, 1);
+    AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterWifi, 2);
+    AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterTime, 3);
+    AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterHome, 0);
+    return model;
+}
+
 }  // namespace page_navigation

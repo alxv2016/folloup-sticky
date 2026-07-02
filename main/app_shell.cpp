@@ -35,6 +35,8 @@
 #include "settings_page_runtime.h"
 #include "status_bar_runtime.h"
 #include "storage_service.h"
+#include "summarize_page_runtime.h"
+#include "summary_service.h"
 #include "timezone_service.h"
 #include "touch_service.h"
 #include "transcription_service.h"
@@ -67,6 +69,10 @@ std::mutex s_recording_session_feedback_mutex;
 recording_session_service::Phase s_last_recording_session_feedback_phase =
     recording_session_service::Phase::kIdle;
 std::string s_last_recording_session_feedback_status = {};
+
+std::mutex s_summary_feedback_mutex;
+bool s_summary_feedback_seen = false;
+uint32_t s_last_summary_feedback_generation = 0;
 
 void PlayFeedback(feedback_service::FeedbackEvent event)
 {
@@ -252,6 +258,32 @@ esp_err_t ShowVibeCheckScreen(display_service::RefreshMode refresh_mode)
                                              "show_vibe_check_screen");
 }
 
+void HandleSummaryEvent(const summary_service::Event& event, void* context);
+
+esp_err_t ShowSummarizeScreen(display_service::RefreshMode refresh_mode)
+{
+    SyncStatusBarState("show_summarize_screen");
+    page_input_runtime::ResetFocusForScreen(display_service::ScreenId::kSummarize);
+    page_input_runtime::ConfigureTouchProviderForScreen(display_service::ScreenId::kSummarize);
+    footer_runtime::SetLayoutState(FooterLayoutForScreen(display_service::ScreenId::kSummarize));
+    footer_runtime::SetProjectionState(
+        page_input_runtime::BuildFooterProjectionForScreen(display_service::ScreenId::kSummarize));
+    const esp_err_t footer_err = footer_runtime::UpdateDisplayState();
+    if (footer_err != ESP_OK && footer_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Footer sync before summarize screen failed: %s",
+                 esp_err_to_name(footer_err));
+    }
+    // Lazily start the summary service (seeds its cache from SD) and subscribe for updates.
+    (void)summary_service::Init();
+    summary_service::SetEventHandler(HandleSummaryEvent, nullptr);
+    const esp_err_t sync_err = summarize_page_runtime::SyncFromService(false);
+    if (sync_err != ESP_OK && sync_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Summarize page sync before show failed: %s", esp_err_to_name(sync_err));
+    }
+    return display_service::SetCurrentScreen(display_service::ScreenId::kSummarize, refresh_mode,
+                                             "show_summarize_screen");
+}
+
 esp_err_t ShowWifiScreen(display_service::RefreshMode refresh_mode)
 {
     SyncStatusBarState("show_wifi_screen");
@@ -351,6 +383,13 @@ bool HandleDashboardMenuItem(int menu_index, void*)
         const esp_err_t err = ShowVibeCheckScreen(display_service::RefreshMode::kFull);
         if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
             ESP_LOGW(kTag, "Show vibe check screen failed: %s", esp_err_to_name(err));
+        }
+        return true;
+    }
+    if (menu_index == static_cast<int>(epaper_ui::DashboardMenuItem::kSummarize)) {
+        const esp_err_t err = ShowSummarizeScreen(display_service::RefreshMode::kFull);
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(kTag, "Show summarize screen failed: %s", esp_err_to_name(err));
         }
         return true;
     }
@@ -625,6 +664,57 @@ void HandleRecordingSessionEvent(const recording_session_service::Event& event, 
         case recording_session_service::Phase::kSaving:
         default:
             break;
+    }
+}
+
+void HandleSummaryEvent(const summary_service::Event& event, void*)
+{
+    const summary_service::Snapshot& snapshot = event.snapshot;
+    const summary_service::RequestSnapshot& request = snapshot.request;
+
+    // Keep the summarize page's cached snapshot fresh; refresh it live only when it's on screen.
+    const bool page_active = ScreenActiveForRefresh(display_service::ScreenId::kSummarize);
+    (void)summarize_page_runtime::OnSummarySnapshot(snapshot, page_active);
+
+    // Toast once per request transition (request_generation bumps on start/success/failure).
+    bool new_transition = false;
+    {
+        std::lock_guard<std::mutex> lock(s_summary_feedback_mutex);
+        new_transition =
+            !s_summary_feedback_seen || snapshot.request_generation != s_last_summary_feedback_generation;
+        if (new_transition) {
+            s_summary_feedback_seen = true;
+            s_last_summary_feedback_generation = snapshot.request_generation;
+        }
+    }
+    if (!new_transition) {
+        return;
+    }
+
+    esp_err_t err = ESP_OK;
+    switch (request.phase) {
+        case summary_service::RequestPhase::kStarted:
+            err = overlay_runtime::ShowToast(
+                BuildToast(request.status_message.c_str(), EmbeddedIconId::kTranscribe));
+            break;
+        case summary_service::RequestPhase::kSucceeded:
+            err = overlay_runtime::ShowToastForDuration(
+                BuildToast(request.status_message.c_str(), EmbeddedIconId::kCheck), 2500);
+            break;
+        case summary_service::RequestPhase::kFailed: {
+            const char* text =
+                request.status_message.empty() ? "Summary failed" : request.status_message.c_str();
+            err = overlay_runtime::ShowToastForDuration(BuildToast(text, EmbeddedIconId::kClose),
+                                                        2500);
+            break;
+        }
+        case summary_service::RequestPhase::kIdle:
+        default:
+            break;
+    }
+    FlushOverlayFeedback();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Show summary toast failed: %s", esp_err_to_name(err));
     }
 }
 
@@ -997,7 +1087,7 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
 void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
 {
     if (event.count > 0) {
-        ESP_LOGI(kTag,
+        ESP_LOGD(kTag,
                  "Touch intent: phase=%s count=%u x=%u y=%u size=%u id=%u",
                  TouchPhaseName(event.phase),
                  static_cast<unsigned>(event.count),
@@ -1006,7 +1096,7 @@ void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
                  static_cast<unsigned>(event.points[0].size),
                  static_cast<unsigned>(event.points[0].id));
     } else {
-        ESP_LOGI(kTag, "Touch intent: phase=%s count=%u",
+        ESP_LOGD(kTag, "Touch intent: phase=%s count=%u",
                  TouchPhaseName(event.phase),
                  static_cast<unsigned>(event.count));
     }

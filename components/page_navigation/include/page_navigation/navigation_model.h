@@ -13,6 +13,7 @@ enum class NavigationScope : uint8_t {
     kTime,
     kDashboard,
     kVibeCheck,
+    kSummarize,
 };
 
 enum class NavigationItemSection : uint8_t {
@@ -23,6 +24,7 @@ enum class NavigationItemSection : uint8_t {
     kTimePageControls,
     kDashboardPageMenu,
     kVibeCheckPageControls,
+    kSummarizePageControls,
 };
 
 enum class NavigationItemRole : uint8_t {
@@ -49,6 +51,9 @@ enum class NavigationItemRole : uint8_t {
     kTimePageSave,
     kDashboardMenuItem,
     kVibeCheckPageCard,
+    kSummarizePageSegmentControl,
+    kSummarizePageScrollContainer,
+    kSummarizePageGetSummaryButton,
 };
 
 struct NavigationItemDescriptor {
@@ -72,6 +77,7 @@ NavigationModel BuildWifiPageNavigationModel();
 NavigationModel BuildTimePageNavigationModel();
 NavigationModel BuildDashboardPageNavigationModel();
 NavigationModel BuildVibeCheckPageNavigationModel();
+NavigationModel BuildSummarizePageNavigationModel();
 
 }  // namespace page_navigation
 

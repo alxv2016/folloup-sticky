@@ -229,6 +229,8 @@ void DrawSettingsPage(uint8_t* framebuffer,
 
     ButtonStyle format_button_style = {};
     format_button_style.width = layout.format_sd_button.width;
+    // Sole action on the page -> primary (darker) variant.
+    format_button_style.variant = ButtonVariant::kPrimary;
     DrawButton(framebuffer,
                raw_width,
                raw_height,

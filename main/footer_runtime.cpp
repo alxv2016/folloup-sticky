@@ -173,7 +173,7 @@ void LogFooterTouchProbe(const epaper_ui::GlobalFooterState& state,
     const epaper_ui::UiRect home_bounds = epaper_ui::GlobalFooterItemBounds(
         portrait_width, portrait_height, state, epaper_ui::GlobalFooterItemId::kHome);
 
-    ESP_LOGI(kTag,
+    ESP_LOGD(kTag,
              "Footer probe x=%d y=%d footer=[%d,%d %dx%d] settings_visible=%d settings=[%d,%d %dx%d] home_visible=%d home=[%d,%d %dx%d] hit=%d item=%d",
              x,
              y,

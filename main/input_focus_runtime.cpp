@@ -136,7 +136,7 @@ app_interaction::InputResult HandleTouchEvent(const touch_service::TouchEventInf
             result.feedback_cue = app_interaction::FeedbackCue::kTouchContact;
         }
         if (event.count > 0) {
-            ESP_LOGI(kTag,
+            ESP_LOGD(kTag,
                      "Touch miss phase=%d x=%u y=%u size=%u id=%u",
                      static_cast<int>(event.phase),
                      static_cast<unsigned>(event.points[0].x),
@@ -156,7 +156,7 @@ app_interaction::InputResult HandleTouchEvent(const touch_service::TouchEventInf
                 std::lock_guard<std::mutex> lock(s_touch_state_mutex);
                 s_touch_state.contact_active = true;
                 if (target_hit) {
-                    ESP_LOGI(kTag,
+                    ESP_LOGD(kTag,
                              "Touch target resolved owner=%d kind=%d primary=%ld",
                              static_cast<int>(resolved_target.owner),
                              static_cast<int>(resolved_target.kind),
@@ -177,7 +177,7 @@ app_interaction::InputResult HandleTouchEvent(const touch_service::TouchEventInf
                     }
                     s_touch_state.focused_target = resolved_target;
                     s_touch_state.armed_target = resolved_target;
-                    ESP_LOGI(kTag,
+                    ESP_LOGD(kTag,
                              "Touch focus target owner=%d kind=%d primary=%ld",
                              static_cast<int>(resolved_target.owner),
                              static_cast<int>(resolved_target.kind),
@@ -185,7 +185,7 @@ app_interaction::InputResult HandleTouchEvent(const touch_service::TouchEventInf
                 } else {
                     s_touch_state.armed_target = {};
                     s_touch_state.focused_target = {};
-                    ESP_LOGI(kTag, "Touch focus cleared: no interactive target hit");
+                    ESP_LOGD(kTag, "Touch focus cleared: no interactive target hit");
                 }
             }
             if (play_touch_feedback) {

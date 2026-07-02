@@ -485,7 +485,8 @@ inline constexpr int kEmptyStateIconSize = empty_state::kIconSize;
 
 namespace scroll_container {
 
-inline constexpr int kPanelBorderThickness = network_list::kPanelBorderThickness;
+// 2px so the light-gray panel border stays legible on the e-paper panel.
+inline constexpr int kPanelBorderThickness = 2;
 inline constexpr int kFocusRingThickness = toggle::kFocusRingThickness;
 inline constexpr int kFocusGap = toggle::kFocusGap;
 inline constexpr int kContentPadding = spacing::k12;

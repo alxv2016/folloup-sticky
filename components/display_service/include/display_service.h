@@ -10,6 +10,7 @@
 #include "epaper_ui/dashboard_page.h"
 #include "epaper_ui/status_bar.h"
 #include "epaper_ui/time_page.h"
+#include "epaper_ui/summarize_page.h"
 #include "epaper_ui/toast.h"
 #include "epaper_ui/vibe_check_page.h"
 #include "epaper_ui/wifi_page.h"
@@ -23,6 +24,7 @@ enum class ScreenId {
     kWifi,
     kTime,
     kVibeCheck,
+    kSummarize,
     kLockScreen,
 };
 
@@ -78,6 +80,7 @@ esp_err_t SetWifiPageState(const epaper_ui::WifiPageState& state);
 esp_err_t SetTimePageState(const epaper_ui::TimePageState& state);
 esp_err_t SetDashboardPageState(const epaper_ui::DashboardPageState& state);
 esp_err_t SetVibeCheckPageState(const epaper_ui::VibeCheckPageState& state);
+esp_err_t SetSummarizePageState(const epaper_ui::SummarizePageState& state);
 esp_err_t SetLockScreenState(const epaper_ui::LockScreenState& state);
 esp_err_t SetKeyboardState(const epaper_ui::KeyboardState& state);
 esp_err_t SetCardModalState(const epaper_ui::CardModalState& state);

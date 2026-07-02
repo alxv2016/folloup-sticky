@@ -70,6 +70,16 @@ void DrawPortraitMonoAsset(uint8_t* framebuffer,
                            int y,
                            const EmbeddedImageAsset* asset,
                            uint8_t tone);
+// Nearest-neighbour scale a mono asset into `dest` (used to draw small source icons at a larger
+// display size, e.g. 36px assets shown at the 64px empty-state size).
+void DrawScaledPortraitMonoAsset(uint8_t* framebuffer,
+                                 int raw_width,
+                                 int raw_height,
+                                 int portrait_width,
+                                 int portrait_height,
+                                 const UiRect& dest,
+                                 const EmbeddedImageAsset* asset,
+                                 uint8_t tone);
 void DrawTypographyText(uint8_t* framebuffer,
                         int raw_width,
                         int raw_height,

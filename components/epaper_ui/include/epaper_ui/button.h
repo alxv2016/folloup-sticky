@@ -33,7 +33,8 @@ struct ButtonStyle {
     int min_width = design::button::kMinWidth;
     int height = design::button::kHeight;
     int horizontal_padding = design::button::kHorizontalPadding;
-    bool center_label = false;
+    // Labels are centered by default for consistency across every page.
+    bool center_label = true;
     int border_thickness = design::button::kBorderThickness;
     int stroke_thickness = design::button::kStrokeThickness;
 };

@@ -20,7 +20,6 @@
 #include "followup_task_config.h"
 #include "gemini_service.h"
 #include "recording_archive_service.h"
-#include "recording_service.h"
 #include "storage_service.h"
 
 namespace summary_service {
@@ -132,25 +131,30 @@ bool GeneratePromptTextResult(const std::string& prompt, std::string* text_out,
 std::string BuildSummaryInstructionText(SummaryKind kind, bool intermediate)
 {
     std::string text;
-    text += "You are summarizing the user's ";
-    text += SegmentLabelForKind(kind);
-    text += " for a small monochrome e-paper display.\n\n";
     if (kind == SummaryKind::kNotes) {
         text += intermediate
-                    ? "Write a compact intermediate summary. Capture the main themes, decisions, "
-                      "follow-ups, and open questions. Avoid markdown tables. Keep the wording "
-                      "compact and easy to merge later.\n\n"
-                    : "Write concise plain text with short paragraphs. Capture the main themes, "
-                      "decisions, follow-ups, and open questions. Avoid markdown tables, bullets "
-                      "are allowed only when helpful, and keep the wording compact.\n\n";
+                    ? "Summarize the notes captured within the available transcripts. Create a "
+                      "compact intermediate summary that faithfully captures the main themes, "
+                      "decisions, follow-ups, open questions, and ideas. Keep it factual, plain "
+                      "text, and easy to merge later. Avoid markdown tables.\n\n"
+                    : "Summarize the notes captured within the available transcripts. Create a "
+                      "summary capturing the main themes, decisions, follow-ups, open questions, "
+                      "and ideas in plain text. Keep it concise, and write it in an encouraging "
+                      "and optimistic tone so it feels insightful and motivating to look back on. "
+                      "Use short paragraphs and avoid markdown tables.\n\n";
     } else {
         text += intermediate
-                    ? "Write a compact intermediate summary focused on priorities, completed "
-                      "work, remaining tasks, and blockers. Mention completion state when it is "
-                      "clear from the source. Keep the wording compact and easy to merge later.\n\n"
-                    : "Write concise plain text focused on priorities, completed work, remaining "
-                      "tasks, and blockers. Mention completion state when it is clear from the "
-                      "source. Keep the wording compact and easy to skim.\n\n";
+                    ? "Summarize the todos captured within the available transcripts. Create a "
+                      "compact intermediate summary that faithfully captures the priorities, "
+                      "completed work, remaining tasks, and blockers, noting completion state when "
+                      "it is clear from the source. Keep it factual, plain text, and easy to merge "
+                      "later. Avoid markdown tables.\n\n"
+                    : "Summarize the todos captured within the available transcripts. Create a "
+                      "summary of the priorities, completed work, remaining tasks, and any "
+                      "blockers, noting completion state when it is clear from the source. Keep it "
+                      "concise and easy to skim, and write it in an encouraging and optimistic "
+                      "tone that celebrates progress and motivates the next steps. Avoid markdown "
+                      "tables.\n\n";
     }
     return text;
 }
@@ -691,37 +695,13 @@ std::vector<RecordingEntry> FilterWindowedEntries(const std::vector<RecordingEnt
     return filtered;
 }
 
-// Transcribe an audio-only entry on the fly and persist the transcript back to the archive.
-bool TranscribeArchivedEntry(const RecordingEntry& entry, std::string* transcript_out)
-{
-    if (transcript_out == nullptr || entry.recording_id.empty()) {
-        return false;
-    }
-    recording_service::RecordedClipPtr clip = recording_archive_service::LoadClip(entry.recording_id);
-    if (!clip || clip->empty()) {
-        return false;
-    }
-    const gemini_service::TranscriptionResult result = gemini_service::Transcribe(*clip);
-    const std::string transcript = TrimCopy(result.transcript);
-    if (!result.success || transcript.empty()) {
-        ESP_LOGW(kTag, "Inline transcription failed for %s: code=%s", entry.recording_id.c_str(),
-                 result.error_code.c_str());
-        return false;
-    }
-    const recording_archive_service::SaveResult save_result =
-        recording_archive_service::SaveTranscript(entry.recording_id, transcript);
-    if (!save_result.transcript_saved) {
-        ESP_LOGW(kTag, "Transcript save warning for %s: %s", entry.recording_id.c_str(),
-                 save_result.error_code.c_str());
-    }
-    *transcript_out = transcript;
-    return true;
-}
-
-std::vector<SourceEntry> CollectSourceEntriesWithFallback(SummaryKind kind,
-                                                          const std::vector<RecordingEntry>& entries,
-                                                          int* transcript_count_out,
-                                                          int* missing_count_out)
+// Gather source entries from already-transcribed recordings. Audio-only recordings (no
+// transcript yet) are skipped and counted -- summarizing does NOT transcribe on the fly, since
+// that means one blocking Gemini round-trip per recording (slow, and prone to 503/timeout that
+// tanks the whole run). Recordings are transcribed at capture time; ideas via the Vibe Check star.
+std::vector<SourceEntry> CollectSourceEntries(SummaryKind kind,
+                                              const std::vector<RecordingEntry>& entries,
+                                              int* transcript_count_out, int* missing_count_out)
 {
     std::vector<SourceEntry> source_entries;
     int transcript_count = 0;
@@ -730,12 +710,8 @@ std::vector<SourceEntry> CollectSourceEntriesWithFallback(SummaryKind kind,
     for (const RecordingEntry& entry : entries) {
         std::string transcript = TrimCopy(entry.transcript_text);
         if (transcript.empty()) {
-            if (!TranscribeArchivedEntry(entry, &transcript)) {
-                ++missing_count;
-                ESP_LOGW(kTag, "Skipping %s recording %s without transcript",
-                         SummaryKindName(kind), entry.recording_id.c_str());
-                continue;
-            }
+            ++missing_count;
+            continue;
         }
         ++transcript_count;
         source_entries.push_back({
@@ -744,6 +720,7 @@ std::vector<SourceEntry> CollectSourceEntriesWithFallback(SummaryKind kind,
             .metadata = entry.metadata,
         });
     }
+    (void)kind;
 
     if (transcript_count_out != nullptr) {
         *transcript_count_out = transcript_count;
@@ -820,16 +797,20 @@ GenerationResult GenerateSummary(SummaryKind kind)
 {
     GenerationResult result = {};
 
+    ESP_LOGI(kTag, "Generating %s summary", SummaryKindName(kind));
+
     const gemini_service::Snapshot gemini_snapshot = gemini_service::GetSnapshot();
     if (!gemini_snapshot.runtime.ready) {
         result.error_code = "gemini_not_ready";
         result.error_message = "Gemini is not connected";
+        ESP_LOGW(kTag, "Summary aborted: Gemini not connected");
         return result;
     }
     if (gemini_service::GetEffectiveApiKey().empty() ||
         gemini_service::GetEffectiveModelName().empty()) {
         result.error_code = "gemini_not_configured";
         result.error_message = "Gemini is not configured";
+        ESP_LOGW(kTag, "Summary aborted: Gemini not configured");
         return result;
     }
 
@@ -844,16 +825,21 @@ GenerationResult GenerateSummary(SummaryKind kind)
     int transcript_count = 0;
     int missing_count = 0;
     const std::vector<SourceEntry> entries =
-        CollectSourceEntriesWithFallback(kind, filtered_entries, &transcript_count, &missing_count);
+        CollectSourceEntries(kind, filtered_entries, &transcript_count, &missing_count);
     metadata.transcript_item_count = transcript_count;
     metadata.missing_transcript_item_count = missing_count;
     if (entries.empty()) {
         result.error_code = "no_summary_source";
-        result.error_message =
-            "No transcripts or transcribable recordings are available for this summary yet";
+        result.error_message = "No transcribed recordings are available for this summary yet";
         result.metadata = metadata;
+        ESP_LOGW(kTag,
+                 "Summary aborted: no transcribed source (items=%d transcribed=%d missing=%d)",
+                 source_item_count, transcript_count, missing_count);
         return result;
     }
+
+    ESP_LOGI(kTag, "Summary source ready: items=%d transcribed=%d missing=%d", source_item_count,
+             transcript_count, missing_count);
 
     std::vector<SourceEntry> trimmed_entries = entries;
     std::string prompt = BuildPromptText(kind, trimmed_entries);
@@ -868,8 +854,12 @@ GenerationResult GenerateSummary(SummaryKind kind)
 
     if (estimated_tokens > static_cast<size_t>(kSummaryInputTokenBudget)) {
         metadata.truncated = true;
+        ESP_LOGI(kTag, "Summary using chunked map-reduce: tokens=%u budget=%d",
+                 static_cast<unsigned>(estimated_tokens), kSummaryInputTokenBudget);
         return GenerateChunkedSummary(kind, trimmed_entries, metadata);
     }
+
+    ESP_LOGI(kTag, "Summary single-pass request: tokens=%u", static_cast<unsigned>(estimated_tokens));
 
     std::string final_summary;
     if (!GeneratePromptTextResult(prompt, &final_summary, &result.error_code,
@@ -928,6 +918,14 @@ void CompleteSummaryRequest(SummaryKind kind, const GenerationResult& result)
         target->available = true;
         target->text = result.text;
         target->metadata = result.metadata;
+    }
+    if (result.success) {
+        ESP_LOGI(kTag, "Summary %s succeeded: chars=%u chunked=%d", SummaryKindName(kind),
+                 static_cast<unsigned>(result.text.size()), result.metadata.chunked ? 1 : 0);
+    } else {
+        ESP_LOGW(kTag, "Summary %s failed: code=%s message=%s", SummaryKindName(kind),
+                 result.error_code.empty() ? "<none>" : result.error_code.c_str(),
+                 result.error_message.empty() ? "<none>" : result.error_message.c_str());
     }
     NotifyLocked();
 }

@@ -62,7 +62,7 @@ void DispatchTouchPoints(int8_t count, const GTPoint* points)
         event.points[i].y = NormalizeTouchY(points[i].y);
         event.points[i].size = points[i].size;
         event.points[i].id = points[i].id;
-        ESP_LOGI(kTag, "Touch point[%u]: raw=(%u,%u) mapped=(%u,%u) size=%u id=%u",
+        ESP_LOGD(kTag, "Touch point[%u]: raw=(%u,%u) mapped=(%u,%u) size=%u id=%u",
                  static_cast<unsigned>(i),
                  static_cast<unsigned>(points[i].x),
                  static_cast<unsigned>(points[i].y),

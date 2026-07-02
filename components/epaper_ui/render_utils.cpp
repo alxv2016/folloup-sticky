@@ -340,6 +340,37 @@ void DrawPortraitMonoAsset(uint8_t* framebuffer,
     }
 }
 
+void DrawScaledPortraitMonoAsset(uint8_t* framebuffer,
+                                 int raw_width,
+                                 int raw_height,
+                                 int portrait_width,
+                                 int portrait_height,
+                                 const UiRect& dest,
+                                 const EmbeddedImageAsset* asset,
+                                 uint8_t tone)
+{
+    if (framebuffer == nullptr || asset == nullptr || asset->format != ImageFormat::kMono1 ||
+        dest.width <= 0 || dest.height <= 0 || asset->width == 0 || asset->height == 0) {
+        return;
+    }
+
+    for (int y = 0; y < dest.height; ++y) {
+        const int source_y = std::min<int>(
+            asset->height - 1, static_cast<int>(static_cast<int64_t>(y) * asset->height / dest.height));
+        for (int x = 0; x < dest.width; ++x) {
+            const int source_x = std::min<int>(
+                asset->width - 1, static_cast<int>(static_cast<int64_t>(x) * asset->width / dest.width));
+            if (!AssetPixelSet(*asset, source_x, source_y)) {
+                continue;
+            }
+            const int px = dest.x + x;
+            const int py = dest.y + y;
+            DrawPortraitPixel(framebuffer, raw_width, raw_height, portrait_width, portrait_height, px,
+                              py, ShouldDrawBlackForTone(px, py, tone));
+        }
+    }
+}
+
 void DrawTypographyText(uint8_t* framebuffer,
                         int raw_width,
                         int raw_height,

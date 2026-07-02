@@ -1304,22 +1304,31 @@ TextResult GenerateText(const std::string& prompt)
     if (!http.error_code.empty()) {
         result.error_code = http.error_code;
         result.error_message = TrimForLog(http.error_message);
-        return result;
+    } else {
+        cJSON* root = cJSON_ParseWithLength(http.body.c_str(), http.body.size());
+        if (http.status_code >= 200 && http.status_code < 300) {
+            result.text = ExtractCandidateText(root);
+            result.success = !result.text.empty();
+            if (!result.success) {
+                result.error_code = "empty_response";
+                result.error_message = "Gemini returned no text";
+            }
+        } else {
+            PopulateHttpError(root, http, &result.error_code, &result.error_message);
+        }
+        if (root != nullptr) {
+            cJSON_Delete(root);
+        }
     }
 
-    cJSON* root = cJSON_ParseWithLength(http.body.c_str(), http.body.size());
-    if (http.status_code >= 200 && http.status_code < 300) {
-        result.text = ExtractCandidateText(root);
-        result.success = !result.text.empty();
-        if (!result.success) {
-            result.error_code = "empty_response";
-            result.error_message = "Gemini returned no text";
-        }
+    if (result.success) {
+        ESP_LOGI(kTag, "Gemini generateContent succeeded: http=%d chars=%u", result.http_status,
+                 static_cast<unsigned>(result.text.size()));
     } else {
-        PopulateHttpError(root, http, &result.error_code, &result.error_message);
-    }
-    if (root != nullptr) {
-        cJSON_Delete(root);
+        ESP_LOGW(kTag, "Gemini generateContent failed: http=%d code=%s message=%s",
+                 result.http_status,
+                 result.error_code.empty() ? "<none>" : result.error_code.c_str(),
+                 result.error_message.empty() ? "<none>" : result.error_message.c_str());
     }
     return result;
 }
@@ -1365,6 +1374,11 @@ TokenCountResult CountTokens(const std::string& prompt)
     }
     if (root != nullptr) {
         cJSON_Delete(root);
+    }
+    if (!result.success) {
+        // Callers fall back to a size estimate, so this is debug-level to avoid chunking noise.
+        ESP_LOGD(kTag, "Gemini countTokens failed: http=%d code=%s", result.http_status,
+                 result.error_code.empty() ? "<none>" : result.error_code.c_str());
     }
     return result;
 }

@@ -7,6 +7,8 @@
 #include "settings_page_interactions.h"
 #include "settings_page_runtime.h"
 #include "storage_service.h"
+#include "summarize_page_interactions.h"
+#include "summarize_page_runtime.h"
 #include "time_page_interactions.h"
 #include "time_page_runtime.h"
 #include "ui_refresh_runtime.h"
@@ -804,6 +806,163 @@ ButtonResult HandleVibeCheckButtonEvent(const button_service::ButtonEventInfo& e
     }
 }
 
+esp_err_t ApplySummarizePageAndFooterDisplayState()
+{
+    const esp_err_t page_err = summarize_page_runtime::UpdateDisplayState();
+    if (page_err != ESP_OK && page_err != ESP_ERR_INVALID_STATE) {
+        return page_err;
+    }
+    const esp_err_t footer_err = footer_runtime::UpdateDisplayState();
+    if (footer_err != ESP_OK && footer_err != ESP_ERR_INVALID_STATE) {
+        return footer_err;
+    }
+    return page_err != ESP_OK ? page_err : footer_err;
+}
+
+void ApplySummarizePageStateUpdate(const display_service::RefreshRequest& refresh_request)
+{
+    (void)summarize_page_runtime::UpdateDisplayStateAndRequestRefresh(refresh_request);
+}
+
+void ApplySummarizeFocusUpdate(const page_actions::FocusUpdateOutcome& outcome)
+{
+    if (!outcome.handled) {
+        return;
+    }
+    if (outcome.sync_footer_projection) {
+        footer_runtime::SetProjectionState(summarize_page_runtime::BuildFooterProjectionState());
+    }
+    if (outcome.apply_page_state) {
+        const display_service::RefreshRequest refresh_request = {
+            .refresh_mode = display_service::RefreshMode::kPartial,
+            .scope = display_service::RefreshScope::kRegion,
+        };
+        if (outcome.sync_footer_projection) {
+            (void)ui_refresh_runtime::Schedule(ui_refresh_runtime::SurfaceKey::kSummarizePage,
+                                               &ApplySummarizePageAndFooterDisplayState,
+                                               refresh_request);
+            return;
+        }
+        ApplySummarizePageStateUpdate(refresh_request);
+    }
+}
+
+ButtonResult ApplySummarizeActivateResult(
+    const summarize_page_interactions::ActivateResult& activation)
+{
+    ButtonResult result = {};
+    if (!activation.handled) {
+        return result;
+    }
+
+    result.handled = true;
+    result.interaction_result = MakeConsumedResult(activation.play_activate_cue);
+
+    summarize_page_interactions::ActivateCallbacks callbacks = {};
+    callbacks.show_home = [&result]() {
+        result.footer_item = footer_runtime::FooterFocusItem::kHome;
+    };
+    callbacks.show_settings = [&result]() {
+        result.footer_item = footer_runtime::FooterFocusItem::kSettings;
+    };
+    callbacks.show_wifi = [&result]() {
+        result.footer_item = footer_runtime::FooterFocusItem::kWifi;
+    };
+    callbacks.show_time = [&result]() {
+        result.footer_item = footer_runtime::FooterFocusItem::kTime;
+    };
+    callbacks.toggle_segment = []() { summarize_page_runtime::ToggleSegment(); };
+    callbacks.enter_scroll = []() { summarize_page_runtime::EnterScroll(); };
+    callbacks.request_notes_summary = []() { summarize_page_runtime::RequestNotesSummary(); };
+    callbacks.request_todos_summary = []() { summarize_page_runtime::RequestTodosSummary(); };
+    summarize_page_interactions::ApplyPrimaryActivateResult(activation, callbacks);
+    if (result.footer_item != footer_runtime::FooterFocusItem::kNone) {
+        result.interaction_result.play_feedback = false;
+        result.interaction_result.feedback_cue = app_interaction::FeedbackCue::kNone;
+    }
+    return result;
+}
+
+FocusMoveResult ApplySummarizeMoveResult(const page_actions::FocusMoveOutcome& outcome)
+{
+    FocusMoveResult result = {};
+    if (!outcome.handled) {
+        return result;
+    }
+    result.handled = true;
+    result.interaction_result = MakeConsumedResult(outcome.play_navigation_cue);
+    ApplySummarizeFocusUpdate({
+        .handled = outcome.handled,
+        .apply_page_state = outcome.apply_page_state,
+        .sync_footer_projection = outcome.sync_footer_projection,
+    });
+    return result;
+}
+
+bool ResolveSummarizeTouchTarget(int x, int y, app_interaction::InteractiveTarget* target, void*)
+{
+    return summarize_page_runtime::ResolveTouchTarget(x, y, target);
+}
+
+bool FocusSummarizeTouchTarget(const app_interaction::InteractiveTarget& target, void*)
+{
+    const page_actions::FocusUpdateOutcome outcome =
+        summarize_page_runtime::FocusTouchTarget(target);
+    ApplySummarizeFocusUpdate(outcome);
+    return outcome.handled;
+}
+
+bool FocusSummarizeFooterTarget(const app_interaction::InteractiveTarget& target)
+{
+    const page_actions::FocusUpdateOutcome outcome =
+        summarize_page_runtime::FocusFooterItem(FooterItemFromTargetIndex(target.primary_index));
+    ApplySummarizeFocusUpdate(outcome);
+    return outcome.handled;
+}
+
+app_interaction::InputResult ActivateSummarizeTouchTarget(
+    const app_interaction::InteractiveTarget& target, void*)
+{
+    const ButtonResult result =
+        ApplySummarizeActivateResult(summarize_page_runtime::ActivateTouchTarget(target));
+    return result.interaction_result;
+}
+
+ButtonResult HandleSummarizeButtonEvent(const button_service::ButtonEventInfo& event)
+{
+    ButtonResult result = {};
+
+    // App-wide gesture: DOWN double-click exits an entered control (segment / scroll).
+    if (event.button == button_service::ButtonId::kDown &&
+        event.event == button_service::ButtonEvent::kDoubleClick) {
+        if (summarize_page_runtime::ExitActiveControl()) {
+            result.handled = true;
+            result.interaction_result = MakeConsumedResult(true);
+        }
+        return result;
+    }
+
+    if (event.button != button_service::ButtonId::kPowerOk) {
+        return result;
+    }
+
+    switch (event.event) {
+        case button_service::ButtonEvent::kSingleClick:
+            return ApplySummarizeActivateResult(summarize_page_runtime::ActivateFocusedItem());
+        case button_service::ButtonEvent::kPressDown:
+        case button_service::ButtonEvent::kPressUp:
+        case button_service::ButtonEvent::kPressRepeat:
+        case button_service::ButtonEvent::kLongPressStart:
+        case button_service::ButtonEvent::kLongPressUp:
+            result.handled = true;
+            result.interaction_result.consumed = true;
+            return result;
+        case button_service::ButtonEvent::kDoubleClick:
+        default:
+            return result;
+    }
+}
+
 page_interaction_runtime::TouchProvider TouchProviderForScreen(display_service::ScreenId screen)
 {
     switch (screen) {
@@ -840,6 +999,13 @@ page_interaction_runtime::TouchProvider TouchProviderForScreen(display_service::
                 .resolve_touch_target = &ResolveVibeCheckTouchTarget,
                 .focus_touch_target = &FocusVibeCheckTouchTarget,
                 .activate_touch_target = &ActivateVibeCheckTouchTarget,
+                .context = nullptr,
+            };
+        case display_service::ScreenId::kSummarize:
+            return {
+                .resolve_touch_target = &ResolveSummarizeTouchTarget,
+                .focus_touch_target = &FocusSummarizeTouchTarget,
+                .activate_touch_target = &ActivateSummarizeTouchTarget,
                 .context = nullptr,
             };
         case display_service::ScreenId::kLockScreen:
@@ -979,6 +1145,8 @@ footer_runtime::ProjectionState BuildFooterProjectionForScreen(display_service::
             return dashboard_page_runtime::BuildFooterProjectionState();
         case display_service::ScreenId::kVibeCheck:
             return vibe_check_page_runtime::BuildFooterProjectionState();
+        case display_service::ScreenId::kSummarize:
+            return summarize_page_runtime::BuildFooterProjectionState();
         case display_service::ScreenId::kLockScreen:
         default:
             return {};
@@ -1002,6 +1170,9 @@ void ResetFocusForScreen(display_service::ScreenId screen)
             return;
         case display_service::ScreenId::kVibeCheck:
             vibe_check_page_runtime::ResetFocus();
+            return;
+        case display_service::ScreenId::kSummarize:
+            summarize_page_runtime::ResetFocus();
             return;
         case display_service::ScreenId::kLockScreen:
         default:
@@ -1027,6 +1198,8 @@ bool FocusFooterTouchTargetForCurrentScreen(const app_interaction::InteractiveTa
             return FocusDashboardFooterTarget(target);
         case display_service::ScreenId::kVibeCheck:
             return FocusVibeCheckFooterTarget(target);
+        case display_service::ScreenId::kSummarize:
+            return FocusSummarizeFooterTarget(target);
         case display_service::ScreenId::kLockScreen:
         default:
             return false;
@@ -1046,6 +1219,8 @@ FocusMoveResult MoveFocusForCurrentScreen(int delta, bool page_jump)
             return ApplyDashboardMoveResult(dashboard_page_runtime::MoveFocus(delta));
         case display_service::ScreenId::kVibeCheck:
             return ApplyVibeCheckMoveResult(vibe_check_page_runtime::MoveFocus(delta));
+        case display_service::ScreenId::kSummarize:
+            return ApplySummarizeMoveResult(summarize_page_runtime::MoveFocus(delta));
         case display_service::ScreenId::kLockScreen:
         default:
             return {};
@@ -1065,6 +1240,8 @@ ButtonResult HandleButtonEventForCurrentScreen(const button_service::ButtonEvent
             return HandleDashboardButtonEvent(event);
         case display_service::ScreenId::kVibeCheck:
             return HandleVibeCheckButtonEvent(event);
+        case display_service::ScreenId::kSummarize:
+            return HandleSummarizeButtonEvent(event);
         case display_service::ScreenId::kLockScreen:
         default:
             return {};

@@ -314,20 +314,16 @@ void DrawVibeCard(uint8_t* framebuffer,
         const bool outline = style.empty_state_background_color == design::color::kGrayLight;
 
         if (state.empty_state_icon_asset != nullptr && icon_size > 0) {
-            const int draw_width =
-                std::min(icon_size, static_cast<int>(state.empty_state_icon_asset->width));
-            const int draw_height =
-                std::min(icon_size, static_cast<int>(state.empty_state_icon_asset->height));
-            const int icon_x = content.x + CenterOffset(content.width, draw_width);
-            const int icon_y = cursor_y + CenterOffset(icon_size, draw_height);
+            const int icon_x = content.x + CenterOffset(content.width, icon_size);
             const auto draw_icon = [&](int px, int py, uint8_t tone) {
-                DrawPortraitMonoAsset(framebuffer, raw_width, raw_height, portrait_width,
-                                      portrait_height, px, py, state.empty_state_icon_asset, tone);
+                DrawScaledPortraitMonoAsset(framebuffer, raw_width, raw_height, portrait_width,
+                                            portrait_height, {px, py, icon_size, icon_size},
+                                            state.empty_state_icon_asset, tone);
             };
             if (outline) {
-                DrawOutlinedText(icon_x, icon_y, style.body_outline_thickness, draw_icon);
+                DrawOutlinedText(icon_x, cursor_y, style.body_outline_thickness, draw_icon);
             }
-            draw_icon(icon_x, icon_y, design::color::kBlack);
+            draw_icon(icon_x, cursor_y, design::color::kBlack);
             cursor_y += icon_size;
         }
 
