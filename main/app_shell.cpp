@@ -35,7 +35,6 @@
 #include "settings_page_runtime.h"
 #include "status_bar_runtime.h"
 #include "storage_service.h"
-#include "summary_service.h"
 #include "timezone_service.h"
 #include "touch_service.h"
 #include "transcription_service.h"
@@ -1235,25 +1234,6 @@ void InitTranscriptionService()
     }
 }
 
-void HandleSummaryEvent(const summary_service::Event& event, void*)
-{
-    const summary_service::RequestSnapshot& request = event.snapshot.request;
-    ESP_LOGI(kTag, "Summary intent: kind=%s phase=%d in_flight=%d status=%s error=%s",
-             summary_service::SummaryKindName(request.kind), static_cast<int>(request.phase),
-             request.in_flight ? 1 : 0,
-             request.status_message.empty() ? "<none>" : request.status_message.c_str(),
-             request.error_code.empty() ? "<none>" : request.error_code.c_str());
-}
-
-void InitSummaryService()
-{
-    summary_service::SetEventHandler(HandleSummaryEvent, nullptr);
-    const esp_err_t err = summary_service::Init();
-    if (err != ESP_OK) {
-        ESP_LOGW(kTag, "Summary service init failed: %s", esp_err_to_name(err));
-    }
-}
-
 void InitRecordingSessionService()
 {
     recording_session_service::SetEventHandler(HandleRecordingSessionEvent, nullptr);
@@ -1374,7 +1354,6 @@ void Run()
     InitWifiService();
     InitRecordingService();
     InitTranscriptionService();
-    InitSummaryService();
     InitRecordingSessionService();
     InitFooterRuntime();
     StartShutdownTask();
