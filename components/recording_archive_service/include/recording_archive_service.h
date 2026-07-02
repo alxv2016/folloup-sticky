@@ -86,8 +86,12 @@ void Init();
 void SetEventHandler(EventHandler handler, void* context);
 Snapshot GetSnapshot();
 // Re-scans the archive and recomputes the snapshot (runs SD I/O on the caller's task; call
-// from a non-UI task). Fires the event handler with the new snapshot.
+// from a non-UI task). Persists the counts to NVS and fires the event handler.
 bool Refresh();
+// Kicks a background scan on a worker task (never blocks the caller). It reconciles the cached
+// snapshot against the SD card and only persists + fires an event when the counts actually
+// changed. Use this off the boot path (e.g. first home-screen show) to avoid blocking startup.
+void RefreshAsync();
 
 // Enumerate every archived recording (Notes + Todos), loading metadata and transcript text.
 // Runs SD I/O on the caller's task; call from a non-UI task. Entries are unsorted.

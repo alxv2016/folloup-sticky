@@ -1,6 +1,7 @@
 #include "recording_archive_service.h"
 
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -15,6 +16,10 @@
 #include "cJSON.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "followup_task_config.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "nvs.h"
 #include "storage_service.h"
 
 namespace recording_archive_service {
@@ -28,10 +33,27 @@ constexpr int kMetadataVersion = 1;
 // works with it directly so there is a single source of truth for the sidecar format.
 using ArchiveMetadata = RecordingMetadata;
 
+// The aggregate counts are cached in NVS so the dashboard can render them instantly at boot
+// without an SD scan; the on-demand scan then reconciles and only repaints if they changed.
+constexpr const char* kSnapshotNvsNamespace = "rec_archive";
+constexpr const char* kSnapshotNvsKey = "counts";
+constexpr uint32_t kSnapshotNvsVersion = 1;
+
+struct PersistedCounts {
+    uint32_t version = kSnapshotNvsVersion;
+    int32_t recording_count = 0;
+    int32_t notes_recording_count = 0;
+    int32_t todo_recording_count = 0;
+    int32_t follow_up_recording_count = 0;
+    int32_t completed_todo_count = 0;
+    int32_t incomplete_todo_count = 0;
+};
+
 std::mutex s_mutex;
 Snapshot s_snapshot = {};
 EventHandler s_event_handler = nullptr;
 void* s_event_context = nullptr;
+std::atomic<bool> s_refresh_in_flight{false};
 
 struct WavHeader {
     char riff[4];
@@ -877,6 +899,94 @@ esp_err_t DeleteRecordingOnMountedFilesystem(const char* mount_point, void* cont
     return ESP_OK;
 }
 
+bool SnapshotCountsEqual(const Snapshot& lhs, const Snapshot& rhs)
+{
+    return lhs.recording_count == rhs.recording_count &&
+           lhs.notes_recording_count == rhs.notes_recording_count &&
+           lhs.todo_recording_count == rhs.todo_recording_count &&
+           lhs.follow_up_recording_count == rhs.follow_up_recording_count &&
+           lhs.completed_todo_count == rhs.completed_todo_count &&
+           lhs.incomplete_todo_count == rhs.incomplete_todo_count;
+}
+
+bool LoadSnapshotFromNvs(Snapshot* out)
+{
+    if (out == nullptr) {
+        return false;
+    }
+    nvs_handle_t handle = 0;
+    if (nvs_open(kSnapshotNvsNamespace, NVS_READONLY, &handle) != ESP_OK) {
+        return false;
+    }
+    PersistedCounts counts = {};
+    size_t length = sizeof(counts);
+    const esp_err_t err = nvs_get_blob(handle, kSnapshotNvsKey, &counts, &length);
+    nvs_close(handle);
+    if (err != ESP_OK || length != sizeof(counts) || counts.version != kSnapshotNvsVersion) {
+        return false;
+    }
+    out->recording_count = counts.recording_count;
+    out->notes_recording_count = counts.notes_recording_count;
+    out->todo_recording_count = counts.todo_recording_count;
+    out->follow_up_recording_count = counts.follow_up_recording_count;
+    out->completed_todo_count = counts.completed_todo_count;
+    out->incomplete_todo_count = counts.incomplete_todo_count;
+    return true;
+}
+
+void SaveSnapshotToNvs(const Snapshot& snapshot)
+{
+    nvs_handle_t handle = 0;
+    if (nvs_open(kSnapshotNvsNamespace, NVS_READWRITE, &handle) != ESP_OK) {
+        return;
+    }
+    const PersistedCounts counts = {
+        .version = kSnapshotNvsVersion,
+        .recording_count = snapshot.recording_count,
+        .notes_recording_count = snapshot.notes_recording_count,
+        .todo_recording_count = snapshot.todo_recording_count,
+        .follow_up_recording_count = snapshot.follow_up_recording_count,
+        .completed_todo_count = snapshot.completed_todo_count,
+        .incomplete_todo_count = snapshot.incomplete_todo_count,
+    };
+    if (nvs_set_blob(handle, kSnapshotNvsKey, &counts, sizeof(counts)) == ESP_OK) {
+        nvs_commit(handle);
+    }
+    nvs_close(handle);
+}
+
+// Scan the SD archive and adopt the result. Persists to NVS and notifies subscribers only when
+// the counts actually changed, unless force_notify is set (used after a known mutation).
+bool ScanAndApply(bool force_notify)
+{
+    Snapshot scanned = {};
+    scanned.initialized = true;
+    ScanContext context = {.snapshot = &scanned};
+    const esp_err_t err =
+        storage_service::RunWithMountedFilesystem(ScanArchiveOnMountedFilesystem, &context);
+
+    bool changed = false;
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        changed = !s_snapshot.initialized || !SnapshotCountsEqual(s_snapshot, scanned);
+        s_snapshot = scanned;
+    }
+    if (changed) {
+        SaveSnapshotToNvs(scanned);
+    }
+    if (changed || force_notify) {
+        NotifyHandler();
+    }
+    return err == ESP_OK;
+}
+
+void RefreshWorkerTask(void*)
+{
+    (void)ScanAndApply(false);
+    s_refresh_in_flight.store(false, std::memory_order_release);
+    vTaskDelete(nullptr);
+}
+
 }  // namespace
 
 SaveResult SaveClip(const recording_service::RecordedClip& clip, const SaveOptions& options)
@@ -994,22 +1104,36 @@ Snapshot GetSnapshot()
 
 bool Refresh()
 {
-    Snapshot scanned = {};
-    scanned.initialized = true;
-    ScanContext context = {.snapshot = &scanned};
-    const esp_err_t err =
-        storage_service::RunWithMountedFilesystem(ScanArchiveOnMountedFilesystem, &context);
-    {
-        std::lock_guard<std::mutex> lock(s_mutex);
-        s_snapshot = scanned;
+    // Synchronous refresh (used right after a mutation): always notify so the UI can repaint.
+    return ScanAndApply(true);
+}
+
+void RefreshAsync()
+{
+    bool expected = false;
+    if (!s_refresh_in_flight.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+        return;  // a reconcile scan is already running
     }
-    NotifyHandler();
-    return err == ESP_OK;
+    const BaseType_t created =
+        xTaskCreatePinnedToCore(RefreshWorkerTask, "arc_refresh", 4096, nullptr,
+                                followup_task_config::kPriorityStorage, nullptr,
+                                followup_task_config::kSystemCore);
+    if (created != pdPASS) {
+        s_refresh_in_flight.store(false, std::memory_order_release);
+        ESP_LOGW(kTag, "Failed to start archive refresh worker");
+    }
 }
 
 void Init()
 {
-    (void)Refresh();
+    // Load the cached counts from NVS so the dashboard renders instantly at boot with no SD I/O.
+    // The actual SD scan is deferred (RefreshAsync, kicked when the home screen is shown) and only
+    // repaints if the counts changed. First boot (no cache) starts empty until that scan lands.
+    Snapshot cached = {};
+    cached.initialized = true;
+    cached.available = LoadSnapshotFromNvs(&cached);
+    std::lock_guard<std::mutex> lock(s_mutex);
+    s_snapshot = cached;
 }
 
 bool MarkRecordingCompleted(const std::string& recording_id, bool completed)

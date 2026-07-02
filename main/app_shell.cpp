@@ -198,6 +198,13 @@ esp_err_t ShowHomeScreen(display_service::RefreshMode refresh_mode)
         ESP_LOGW(kTag, "Dashboard sync before home screen failed: %s",
                  esp_err_to_name(dashboard_err));
     }
+    // Reconcile the archive counts against the SD card once, off the boot path: the dashboard
+    // rendered from the NVS-cached snapshot above; this background scan repaints only if the
+    // counts actually changed (e.g. first boot, or the card was edited externally).
+    static std::atomic<bool> s_archive_reconcile_started{false};
+    if (!s_archive_reconcile_started.exchange(true)) {
+        recording_archive_service::RefreshAsync();
+    }
     return display_service::SetCurrentScreen(display_service::ScreenId::kHome, refresh_mode,
                                              "show_home_screen");
 }
