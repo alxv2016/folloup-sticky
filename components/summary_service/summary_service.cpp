@@ -814,7 +814,17 @@ GenerationResult GenerateSummary(SummaryKind kind)
         return result;
     }
 
-    const std::vector<RecordingEntry> recordings = recording_archive_service::ListRecordings();
+    esp_err_t list_status = ESP_OK;
+    const std::vector<RecordingEntry> recordings =
+        recording_archive_service::ListRecordings(&list_status);
+    if (list_status != ESP_OK) {
+        // Distinct from "no recordings": the SD read failed, so we can't trust an
+        // empty result. Surface it honestly instead of caching a bogus summary.
+        result.error_code = "storage_read_failed";
+        result.error_message = "Couldn't read recordings from SD";
+        ESP_LOGW(kTag, "Summary aborted: SD read failed (%s)", esp_err_to_name(list_status));
+        return result;
+    }
     int source_item_count = 0;
     const std::vector<RecordingEntry> filtered_entries =
         FilterWindowedEntries(recordings, kind, &source_item_count);

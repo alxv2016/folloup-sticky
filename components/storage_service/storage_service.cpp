@@ -721,6 +721,47 @@ esp_err_t RunWithMountedFilesystem(MountedFilesystemHandler handler, void* conte
     return err;
 }
 
+esp_err_t RecoverAfterLightSleep()
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    SdCard& card = Card();
+    if (!card.IsCardInserted()) {
+        ESP_LOGI(kTag, "Light-sleep storage recovery skipped: no card inserted");
+        RefreshMountedSnapshotAndNotify(card, ESP_ERR_NOT_FOUND);
+        return ESP_OK;
+    }
+
+    esp_err_t err = ESP_OK;
+    {
+        // The SDSPI card and shared SPI host lose their state across light sleep,
+        // so the cached mount handle is stale on wake and the first read times out
+        // (sdmmc 0x107). Force a clean unmount + remount to re-run the card's SPI
+        // init sequence. Acquire the bus BEFORE s_card_mutex to match the lock
+        // order used by RunWithMountedFilesystem and the format path.
+        StorageBusGuard bus_guard;
+        err = bus_guard.Acquire();
+        if (err != ESP_OK) {
+            ESP_LOGW(kTag, "Shared storage bus acquire failed during light-sleep recovery: %s",
+                     esp_err_to_name(err));
+        } else {
+            std::lock_guard<std::mutex> card_lock(s_card_mutex);
+            card.Unmount();
+            err = MountCardLocked(card);
+            if (err == ESP_OK) {
+                ESP_LOGI(kTag, "SD remounted after light sleep");
+            } else {
+                ESP_LOGW(kTag, "SD remount after light sleep failed: %s", esp_err_to_name(err));
+            }
+        }
+    }
+
+    RefreshMountedSnapshotAndNotify(card, err);
+    return err;
+}
+
 esp_err_t RequestFormatSdCard()
 {
     Event event = {};

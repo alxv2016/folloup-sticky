@@ -301,6 +301,13 @@ esp_err_t RestoreAfterLightSleep()
                      esp_err_to_name(touch_err));
         }
     }
+    // The SD card shares the SPI bus the display just re-initialized; remount it
+    // so the first post-wake read doesn't hit a stale card (sdmmc 0x107 timeout).
+    const esp_err_t storage_err = storage_service::RecoverAfterLightSleep();
+    if (storage_err != ESP_OK && storage_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Storage recovery after light sleep failed: %s",
+                 esp_err_to_name(storage_err));
+    }
     if (wifi_service::IsBusy() || wifi_service::IsConnected() || wifi_service::HasSavedCredentials() ||
         wifi_service::IsAccessPointMode()) {
         wifi_service::RecoverAfterLightSleep();

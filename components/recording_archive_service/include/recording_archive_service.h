@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "esp_err.h"
 #include "recording_service.h"
 
 namespace recording_archive_service {
@@ -95,7 +96,9 @@ void RefreshAsync();
 
 // Enumerate every archived recording (Notes + Todos), loading metadata and transcript text.
 // Runs SD I/O on the caller's task; call from a non-UI task. Entries are unsorted.
-std::vector<RecordingEntry> ListRecordings();
+// When the SD read fails, an empty list is returned and *status (if provided) is set to the
+// error, so callers can tell a genuinely empty archive apart from a failed read.
+std::vector<RecordingEntry> ListRecordings(esp_err_t* status = nullptr);
 // Delete a recording and all of its sidecar files (.wav/.json/.txt), then re-aggregate.
 bool DeleteRecording(const std::string& recording_id);
 // Load an archived recording's WAV back into an in-memory clip (e.g. to re-transcribe it).

@@ -588,24 +588,47 @@ void NotifyHandler()
     }
 }
 
-void ScanDirectoryInto(const std::string& directory, Snapshot* snapshot)
+// Returns ESP_OK when the directory was counted fully (including the absent
+// case), or an error when the SD failed mid-read so a transient failure isn't
+// mistaken for an emptied archive.
+esp_err_t ScanDirectoryInto(const std::string& directory, Snapshot* snapshot)
 {
+    errno = 0;
     DIR* dir = opendir(directory.c_str());
     if (dir == nullptr) {
-        return;  // directory may not exist yet
+        if (errno == ENOENT) {
+            return ESP_OK;  // directory may not exist yet
+        }
+        ESP_LOGW(kTag, "opendir(%s) failed: errno=%d", directory.c_str(), errno);
+        return ESP_FAIL;
     }
 
-    struct dirent* entry = nullptr;
-    while ((entry = readdir(dir)) != nullptr) {
+    esp_err_t status = ESP_OK;
+    while (true) {
+        errno = 0;
+        struct dirent* entry = readdir(dir);
+        if (entry == nullptr) {
+            if (errno != 0) {
+                ESP_LOGW(kTag, "readdir(%s) failed: errno=%d", directory.c_str(), errno);
+                status = ESP_FAIL;
+            }
+            break;
+        }
+
         const std::string name = entry->d_name;
         if (name.size() < 6 || name.compare(name.size() - 5, 5, ".json") != 0) {
             continue;
         }
 
         std::string json;
+        if (!ReadTextFile(JoinPath(directory, name), &json)) {
+            ESP_LOGW(kTag, "Read failed for %s during scan", name.c_str());
+            status = ESP_FAIL;
+            break;
+        }
         ArchiveMetadata metadata = {};
-        if (!ReadTextFile(JoinPath(directory, name), &json) || !ParseMetadata(json, &metadata)) {
-            continue;
+        if (!ParseMetadata(json, &metadata)) {
+            continue;  // corrupt metadata; skip this entry
         }
 
         snapshot->recording_count++;
@@ -625,6 +648,7 @@ void ScanDirectoryInto(const std::string& directory, Snapshot* snapshot)
         }
     }
     closedir(dir);
+    return status;
 }
 
 struct ScanContext {
@@ -637,10 +661,17 @@ esp_err_t ScanArchiveOnMountedFilesystem(const char* mount_point, void* context)
     if (mount_point == nullptr || scan == nullptr || scan->snapshot == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
-    ScanDirectoryInto(JoinPath(mount_point, "recordings"), scan->snapshot);
-    ScanDirectoryInto(JoinPath(mount_point, "todos"), scan->snapshot);
-    scan->snapshot->available = true;
-    return ESP_OK;
+    // Reset so a remount-and-retry inside RunWithMountedFilesystem can't double-count.
+    *scan->snapshot = {};
+    scan->snapshot->initialized = true;
+    esp_err_t err = ScanDirectoryInto(JoinPath(mount_point, "recordings"), scan->snapshot);
+    if (err == ESP_OK) {
+        err = ScanDirectoryInto(JoinPath(mount_point, "todos"), scan->snapshot);
+    }
+    if (err == ESP_OK) {
+        scan->snapshot->available = true;
+    }
+    return err;
 }
 
 struct MutateContext {
@@ -694,15 +725,35 @@ int64_t FileModifiedSeconds(const std::string& path)
     return static_cast<int64_t>(st.st_mtime);
 }
 
-void ListEntriesInDirectory(const std::string& directory, std::vector<RecordingEntry>* entries)
+// Returns ESP_OK when the directory was read fully (including the legitimately
+// absent case), or an error when the SD itself failed mid-read so callers can
+// tell an empty archive apart from a failed scan.
+esp_err_t ListEntriesInDirectory(const std::string& directory, std::vector<RecordingEntry>* entries)
 {
+    errno = 0;
     DIR* dir = opendir(directory.c_str());
     if (dir == nullptr) {
-        return;  // directory may not exist yet
+        if (errno == ENOENT) {
+            return ESP_OK;  // directory may not exist yet
+        }
+        ESP_LOGW(kTag, "opendir(%s) failed: errno=%d", directory.c_str(), errno);
+        return ESP_FAIL;
     }
 
-    struct dirent* dir_entry = nullptr;
-    while ((dir_entry = readdir(dir)) != nullptr) {
+    esp_err_t status = ESP_OK;
+    while (true) {
+        errno = 0;
+        struct dirent* dir_entry = readdir(dir);
+        if (dir_entry == nullptr) {
+            // readdir returns nullptr for both end-of-stream and error; a nonzero
+            // errno means the SD read failed partway through the listing.
+            if (errno != 0) {
+                ESP_LOGW(kTag, "readdir(%s) failed: errno=%d", directory.c_str(), errno);
+                status = ESP_FAIL;
+            }
+            break;
+        }
+
         const std::string name = dir_entry->d_name;
         if (name.size() < 6 || name.compare(name.size() - 5, 5, ".json") != 0) {
             continue;
@@ -710,9 +761,16 @@ void ListEntriesInDirectory(const std::string& directory, std::vector<RecordingE
 
         const std::string metadata_path = JoinPath(directory, name);
         std::string json;
+        if (!ReadTextFile(metadata_path, &json)) {
+            // readdir just enumerated this file, so a read failure is an SD error,
+            // not a missing entry. Stop and report it so the caller can retry.
+            ESP_LOGW(kTag, "Read failed for %s during listing", metadata_path.c_str());
+            status = ESP_FAIL;
+            break;
+        }
         ArchiveMetadata metadata = {};
-        if (!ReadTextFile(metadata_path, &json) || !ParseMetadata(json, &metadata)) {
-            continue;
+        if (!ParseMetadata(json, &metadata)) {
+            continue;  // corrupt metadata; skip this entry
         }
 
         const std::string base_path = JoinPath(directory, name.substr(0, name.size() - 5));
@@ -733,6 +791,7 @@ void ListEntriesInDirectory(const std::string& directory, std::vector<RecordingE
         entries->push_back(std::move(entry));
     }
     closedir(dir);
+    return status;
 }
 
 struct ListEntriesContext {
@@ -745,9 +804,13 @@ esp_err_t ListEntriesOnMountedFilesystem(const char* mount_point, void* context)
     if (mount_point == nullptr || list == nullptr || list->entries == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
-    ListEntriesInDirectory(JoinPath(mount_point, "recordings"), list->entries);
-    ListEntriesInDirectory(JoinPath(mount_point, "todos"), list->entries);
-    return ESP_OK;
+    // Reset so a remount-and-retry inside RunWithMountedFilesystem can't append twice.
+    list->entries->clear();
+    esp_err_t err = ListEntriesInDirectory(JoinPath(mount_point, "recordings"), list->entries);
+    if (err == ESP_OK) {
+        err = ListEntriesInDirectory(JoinPath(mount_point, "todos"), list->entries);
+    }
+    return err;
 }
 
 struct LoadClipContext {
@@ -964,6 +1027,12 @@ bool ScanAndApply(bool force_notify)
     ScanContext context = {.snapshot = &scanned};
     const esp_err_t err =
         storage_service::RunWithMountedFilesystem(ScanArchiveOnMountedFilesystem, &context);
+    if (err != ESP_OK) {
+        // A failed scan (e.g. transient SD read error) must not overwrite the
+        // known-good counts with a partial/empty result.
+        ESP_LOGW(kTag, "Archive scan failed: %s; keeping existing counts", esp_err_to_name(err));
+        return false;
+    }
 
     bool changed = false;
     {
@@ -1041,11 +1110,20 @@ SaveResult SaveTranscript(const std::string& recording_id, const std::string& tr
     return result;
 }
 
-std::vector<RecordingEntry> ListRecordings()
+std::vector<RecordingEntry> ListRecordings(esp_err_t* status)
 {
     std::vector<RecordingEntry> entries;
     ListEntriesContext context = {.entries = &entries};
-    (void)storage_service::RunWithMountedFilesystem(ListEntriesOnMountedFilesystem, &context);
+    const esp_err_t err =
+        storage_service::RunWithMountedFilesystem(ListEntriesOnMountedFilesystem, &context);
+    if (status != nullptr) {
+        *status = err;
+    }
+    if (err != ESP_OK) {
+        // Never hand back a partial listing as if it were the full archive.
+        ESP_LOGW(kTag, "ListRecordings failed: %s", esp_err_to_name(err));
+        entries.clear();
+    }
     return entries;
 }
 
