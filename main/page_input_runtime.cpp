@@ -1038,10 +1038,7 @@ ButtonResult ApplyNotesActivateResult(const notes_page_interactions::ActivateRes
     callbacks.show_time = [&result]() {
         result.footer_item = footer_runtime::FooterFocusItem::kTime;
     };
-    callbacks.open_item_actions = []() {
-        // TODO: open the recording item-actions modal (View details / Follow up / Turn to task /
-        // Delete). Wired in a follow-up step.
-    };
+    callbacks.open_item_actions = []() { (void)notes_page_runtime::ShowItemActionsModal(); };
     notes_page_interactions::ApplyPrimaryActivateResult(activation, callbacks);
     if (result.footer_item != footer_runtime::FooterFocusItem::kNone) {
         result.interaction_result.play_feedback = false;

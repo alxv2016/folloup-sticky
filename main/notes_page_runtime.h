@@ -36,6 +36,13 @@ esp_err_t SyncFromArchive(bool request_refresh_if_active);
 // Leave an entered item list (DOWN double-click). Returns true if a list was active.
 bool ExitActiveControl();
 
+// Open the item-actions modal for the currently selected item (Follow up / Turn to task /
+// Delete / Close). Returns true if it was shown.
+bool ShowItemActionsModal();
+// Dispatch the item-actions modal selection. Returns true if an item-actions modal was pending
+// (so the shared submit chain in app_shell stops here).
+bool HandleItemActionSelection(int selected_index);
+
 // A value snapshot of the currently selected item, for the item-actions modal (safe to use
 // outside the runtime lock).
 struct SelectedEntrySnapshot {

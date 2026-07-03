@@ -2,10 +2,13 @@
 
 #include <climits>
 #include <mutex>
+#include <vector>
 
 #include "epaper_ui/notes_page.h"
+#include "epaper_ui/select_modal.h"
 #include "esp_log.h"
 #include "notes_page_coordinator.h"
+#include "overlay_runtime.h"
 #include "page_navigation/page_focus_projection.h"
 #include "recording_archive_service.h"
 #include "ui_refresh_runtime.h"
@@ -17,9 +20,22 @@ constexpr const char* kTag = "NotesPageRuntime";
 constexpr int kItemIndexBits = 16;
 constexpr int32_t kItemIndexMask = (1 << kItemIndexBits) - 1;
 
+enum class ItemAction : uint8_t {
+    kFollowUp,
+    kTurnToTask,
+    kDelete,
+    kClose,
+};
+
 std::mutex s_mutex;
 NotesPageCoordinator s_coordinator = {};
 int32_t s_interaction_generation = 1;
+
+// The item-actions modal is a shared select_modal; track the selection so the app_shell submit
+// chain can route it back here, and remember the row->action mapping shown to the user.
+bool s_item_actions_pending = false;
+SelectedEntrySnapshot s_item_actions_entry = {};
+std::vector<ItemAction> s_item_actions = {};
 
 void AdvanceInteractionGenerationLocked()
 {
@@ -335,6 +351,93 @@ void SetEntryFollowUpState(const std::string& recording_id, bool follow_up,
         s_coordinator.SetEntryFollowUpState(recording_id, follow_up, follow_up_completed);
     }
     (void)UpdateDisplayStateAndRequestRefresh(display_service::RefreshMode::kPartial);
+}
+
+bool ShowItemActionsModal()
+{
+    epaper_ui::SelectModalState modal = {};
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        const NotesPageCoordinator::TimelineEntry* entry = s_coordinator.SelectedEntry();
+        if (entry == nullptr) {
+            return false;
+        }
+        s_item_actions_entry = {
+            .valid = true,
+            .recording_id = entry->recording_id,
+            .recording_path = entry->recording_path,
+            .follow_up = entry->follow_up,
+            .follow_up_completed = entry->follow_up_completed,
+        };
+        s_item_actions.clear();
+        modal.title_text = "Note";
+        modal.items.push_back({entry->follow_up ? "Remove follow-up" : "Follow up"});
+        s_item_actions.push_back(ItemAction::kFollowUp);
+        modal.items.push_back({"Turn to task"});
+        s_item_actions.push_back(ItemAction::kTurnToTask);
+        modal.items.push_back({"Delete"});
+        s_item_actions.push_back(ItemAction::kDelete);
+        modal.items.push_back({"Close"});
+        s_item_actions.push_back(ItemAction::kClose);
+        modal.selected_index = 0;
+        s_item_actions_pending = true;
+    }
+    const esp_err_t err = overlay_runtime::ShowSelectModal(modal);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        s_item_actions_pending = false;
+        ESP_LOGW(kTag, "Show item-actions modal failed: %s", esp_err_to_name(err));
+        return false;
+    }
+    return true;
+}
+
+bool HandleItemActionSelection(int selected_index)
+{
+    ItemAction action = ItemAction::kClose;
+    SelectedEntrySnapshot entry = {};
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        if (!s_item_actions_pending) {
+            return false;
+        }
+        s_item_actions_pending = false;
+        entry = s_item_actions_entry;
+        if (selected_index < 0 || selected_index >= static_cast<int>(s_item_actions.size())) {
+            return true;  // dismissed without a valid selection
+        }
+        action = s_item_actions[static_cast<size_t>(selected_index)];
+    }
+    if (!entry.valid) {
+        return true;
+    }
+
+    switch (action) {
+        case ItemAction::kFollowUp: {
+            const bool next_follow_up = !entry.follow_up;
+            // Optimistic repaint, then persist; revert on failure.
+            SetEntryFollowUpState(entry.recording_id, next_follow_up, false);
+            if (!recording_archive_service::MarkRecordingFollowUp(entry.recording_id,
+                                                                  next_follow_up, false)) {
+                SetEntryFollowUpState(entry.recording_id, entry.follow_up,
+                                      entry.follow_up_completed);
+            }
+            break;
+        }
+        case ItemAction::kTurnToTask:
+            (void)recording_archive_service::UpdateRecordingTag(
+                entry.recording_id, recording_archive_service::RecordingTag::kTask);
+            (void)SyncFromArchive(true);
+            break;
+        case ItemAction::kDelete:
+            (void)recording_archive_service::DeleteRecording(entry.recording_id);
+            (void)SyncFromArchive(true);
+            break;
+        case ItemAction::kClose:
+        default:
+            break;
+    }
+    return true;
 }
 
 }  // namespace notes_page_runtime

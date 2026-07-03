@@ -936,7 +936,9 @@ void HandleDispatchedButtonEvent(const button_service::ButtonEventInfo& event)
         input_focus_runtime::HandleButtonEvent(event);
     PlayInteractionFeedback(overlay_result);
     if (overlay_result.select_modal_submitted) {
-        if (!time_page_runtime::HandleSelectModalSubmit(
+        if (!notes_page_runtime::HandleItemActionSelection(
+                overlay_result.select_modal_selected_index) &&
+            !time_page_runtime::HandleSelectModalSubmit(
                 overlay_result.select_modal_selected_index)) {
             (void)recording_session_service::SubmitTagSelection(
                 overlay_result.select_modal_selected_index);
@@ -1147,7 +1149,9 @@ void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
     PlayInteractionFeedback(touch_result);
     FlushOverlayFeedback();
     if (touch_result.select_modal_submitted) {
-        if (!time_page_runtime::HandleSelectModalSubmit(
+        if (!notes_page_runtime::HandleItemActionSelection(
+                touch_result.select_modal_selected_index) &&
+            !time_page_runtime::HandleSelectModalSubmit(
                 touch_result.select_modal_selected_index)) {
             (void)recording_session_service::SubmitTagSelection(
                 touch_result.select_modal_selected_index);
