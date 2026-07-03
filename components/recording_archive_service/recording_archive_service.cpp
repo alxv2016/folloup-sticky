@@ -681,6 +681,8 @@ struct MutateContext {
     bool set_follow_up = false;
     bool follow_up = false;
     bool follow_up_completed = false;
+    bool set_tag = false;
+    RecordingTag tag = RecordingTag::kNote;
     bool applied = false;
 };
 
@@ -709,6 +711,9 @@ esp_err_t MutateMetadataOnMountedFilesystem(const char* mount_point, void* conte
     if (mutate->set_follow_up) {
         metadata.follow_up = mutate->follow_up;
         metadata.follow_up_completed = mutate->follow_up_completed;
+    }
+    if (mutate->set_tag) {
+        metadata.tag = mutate->tag;
     }
 
     const std::string updated = SerializeMetadata(metadata);
@@ -1243,6 +1248,23 @@ bool MarkRecordingFollowUp(const std::string& recording_id, bool follow_up,
     context.follow_up_completed = follow_up_completed;
     (void)storage_service::RunWithMountedFilesystem(MutateMetadataOnMountedFilesystem, &context);
     if (context.applied) {
+        (void)Refresh();
+    }
+    return context.applied;
+}
+
+bool UpdateRecordingTag(const std::string& recording_id, RecordingTag tag)
+{
+    if (recording_id.empty()) {
+        return false;
+    }
+    MutateContext context = {};
+    context.recording_id = recording_id.c_str();
+    context.set_tag = true;
+    context.tag = tag;
+    (void)storage_service::RunWithMountedFilesystem(MutateMetadataOnMountedFilesystem, &context);
+    if (context.applied) {
+        // Re-aggregate so the tag move (e.g. Note -> Task) is reflected in the dashboard counts.
         (void)Refresh();
     }
     return context.applied;

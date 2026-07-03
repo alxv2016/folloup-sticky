@@ -109,6 +109,8 @@ recording_service::RecordedClipPtr LoadClip(const std::string& recording_id);
 bool MarkRecordingCompleted(const std::string& recording_id, bool completed);
 bool MarkRecordingFollowUp(const std::string& recording_id, bool follow_up,
                            bool follow_up_completed);
+// Change a recording's tag (e.g. turn a Note into a Task) and re-aggregate the archive counts.
+bool UpdateRecordingTag(const std::string& recording_id, RecordingTag tag);
 
 SaveResult SaveClip(const recording_service::RecordedClip& clip,
                     const SaveOptions& options = {});
