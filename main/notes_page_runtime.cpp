@@ -21,6 +21,7 @@ constexpr int kItemIndexBits = 16;
 constexpr int32_t kItemIndexMask = (1 << kItemIndexBits) - 1;
 
 enum class ItemAction : uint8_t {
+    kViewDetails,
     kFollowUp,
     kTurnToTask,
     kDelete,
@@ -36,6 +37,9 @@ int32_t s_interaction_generation = 1;
 bool s_item_actions_pending = false;
 SelectedEntrySnapshot s_item_actions_entry = {};
 std::vector<ItemAction> s_item_actions = {};
+// View details opens another screen, so (like Back) it's deferred: the selection stashes the id
+// and app_shell polls ConsumePendingViewDetails() after the submit chain.
+std::string s_pending_view_details_id = {};
 
 void AdvanceInteractionGenerationLocked()
 {
@@ -371,6 +375,8 @@ bool ShowItemActionsModal()
         };
         s_item_actions.clear();
         modal.title_text = "Note";
+        modal.items.push_back({"View details"});
+        s_item_actions.push_back(ItemAction::kViewDetails);
         modal.items.push_back({entry->follow_up ? "Remove follow-up" : "Follow up"});
         s_item_actions.push_back(ItemAction::kFollowUp);
         modal.items.push_back({"Turn to task"});
@@ -413,6 +419,11 @@ bool HandleItemActionSelection(int selected_index)
     }
 
     switch (action) {
+        case ItemAction::kViewDetails: {
+            std::lock_guard<std::mutex> lock(s_mutex);
+            s_pending_view_details_id = entry.recording_id;
+            break;
+        }
         case ItemAction::kFollowUp: {
             const bool next_follow_up = !entry.follow_up;
             // Optimistic repaint, then persist; revert on failure.
@@ -438,6 +449,14 @@ bool HandleItemActionSelection(int selected_index)
             break;
     }
     return true;
+}
+
+std::string ConsumePendingViewDetails()
+{
+    std::lock_guard<std::mutex> lock(s_mutex);
+    std::string id;
+    id.swap(s_pending_view_details_id);
+    return id;
 }
 
 }  // namespace notes_page_runtime

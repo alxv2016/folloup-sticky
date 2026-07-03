@@ -42,6 +42,9 @@ bool ShowItemActionsModal();
 // Dispatch the item-actions modal selection. Returns true if an item-actions modal was pending
 // (so the shared submit chain in app_shell stops here).
 bool HandleItemActionSelection(int selected_index);
+// The recording id whose details were requested via the modal (deferred so app_shell opens the
+// Details screen after input dispatch returns). Empty when none is pending.
+std::string ConsumePendingViewDetails();
 
 // A value snapshot of the currently selected item, for the item-actions modal (safe to use
 // outside the runtime lock).
