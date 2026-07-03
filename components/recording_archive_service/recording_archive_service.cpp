@@ -172,8 +172,10 @@ std::string FormatLocalDate(int64_t unix_seconds, bool* time_valid_out)
         return {};
     }
 
-    char buffer[32] = {};
-    if (std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &local_time) == 0) {
+    // Date only (no time): this field groups recordings by day on the Notes timeline; the exact
+    // time is carried separately by created_unix_seconds.
+    char buffer[16] = {};
+    if (std::strftime(buffer, sizeof(buffer), "%Y-%m-%d", &local_time) == 0) {
         return {};
     }
     return buffer;

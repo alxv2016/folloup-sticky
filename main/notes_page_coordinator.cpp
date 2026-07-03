@@ -26,6 +26,15 @@ int64_t EntryUnixSeconds(const RecordingEntry& entry)
     return entry.modified_unix_seconds;
 }
 
+// Group recordings by day. created_local_date is "YYYY-MM-DD" for new recordings, but older ones
+// on the SD card may carry a "YYYY-MM-DD HH:MM:SS" timestamp; key on the date portion so both
+// group under a single date chip.
+std::string DateKey(const std::string& created_local_date)
+{
+    const auto space = created_local_date.find(' ');
+    return space == std::string::npos ? created_local_date : created_local_date.substr(0, space);
+}
+
 std::string TrimTranscript(const std::string& text)
 {
     const auto begin = text.find_first_not_of(" \t\r\n");
@@ -126,7 +135,7 @@ void NotesPageCoordinator::BuildGroups(const std::vector<RecordingEntry>& record
     for (const RecordingEntry* entry_ptr : sorted) {
         const RecordingEntry& entry = *entry_ptr;
         const std::string date_key = !entry.metadata.created_local_date.empty()
-                                         ? entry.metadata.created_local_date
+                                         ? DateKey(entry.metadata.created_local_date)
                                          : FormatDateLabel(entry.metadata);
 
         int group_index = -1;
