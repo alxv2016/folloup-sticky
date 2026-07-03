@@ -33,6 +33,7 @@
 #include "recording_service.h"
 #include "sdkconfig.h"
 #include "settings_page_runtime.h"
+#include "notes_page_runtime.h"
 #include "status_bar_runtime.h"
 #include "storage_service.h"
 #include "summarize_page_runtime.h"
@@ -284,6 +285,27 @@ esp_err_t ShowSummarizeScreen(display_service::RefreshMode refresh_mode)
                                              "show_summarize_screen");
 }
 
+esp_err_t ShowNotesScreen(display_service::RefreshMode refresh_mode)
+{
+    SyncStatusBarState("show_notes_screen");
+    page_input_runtime::ResetFocusForScreen(display_service::ScreenId::kNotes);
+    page_input_runtime::ConfigureTouchProviderForScreen(display_service::ScreenId::kNotes);
+    footer_runtime::SetLayoutState(FooterLayoutForScreen(display_service::ScreenId::kNotes));
+    footer_runtime::SetProjectionState(
+        page_input_runtime::BuildFooterProjectionForScreen(display_service::ScreenId::kNotes));
+    const esp_err_t footer_err = footer_runtime::UpdateDisplayState();
+    if (footer_err != ESP_OK && footer_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Footer sync before notes screen failed: %s", esp_err_to_name(footer_err));
+    }
+    // Build the timeline from the archive (SD read) before showing.
+    const esp_err_t sync_err = notes_page_runtime::SyncFromArchive(false);
+    if (sync_err != ESP_OK && sync_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Notes page sync before show failed: %s", esp_err_to_name(sync_err));
+    }
+    return display_service::SetCurrentScreen(display_service::ScreenId::kNotes, refresh_mode,
+                                             "show_notes_screen");
+}
+
 esp_err_t ShowWifiScreen(display_service::RefreshMode refresh_mode)
 {
     SyncStatusBarState("show_wifi_screen");
@@ -390,6 +412,13 @@ bool HandleDashboardMenuItem(int menu_index, void*)
         const esp_err_t err = ShowSummarizeScreen(display_service::RefreshMode::kFull);
         if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
             ESP_LOGW(kTag, "Show summarize screen failed: %s", esp_err_to_name(err));
+        }
+        return true;
+    }
+    if (menu_index == static_cast<int>(epaper_ui::DashboardMenuItem::kNotes)) {
+        const esp_err_t err = ShowNotesScreen(display_service::RefreshMode::kFull);
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(kTag, "Show notes screen failed: %s", esp_err_to_name(err));
         }
         return true;
     }

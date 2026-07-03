@@ -293,6 +293,35 @@ bool NotesPageCoordinator::ExitItemList()
     return true;
 }
 
+bool NotesPageCoordinator::FocusGroupChip(int group_index)
+{
+    if (group_index < 0 || group_index >= TimelineGroupCount()) {
+        return false;
+    }
+    ExitItemList();
+    return SetFocusIndex(group_index);
+}
+
+bool NotesPageCoordinator::EnterGroupItem(int group_index, int item_index)
+{
+    if (group_index < 0 || group_index >= TimelineGroupCount()) {
+        return false;
+    }
+    const std::vector<TimelineEntry>& entries =
+        timeline_groups_[static_cast<size_t>(group_index)].entries;
+    if (entries.empty()) {
+        return false;
+    }
+    SetFocusIndex(group_index);
+    item_list_active_ = true;
+    active_group_index_ = group_index;
+    const int clamped = std::clamp(item_index, 0, static_cast<int>(entries.size()) - 1);
+    item_focus_.Configure(static_cast<int>(entries.size()), clamped);
+    visible_group_index_ = group_index;
+    UpdateSelectedRecordingId();
+    return true;
+}
+
 const NotesPageCoordinator::TimelineEntry* NotesPageCoordinator::FindEntry(
     const std::string& recording_id, int* group_index, int* entry_index) const
 {

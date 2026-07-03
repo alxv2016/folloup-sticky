@@ -15,6 +15,7 @@
 #include "epaper_ui/card_modal.h"
 #include "epaper_ui/toast.h"
 #include "epaper_ui/dashboard_page.h"
+#include "epaper_ui/notes_page.h"
 #include "epaper_ui/summarize_page.h"
 #include "epaper_ui/time_page.h"
 #include "epaper_ui/vibe_check_page.h"
@@ -82,6 +83,7 @@ epaper_ui::TimePageState s_time_page_state = {};
 epaper_ui::DashboardPageState s_dashboard_page_state = {};
 epaper_ui::VibeCheckPageState s_vibe_check_page_state = {};
 epaper_ui::SummarizePageState s_summarize_page_state = {};
+epaper_ui::NotesPageState s_notes_page_state = {};
 epaper_ui::LockScreenState s_lock_screen_state = {};
 epaper_ui::KeyboardState s_keyboard_state = {};
 epaper_ui::CardModalState s_card_modal_state = {};
@@ -99,6 +101,7 @@ struct RenderSnapshot {
     epaper_ui::DashboardPageState dashboard_page = {};
     epaper_ui::VibeCheckPageState vibe_check_page = {};
     epaper_ui::SummarizePageState summarize_page = {};
+    epaper_ui::NotesPageState notes_page = {};
     epaper_ui::LockScreenState lock_screen = {};
     epaper_ui::KeyboardState keyboard = {};
     epaper_ui::CardModalState card_modal = {};
@@ -183,6 +186,7 @@ const RenderSnapshot& CaptureRenderSnapshot()
     snapshot.dashboard_page = s_dashboard_page_state;
     snapshot.vibe_check_page = s_vibe_check_page_state;
     snapshot.summarize_page = s_summarize_page_state;
+    snapshot.notes_page = s_notes_page_state;
     snapshot.lock_screen = s_lock_screen_state;
     snapshot.keyboard = s_keyboard_state;
     snapshot.card_modal = s_card_modal_state;
@@ -406,6 +410,20 @@ void DrawSummarizeUnderlay(uint8_t* framebuffer, const RenderSnapshot& snapshot)
                                  snapshot.summarize_page,
                                  snapshot.status_bar,
                                  snapshot.global_footer);
+}
+
+void DrawNotesUnderlay(uint8_t* framebuffer, const RenderSnapshot& snapshot)
+{
+    EpaperPanel& panel = Panel();
+    panel.Clear(true);
+    epaper_ui::DrawNotesPage(framebuffer,
+                             STICKY_EPD_WIDTH,
+                             STICKY_EPD_HEIGHT,
+                             kPortraitWidth,
+                             kPortraitHeight,
+                             snapshot.notes_page,
+                             snapshot.status_bar,
+                             snapshot.global_footer);
 }
 
 void LogMetrics(const EpaperPanelMetrics& metrics)
@@ -633,6 +651,31 @@ esp_err_t ApplySummarize(bool full_refresh)
     return ESP_OK;
 }
 
+esp_err_t ApplyNotes(bool full_refresh)
+{
+    const RenderSnapshot& snapshot = CaptureRenderSnapshot();
+    EpaperPanel& panel = Panel();
+    DrawNotesUnderlay(panel.framebuffer(), snapshot);
+    CaptureUnderlaySnapshot(panel.framebuffer());
+    DrawCurrentOverlays(panel.framebuffer(), snapshot);
+
+    DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
+    if (bus_guard.err() != ESP_OK) {
+        return bus_guard.err();
+    }
+
+    RefreshBusyGuard refresh_busy;
+    const esp_err_t err = full_refresh ? panel.RefreshFullBase()
+                                       : panel.RefreshPartialFullScreen();
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    LogMetrics(panel.metrics());
+    s_current_screen.store(ScreenId::kNotes, std::memory_order_relaxed);
+    return ESP_OK;
+}
+
 bool HasVisibleOverlay(const RenderSnapshot& snapshot)
 {
     return snapshot.keyboard.visible || snapshot.card_modal.visible ||
@@ -752,6 +795,9 @@ esp_err_t RefreshCurrentScreenRegionLocked()
         case ScreenId::kSummarize:
             DrawSummarizeUnderlay(panel.framebuffer(), snapshot);
             break;
+        case ScreenId::kNotes:
+            DrawNotesUnderlay(panel.framebuffer(), snapshot);
+            break;
         case ScreenId::kLockScreen:
             DrawLockScreenUnderlay(panel.framebuffer(), snapshot);
             break;
@@ -813,6 +859,8 @@ esp_err_t RefreshCurrentScreenLocked(bool full_refresh)
             return ApplyVibeCheck(full_refresh);
         case ScreenId::kSummarize:
             return ApplySummarize(full_refresh);
+        case ScreenId::kNotes:
+            return ApplyNotes(full_refresh);
         case ScreenId::kLockScreen:
             return ApplyLockScreen(full_refresh);
         default:
@@ -912,6 +960,8 @@ void DisplayTask(void*)
                 err = ApplyVibeCheck(command.refresh_request.refresh_mode == RefreshMode::kFull);
             } else if (command.screen == ScreenId::kSummarize) {
                 err = ApplySummarize(command.refresh_request.refresh_mode == RefreshMode::kFull);
+            } else if (command.screen == ScreenId::kNotes) {
+                err = ApplyNotes(command.refresh_request.refresh_mode == RefreshMode::kFull);
             } else {
                 err = ApplyHomeScreen(command.refresh_request.refresh_mode == RefreshMode::kFull);
             }
@@ -1130,6 +1180,17 @@ esp_err_t SetSummarizePageState(const epaper_ui::SummarizePageState& state)
 
     std::lock_guard<std::mutex> lock(s_state_mutex);
     s_summarize_page_state = state;
+    return ESP_OK;
+}
+
+esp_err_t SetNotesPageState(const epaper_ui::NotesPageState& state)
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    std::lock_guard<std::mutex> lock(s_state_mutex);
+    s_notes_page_state = state;
     return ESP_OK;
 }
 

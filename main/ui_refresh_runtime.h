@@ -17,6 +17,7 @@ enum class SurfaceKey {
     kDashboardPage,
     kVibeCheckPage,
     kSummarizePage,
+    kNotesPage,
 };
 
 using ApplyCallback = esp_err_t (*)();

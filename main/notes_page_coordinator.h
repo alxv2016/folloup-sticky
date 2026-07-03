@@ -36,6 +36,10 @@ public:
     bool SetFocusIndex(int index);
     bool EnterFocusedGroup();
     bool ExitItemList();
+    // Touch helpers: focus a group's chip (collapsing any entered list), or enter a group's item
+    // list directly at a given item row.
+    bool FocusGroupChip(int group_index);
+    bool EnterGroupItem(int group_index, int item_index);
     bool FocusRecording(const std::string& recording_id, bool activate_item_list);
     bool SetEntryFollowUpState(const std::string& recording_id, bool follow_up,
                                bool follow_up_completed);
