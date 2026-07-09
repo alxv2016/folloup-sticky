@@ -14,6 +14,7 @@ enum class DetailsPageSource : uint8_t {
     kUnknown = 0,
     kNotes,
     kTodos,
+    kFollowUp,
 };
 
 // Owns the Details page: it shows one recording's header + transcript in a scroll container with a

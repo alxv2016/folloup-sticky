@@ -16,6 +16,7 @@ enum class NavigationScope : uint8_t {
     kSummarize,
     kNotes,
     kTodos,
+    kFollowUp,
     kDetails,
 };
 
@@ -30,6 +31,7 @@ enum class NavigationItemSection : uint8_t {
     kSummarizePageControls,
     kNotesPageTimelineGroups,
     kTodosPageTimelineGroups,
+    kFollowUpPageTimelineGroups,
     kDetailsPageControls,
 };
 
@@ -62,6 +64,7 @@ enum class NavigationItemRole : uint8_t {
     kSummarizePageGetSummaryButton,
     kNotesPageTimelineGroup,
     kTodosPageTimelineGroup,
+    kFollowUpPageTimelineGroup,
     kDetailsPageScrollContainer,
     kDetailsPageBackButton,
 };
@@ -90,6 +93,7 @@ NavigationModel BuildVibeCheckPageNavigationModel();
 NavigationModel BuildSummarizePageNavigationModel();
 NavigationModel BuildNotesPageNavigationModel(int timeline_group_count);
 NavigationModel BuildTodosPageNavigationModel(int timeline_group_count);
+NavigationModel BuildFollowUpPageNavigationModel(int timeline_group_count);
 NavigationModel BuildDetailsPageNavigationModel();
 
 }  // namespace page_navigation

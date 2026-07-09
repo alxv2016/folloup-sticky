@@ -19,6 +19,7 @@ enum class SurfaceKey {
     kSummarizePage,
     kNotesPage,
     kTodosPage,
+    kFollowUpPage,
     kDetailsPage,
 };
 

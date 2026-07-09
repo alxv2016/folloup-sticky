@@ -34,6 +34,7 @@
 #include "sdkconfig.h"
 #include "settings_page_runtime.h"
 #include "details_page_runtime.h"
+#include "follow_up_page_runtime.h"
 #include "notes_page_runtime.h"
 #include "status_bar_runtime.h"
 #include "todos_page_runtime.h"
@@ -329,6 +330,28 @@ esp_err_t ShowTodosScreen(display_service::RefreshMode refresh_mode)
                                              "show_todos_screen");
 }
 
+esp_err_t ShowFollowUpScreen(display_service::RefreshMode refresh_mode)
+{
+    SyncStatusBarState("show_follow_up_screen");
+    page_input_runtime::ResetFocusForScreen(display_service::ScreenId::kFollowUp);
+    page_input_runtime::ConfigureTouchProviderForScreen(display_service::ScreenId::kFollowUp);
+    footer_runtime::SetLayoutState(FooterLayoutForScreen(display_service::ScreenId::kFollowUp));
+    footer_runtime::SetProjectionState(
+        page_input_runtime::BuildFooterProjectionForScreen(display_service::ScreenId::kFollowUp));
+    const esp_err_t footer_err = footer_runtime::UpdateDisplayState();
+    if (footer_err != ESP_OK && footer_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Footer sync before follow-up screen failed: %s",
+                 esp_err_to_name(footer_err));
+    }
+    // Build the timeline from the archive (SD read) before showing.
+    const esp_err_t sync_err = follow_up_page_runtime::SyncFromArchive(false);
+    if (sync_err != ESP_OK && sync_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Follow-up page sync before show failed: %s", esp_err_to_name(sync_err));
+    }
+    return display_service::SetCurrentScreen(display_service::ScreenId::kFollowUp, refresh_mode,
+                                             "show_follow_up_screen");
+}
+
 esp_err_t ShowDetailsScreen(const std::string& recording_id, DetailsPageSource source,
                             display_service::RefreshMode refresh_mode)
 {
@@ -362,6 +385,10 @@ void ShowDetailsScreenIfRequested()
         source = DetailsPageSource::kTodos;
     }
     if (recording_id.empty()) {
+        recording_id = follow_up_page_runtime::ConsumePendingViewDetails();
+        source = DetailsPageSource::kFollowUp;
+    }
+    if (recording_id.empty()) {
         return;
     }
     const esp_err_t err =
@@ -384,6 +411,9 @@ void HandleDetailsBackIfRequested()
             break;
         case DetailsPageSource::kTodos:
             err = ShowTodosScreen(display_service::RefreshMode::kFull);
+            break;
+        case DetailsPageSource::kFollowUp:
+            err = ShowFollowUpScreen(display_service::RefreshMode::kFull);
             break;
         default:
             err = ShowHomeScreen(display_service::RefreshMode::kFull);
@@ -514,6 +544,13 @@ bool HandleDashboardMenuItem(int menu_index, void*)
         const esp_err_t err = ShowTodosScreen(display_service::RefreshMode::kFull);
         if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
             ESP_LOGW(kTag, "Show todos screen failed: %s", esp_err_to_name(err));
+        }
+        return true;
+    }
+    if (menu_index == static_cast<int>(epaper_ui::DashboardMenuItem::kFollowUp)) {
+        const esp_err_t err = ShowFollowUpScreen(display_service::RefreshMode::kFull);
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(kTag, "Show follow-up screen failed: %s", esp_err_to_name(err));
         }
         return true;
     }
@@ -1040,6 +1077,8 @@ void HandleDispatchedButtonEvent(const button_service::ButtonEventInfo& event)
                 overlay_result.select_modal_selected_index) &&
             !todos_page_runtime::HandleItemActionSelection(
                 overlay_result.select_modal_selected_index) &&
+            !follow_up_page_runtime::HandleItemActionSelection(
+                overlay_result.select_modal_selected_index) &&
             !time_page_runtime::HandleSelectModalSubmit(
                 overlay_result.select_modal_selected_index)) {
             (void)recording_session_service::SubmitTagSelection(
@@ -1257,6 +1296,8 @@ void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
         if (!notes_page_runtime::HandleItemActionSelection(
                 touch_result.select_modal_selected_index) &&
             !todos_page_runtime::HandleItemActionSelection(
+                touch_result.select_modal_selected_index) &&
+            !follow_up_page_runtime::HandleItemActionSelection(
                 touch_result.select_modal_selected_index) &&
             !time_page_runtime::HandleSelectModalSubmit(
                 touch_result.select_modal_selected_index)) {

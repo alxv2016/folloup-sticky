@@ -11,6 +11,7 @@
 #include "epaper_ui/status_bar.h"
 #include "epaper_ui/time_page.h"
 #include "epaper_ui/details_page.h"
+#include "epaper_ui/follow_up_page.h"
 #include "epaper_ui/notes_page.h"
 #include "epaper_ui/summarize_page.h"
 #include "epaper_ui/todos_page.h"
@@ -30,6 +31,7 @@ enum class ScreenId {
     kSummarize,
     kNotes,
     kTodos,
+    kFollowUp,
     kDetails,
     kLockScreen,
 };
@@ -89,6 +91,7 @@ esp_err_t SetVibeCheckPageState(const epaper_ui::VibeCheckPageState& state);
 esp_err_t SetSummarizePageState(const epaper_ui::SummarizePageState& state);
 esp_err_t SetNotesPageState(const epaper_ui::NotesPageState& state);
 esp_err_t SetTodosPageState(const epaper_ui::TodosPageState& state);
+esp_err_t SetFollowUpPageState(const epaper_ui::FollowUpPageState& state);
 esp_err_t SetDetailsPageState(const epaper_ui::DetailsPageState& state);
 esp_err_t SetLockScreenState(const epaper_ui::LockScreenState& state);
 esp_err_t SetKeyboardState(const epaper_ui::KeyboardState& state);

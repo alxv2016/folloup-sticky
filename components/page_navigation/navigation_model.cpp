@@ -203,6 +203,23 @@ NavigationModel BuildTodosPageNavigationModel(int timeline_group_count)
     return model;
 }
 
+NavigationModel BuildFollowUpPageNavigationModel(int timeline_group_count)
+{
+    NavigationModel model = {};
+    model.scope = NavigationScope::kFollowUp;
+
+    const int group_count = timeline_group_count > 0 ? timeline_group_count : 0;
+    for (int index = 0; index < group_count; ++index) {
+        AddItem(model, NavigationItemSection::kFollowUpPageTimelineGroups,
+                NavigationItemRole::kFollowUpPageTimelineGroup, index);
+    }
+    AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterSettings, 1);
+    AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterWifi, 2);
+    AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterTime, 3);
+    AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterHome, 0);
+    return model;
+}
+
 NavigationModel BuildDetailsPageNavigationModel()
 {
     NavigationModel model = {};

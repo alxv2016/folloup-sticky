@@ -16,6 +16,7 @@
 #include "epaper_ui/toast.h"
 #include "epaper_ui/dashboard_page.h"
 #include "epaper_ui/details_page.h"
+#include "epaper_ui/follow_up_page.h"
 #include "epaper_ui/notes_page.h"
 #include "epaper_ui/summarize_page.h"
 #include "epaper_ui/todos_page.h"
@@ -87,6 +88,7 @@ epaper_ui::VibeCheckPageState s_vibe_check_page_state = {};
 epaper_ui::SummarizePageState s_summarize_page_state = {};
 epaper_ui::NotesPageState s_notes_page_state = {};
 epaper_ui::TodosPageState s_todos_page_state = {};
+epaper_ui::FollowUpPageState s_follow_up_page_state = {};
 epaper_ui::DetailsPageState s_details_page_state = {};
 epaper_ui::LockScreenState s_lock_screen_state = {};
 epaper_ui::KeyboardState s_keyboard_state = {};
@@ -107,6 +109,7 @@ struct RenderSnapshot {
     epaper_ui::SummarizePageState summarize_page = {};
     epaper_ui::NotesPageState notes_page = {};
     epaper_ui::TodosPageState todos_page = {};
+    epaper_ui::FollowUpPageState follow_up_page = {};
     epaper_ui::DetailsPageState details_page = {};
     epaper_ui::LockScreenState lock_screen = {};
     epaper_ui::KeyboardState keyboard = {};
@@ -194,6 +197,7 @@ const RenderSnapshot& CaptureRenderSnapshot()
     snapshot.summarize_page = s_summarize_page_state;
     snapshot.notes_page = s_notes_page_state;
     snapshot.todos_page = s_todos_page_state;
+    snapshot.follow_up_page = s_follow_up_page_state;
     snapshot.details_page = s_details_page_state;
     snapshot.lock_screen = s_lock_screen_state;
     snapshot.keyboard = s_keyboard_state;
@@ -446,6 +450,20 @@ void DrawTodosUnderlay(uint8_t* framebuffer, const RenderSnapshot& snapshot)
                              snapshot.todos_page,
                              snapshot.status_bar,
                              snapshot.global_footer);
+}
+
+void DrawFollowUpUnderlay(uint8_t* framebuffer, const RenderSnapshot& snapshot)
+{
+    EpaperPanel& panel = Panel();
+    panel.Clear(true);
+    epaper_ui::DrawFollowUpPage(framebuffer,
+                                STICKY_EPD_WIDTH,
+                                STICKY_EPD_HEIGHT,
+                                kPortraitWidth,
+                                kPortraitHeight,
+                                snapshot.follow_up_page,
+                                snapshot.status_bar,
+                                snapshot.global_footer);
 }
 
 void DrawDetailsUnderlay(uint8_t* framebuffer, const RenderSnapshot& snapshot)
@@ -737,6 +755,31 @@ esp_err_t ApplyTodos(bool full_refresh)
     return ESP_OK;
 }
 
+esp_err_t ApplyFollowUp(bool full_refresh)
+{
+    const RenderSnapshot& snapshot = CaptureRenderSnapshot();
+    EpaperPanel& panel = Panel();
+    DrawFollowUpUnderlay(panel.framebuffer(), snapshot);
+    CaptureUnderlaySnapshot(panel.framebuffer());
+    DrawCurrentOverlays(panel.framebuffer(), snapshot);
+
+    DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
+    if (bus_guard.err() != ESP_OK) {
+        return bus_guard.err();
+    }
+
+    RefreshBusyGuard refresh_busy;
+    const esp_err_t err = full_refresh ? panel.RefreshFullBase()
+                                       : panel.RefreshPartialFullScreen();
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    LogMetrics(panel.metrics());
+    s_current_screen.store(ScreenId::kFollowUp, std::memory_order_relaxed);
+    return ESP_OK;
+}
+
 esp_err_t ApplyDetails(bool full_refresh)
 {
     const RenderSnapshot& snapshot = CaptureRenderSnapshot();
@@ -887,6 +930,9 @@ esp_err_t RefreshCurrentScreenRegionLocked()
         case ScreenId::kTodos:
             DrawTodosUnderlay(panel.framebuffer(), snapshot);
             break;
+        case ScreenId::kFollowUp:
+            DrawFollowUpUnderlay(panel.framebuffer(), snapshot);
+            break;
         case ScreenId::kDetails:
             DrawDetailsUnderlay(panel.framebuffer(), snapshot);
             break;
@@ -955,6 +1001,8 @@ esp_err_t RefreshCurrentScreenLocked(bool full_refresh)
             return ApplyNotes(full_refresh);
         case ScreenId::kTodos:
             return ApplyTodos(full_refresh);
+        case ScreenId::kFollowUp:
+            return ApplyFollowUp(full_refresh);
         case ScreenId::kDetails:
             return ApplyDetails(full_refresh);
         case ScreenId::kLockScreen:
@@ -1060,6 +1108,8 @@ void DisplayTask(void*)
                 err = ApplyNotes(command.refresh_request.refresh_mode == RefreshMode::kFull);
             } else if (command.screen == ScreenId::kTodos) {
                 err = ApplyTodos(command.refresh_request.refresh_mode == RefreshMode::kFull);
+            } else if (command.screen == ScreenId::kFollowUp) {
+                err = ApplyFollowUp(command.refresh_request.refresh_mode == RefreshMode::kFull);
             } else if (command.screen == ScreenId::kDetails) {
                 err = ApplyDetails(command.refresh_request.refresh_mode == RefreshMode::kFull);
             } else {
@@ -1302,6 +1352,17 @@ esp_err_t SetTodosPageState(const epaper_ui::TodosPageState& state)
 
     std::lock_guard<std::mutex> lock(s_state_mutex);
     s_todos_page_state = state;
+    return ESP_OK;
+}
+
+esp_err_t SetFollowUpPageState(const epaper_ui::FollowUpPageState& state)
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    std::lock_guard<std::mutex> lock(s_state_mutex);
+    s_follow_up_page_state = state;
     return ESP_OK;
 }
 
