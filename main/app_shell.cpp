@@ -36,6 +36,7 @@
 #include "details_page_runtime.h"
 #include "notes_page_runtime.h"
 #include "status_bar_runtime.h"
+#include "todos_page_runtime.h"
 #include "storage_service.h"
 #include "summarize_page_runtime.h"
 #include "summary_service.h"
@@ -307,6 +308,27 @@ esp_err_t ShowNotesScreen(display_service::RefreshMode refresh_mode)
                                              "show_notes_screen");
 }
 
+esp_err_t ShowTodosScreen(display_service::RefreshMode refresh_mode)
+{
+    SyncStatusBarState("show_todos_screen");
+    page_input_runtime::ResetFocusForScreen(display_service::ScreenId::kTodos);
+    page_input_runtime::ConfigureTouchProviderForScreen(display_service::ScreenId::kTodos);
+    footer_runtime::SetLayoutState(FooterLayoutForScreen(display_service::ScreenId::kTodos));
+    footer_runtime::SetProjectionState(
+        page_input_runtime::BuildFooterProjectionForScreen(display_service::ScreenId::kTodos));
+    const esp_err_t footer_err = footer_runtime::UpdateDisplayState();
+    if (footer_err != ESP_OK && footer_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Footer sync before todos screen failed: %s", esp_err_to_name(footer_err));
+    }
+    // Build the timeline from the archive (SD read) before showing.
+    const esp_err_t sync_err = todos_page_runtime::SyncFromArchive(false);
+    if (sync_err != ESP_OK && sync_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Todos page sync before show failed: %s", esp_err_to_name(sync_err));
+    }
+    return display_service::SetCurrentScreen(display_service::ScreenId::kTodos, refresh_mode,
+                                             "show_todos_screen");
+}
+
 esp_err_t ShowDetailsScreen(const std::string& recording_id, DetailsPageSource source,
                             display_service::RefreshMode refresh_mode)
 {
@@ -333,12 +355,17 @@ esp_err_t ShowDetailsScreen(const std::string& recording_id, DetailsPageSource s
 // Open the Details page for a recording requested via the Notes item-actions modal.
 void ShowDetailsScreenIfRequested()
 {
-    const std::string recording_id = notes_page_runtime::ConsumePendingViewDetails();
+    std::string recording_id = notes_page_runtime::ConsumePendingViewDetails();
+    DetailsPageSource source = DetailsPageSource::kNotes;
+    if (recording_id.empty()) {
+        recording_id = todos_page_runtime::ConsumePendingViewDetails();
+        source = DetailsPageSource::kTodos;
+    }
     if (recording_id.empty()) {
         return;
     }
-    const esp_err_t err = ShowDetailsScreen(recording_id, DetailsPageSource::kNotes,
-                                            display_service::RefreshMode::kFull);
+    const esp_err_t err =
+        ShowDetailsScreen(recording_id, source, display_service::RefreshMode::kFull);
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(kTag, "Show details screen failed: %s", esp_err_to_name(err));
     }
@@ -350,10 +377,18 @@ void HandleDetailsBackIfRequested()
     if (!details_page_runtime::ConsumePendingBack()) {
         return;
     }
-    const esp_err_t err =
-        details_page_runtime::SourcePage() == DetailsPageSource::kNotes
-            ? ShowNotesScreen(display_service::RefreshMode::kFull)
-            : ShowHomeScreen(display_service::RefreshMode::kFull);
+    esp_err_t err = ESP_OK;
+    switch (details_page_runtime::SourcePage()) {
+        case DetailsPageSource::kNotes:
+            err = ShowNotesScreen(display_service::RefreshMode::kFull);
+            break;
+        case DetailsPageSource::kTodos:
+            err = ShowTodosScreen(display_service::RefreshMode::kFull);
+            break;
+        default:
+            err = ShowHomeScreen(display_service::RefreshMode::kFull);
+            break;
+    }
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(kTag, "Details back navigation failed: %s", esp_err_to_name(err));
     }
@@ -472,6 +507,13 @@ bool HandleDashboardMenuItem(int menu_index, void*)
         const esp_err_t err = ShowNotesScreen(display_service::RefreshMode::kFull);
         if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
             ESP_LOGW(kTag, "Show notes screen failed: %s", esp_err_to_name(err));
+        }
+        return true;
+    }
+    if (menu_index == static_cast<int>(epaper_ui::DashboardMenuItem::kTodos)) {
+        const esp_err_t err = ShowTodosScreen(display_service::RefreshMode::kFull);
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(kTag, "Show todos screen failed: %s", esp_err_to_name(err));
         }
         return true;
     }
@@ -996,6 +1038,8 @@ void HandleDispatchedButtonEvent(const button_service::ButtonEventInfo& event)
     if (overlay_result.select_modal_submitted) {
         if (!notes_page_runtime::HandleItemActionSelection(
                 overlay_result.select_modal_selected_index) &&
+            !todos_page_runtime::HandleItemActionSelection(
+                overlay_result.select_modal_selected_index) &&
             !time_page_runtime::HandleSelectModalSubmit(
                 overlay_result.select_modal_selected_index)) {
             (void)recording_session_service::SubmitTagSelection(
@@ -1211,6 +1255,8 @@ void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
     HandleDetailsBackIfRequested();
     if (touch_result.select_modal_submitted) {
         if (!notes_page_runtime::HandleItemActionSelection(
+                touch_result.select_modal_selected_index) &&
+            !todos_page_runtime::HandleItemActionSelection(
                 touch_result.select_modal_selected_index) &&
             !time_page_runtime::HandleSelectModalSubmit(
                 touch_result.select_modal_selected_index)) {
