@@ -815,6 +815,9 @@ void HandleStorageEvent(const storage_service::Event& event, void*)
                 overlay_err = overlay_runtime::ShowStorageModalFormatting();
                 break;
             case storage_service::OperationPhase::kSucceeded:
+                // The format wiped every recording; reset the archive counts so the dashboard
+                // badges/progress don't render stale state when the user returns to it.
+                recording_archive_service::ResetForFormat();
                 overlay_err = overlay_runtime::ShowStorageModalFormatSuccess();
                 break;
             case storage_service::OperationPhase::kFailed:

@@ -1193,6 +1193,22 @@ bool Refresh()
     return ScanAndApply(true);
 }
 
+void ResetForFormat()
+{
+    // A format wipes every recording, so the archive is definitively empty. Reset the counts (and
+    // the NVS cache) directly rather than scanning the freshly-formatted card, and always notify so
+    // the dashboard drops its stale badges/progress immediately.
+    Snapshot empty = {};
+    empty.initialized = true;
+    empty.available = true;
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        s_snapshot = empty;
+    }
+    SaveSnapshotToNvs(empty);
+    NotifyHandler();
+}
+
 void RefreshAsync()
 {
     bool expected = false;

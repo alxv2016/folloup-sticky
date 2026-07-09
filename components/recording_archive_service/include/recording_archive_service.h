@@ -89,6 +89,8 @@ Snapshot GetSnapshot();
 // Re-scans the archive and recomputes the snapshot (runs SD I/O on the caller's task; call
 // from a non-UI task). Persists the counts to NVS and fires the event handler.
 bool Refresh();
+// Reset the archive to empty after an SD format (counts -> 0, persisted + notified).
+void ResetForFormat();
 // Kicks a background scan on a worker task (never blocks the caller). It reconciles the cached
 // snapshot against the SD card and only persists + fires an event when the counts actually
 // changed. Use this off the boot path (e.g. first home-screen show) to avoid blocking startup.
