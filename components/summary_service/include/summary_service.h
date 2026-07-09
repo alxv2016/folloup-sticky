@@ -71,6 +71,8 @@ Snapshot GetSnapshot();
 
 // Re-read the persisted summaries from SD into the snapshot (runs SD I/O on the caller's task).
 bool RefreshCachedSummaries();
+// Drop cached summaries after an SD format so the Summarize page doesn't show stale results.
+void ResetForFormat();
 // Queue an async summary generation for Notes or Todos. Returns false if it can't be queued
 // (not initialized, a request already in flight, or queue full). Progress is reported via events.
 bool RequestSummary(SummaryKind kind);

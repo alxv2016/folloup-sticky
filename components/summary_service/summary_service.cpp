@@ -1023,6 +1023,21 @@ bool RefreshCachedSummaries()
     return true;
 }
 
+void ResetForFormat()
+{
+    std::lock_guard<std::mutex> lock(s_mutex);
+    // If the service was never initialized, its cache is only on the SD card the format just wiped;
+    // a later Init() will read the empty card. If it was initialized, drop the in-memory summaries
+    // (Init() is one-shot, so it won't re-read) and notify so the Summarize page shows empty state.
+    if (!s_snapshot.initialized) {
+        return;
+    }
+    s_snapshot.notes = {};
+    s_snapshot.todos = {};
+    s_snapshot.storage_available = false;
+    NotifyLocked();
+}
+
 bool RequestSummary(SummaryKind kind)
 {
     if (kind != SummaryKind::kNotes && kind != SummaryKind::kTodos) {
