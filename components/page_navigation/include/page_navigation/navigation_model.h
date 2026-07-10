@@ -18,6 +18,7 @@ enum class NavigationScope : uint8_t {
     kTodos,
     kFollowUp,
     kDetails,
+    kOnboarding,
 };
 
 enum class NavigationItemSection : uint8_t {
@@ -33,6 +34,7 @@ enum class NavigationItemSection : uint8_t {
     kTodosPageTimelineGroups,
     kFollowUpPageTimelineGroups,
     kDetailsPageControls,
+    kOnboardingPageControls,
 };
 
 enum class NavigationItemRole : uint8_t {
@@ -44,6 +46,7 @@ enum class NavigationItemRole : uint8_t {
     kSettingsWifiToggle,
     kSettingsEnableApToggle,
     kSettingsFormatSdButton,
+    kSettingsManualOnboardingButton,
     kWifiPageNetworkList,
     kWifiPagePasswordInput,
     kWifiPagePasswordVisibilityButton,
@@ -67,6 +70,9 @@ enum class NavigationItemRole : uint8_t {
     kFollowUpPageTimelineGroup,
     kDetailsPageScrollContainer,
     kDetailsPageBackButton,
+    kOnboardingPageClose,
+    kOnboardingPagePrev,
+    kOnboardingPageNext,
 };
 
 struct NavigationItemDescriptor {
@@ -95,6 +101,7 @@ NavigationModel BuildNotesPageNavigationModel(int timeline_group_count);
 NavigationModel BuildTodosPageNavigationModel(int timeline_group_count);
 NavigationModel BuildFollowUpPageNavigationModel(int timeline_group_count);
 NavigationModel BuildDetailsPageNavigationModel();
+NavigationModel BuildOnboardingPageNavigationModel();
 
 }  // namespace page_navigation
 

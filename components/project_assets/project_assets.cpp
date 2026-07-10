@@ -53,6 +53,10 @@ const EmbeddedImageAsset* GetIcon(EmbeddedIconId id)
             return &epaper_icons::kCheckboxChecked;
         case EmbeddedIconId::kCheckboxUnchecked:
             return &epaper_icons::kCheckboxUnchecked;
+        case EmbeddedIconId::kChevronLeft:
+            return &epaper_icons::kChevronLeft;
+        case EmbeddedIconId::kChevronRight:
+            return &epaper_icons::kChevronRight;
         case EmbeddedIconId::kClose:
             return &epaper_icons::kClose;
         case EmbeddedIconId::kFileAudio:

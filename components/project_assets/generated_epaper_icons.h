@@ -21,6 +21,8 @@ extern const EmbeddedImageAsset kBle3;
 extern const EmbeddedImageAsset kCheck;
 extern const EmbeddedImageAsset kCheckboxChecked;
 extern const EmbeddedImageAsset kCheckboxUnchecked;
+extern const EmbeddedImageAsset kChevronLeft;
+extern const EmbeddedImageAsset kChevronRight;
 extern const EmbeddedImageAsset kClose;
 extern const EmbeddedImageAsset kFileAudio;
 extern const EmbeddedImageAsset kFileJson;

@@ -17,6 +17,7 @@ enum class SettingsPageItemId : uint8_t {
     kWifiToggle,
     kAccessPointToggle,
     kFormatSdButton,
+    kManualOnboardingButton,
 };
 
 struct SettingsPageState {
@@ -26,6 +27,7 @@ struct SettingsPageState {
     MenuToggleState access_point_toggle = {};
     SdStatusState storage_status = {};
     ButtonState format_sd_button = {};
+    ButtonState manual_onboarding_button = {};
 };
 
 UiRect SettingsPageItemBounds(int portrait_width,

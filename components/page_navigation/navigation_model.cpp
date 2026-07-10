@@ -59,6 +59,10 @@ NavigationModel BuildSettingsPageNavigationModel()
             NavigationItemSection::kSettingsPageMenu,
             NavigationItemRole::kSettingsFormatSdButton,
             2);
+    AddItem(model,
+            NavigationItemSection::kSettingsPageMenu,
+            NavigationItemRole::kSettingsManualOnboardingButton,
+            3);
     AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterSettings, 1);
     AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterWifi, 2);
     AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterTime, 3);
@@ -217,6 +221,21 @@ NavigationModel BuildFollowUpPageNavigationModel(int timeline_group_count)
     AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterWifi, 2);
     AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterTime, 3);
     AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterHome, 0);
+    return model;
+}
+
+NavigationModel BuildOnboardingPageNavigationModel()
+{
+    NavigationModel model = {};
+    model.scope = NavigationScope::kOnboarding;
+
+    // The carousel's own control row replaces the footer: Close, Prev, Next (visual left -> right).
+    AddItem(model, NavigationItemSection::kOnboardingPageControls,
+            NavigationItemRole::kOnboardingPageClose, 0);
+    AddItem(model, NavigationItemSection::kOnboardingPageControls,
+            NavigationItemRole::kOnboardingPagePrev, 1);
+    AddItem(model, NavigationItemSection::kOnboardingPageControls,
+            NavigationItemRole::kOnboardingPageNext, 2);
     return model;
 }
 

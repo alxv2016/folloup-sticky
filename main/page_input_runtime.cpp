@@ -8,6 +8,8 @@
 #include "follow_up_page_runtime.h"
 #include "notes_page_interactions.h"
 #include "notes_page_runtime.h"
+#include "onboarding_page_interactions.h"
+#include "onboarding_page_runtime.h"
 #include "overlay_runtime.h"
 #include "todos_page_interactions.h"
 #include "todos_page_runtime.h"
@@ -289,6 +291,10 @@ ButtonResult ApplySettingsActivateResult(const settings_page_interactions::Activ
             return;
         }
         (void)overlay_runtime::ShowStorageModalConfirmFormat();
+    };
+    callbacks.show_onboarding = []() {
+        // Deferred so the screen change happens after input dispatch; app_shell polls for it.
+        onboarding_page_runtime::RequestManualLaunch();
     };
     settings_page_interactions::ApplyPrimaryActivateResult(activation, callbacks);
     if (result.footer_item != footer_runtime::FooterFocusItem::kNone) {
@@ -1454,6 +1460,102 @@ ButtonResult HandleFollowUpButtonEvent(const button_service::ButtonEventInfo& ev
     }
 }
 
+// --- Onboarding page -------------------------------------------------------
+
+void ApplyOnboardingFocusUpdate(const page_actions::FocusUpdateOutcome& outcome)
+{
+    if (outcome.handled && outcome.apply_page_state) {
+        (void)onboarding_page_runtime::UpdateDisplayStateAndRequestRefresh(
+            display_service::RefreshMode::kPartial);
+    }
+}
+
+ButtonResult ApplyOnboardingActivateResult(
+    const onboarding_page_interactions::ActivateResult& activation)
+{
+    ButtonResult result = {};
+    if (!activation.handled) {
+        return result;
+    }
+    result.handled = true;
+    result.interaction_result = MakeConsumedResult(activation.play_activate_cue);
+
+    // Prev/Next change the slide in place inside HandlePrimaryActivate; repaint here.
+    if (activation.apply_page_state) {
+        (void)onboarding_page_runtime::UpdateDisplayStateAndRequestRefresh(
+            display_service::RefreshMode::kPartial);
+    }
+
+    onboarding_page_interactions::ActivateCallbacks callbacks = {};
+    // Close is deferred so the screen change happens after input dispatch returns.
+    callbacks.dismiss = []() { onboarding_page_runtime::RequestDismiss(); };
+    onboarding_page_interactions::ApplyPrimaryActivateResult(activation, callbacks);
+    return result;
+}
+
+FocusMoveResult ApplyOnboardingMoveResult(const page_actions::FocusMoveOutcome& outcome)
+{
+    FocusMoveResult result = {};
+    if (!outcome.handled) {
+        return result;
+    }
+    result.handled = true;
+    result.interaction_result = MakeConsumedResult(outcome.play_navigation_cue);
+    if (outcome.apply_page_state) {
+        (void)onboarding_page_runtime::UpdateDisplayStateAndRequestRefresh(
+            display_service::RefreshMode::kPartial);
+    }
+    return result;
+}
+
+bool ResolveOnboardingTouchTarget(int x, int y, app_interaction::InteractiveTarget* target, void*)
+{
+    return onboarding_page_runtime::ResolveTouchTarget(x, y, target);
+}
+
+bool FocusOnboardingTouchTarget(const app_interaction::InteractiveTarget& target, void*)
+{
+    const page_actions::FocusUpdateOutcome outcome =
+        onboarding_page_runtime::FocusTouchTarget(target);
+    ApplyOnboardingFocusUpdate(outcome);
+    return outcome.handled;
+}
+
+app_interaction::InputResult ActivateOnboardingTouchTarget(
+    const app_interaction::InteractiveTarget& target, void*)
+{
+    const ButtonResult result =
+        ApplyOnboardingActivateResult(onboarding_page_runtime::ActivateTouchTarget(target));
+    return result.interaction_result;
+}
+
+ButtonResult HandleOnboardingButtonEvent(const button_service::ButtonEventInfo& event)
+{
+    ButtonResult result = {};
+
+    // Consistent with every other page: UP/DOWN rove (handled upstream in input_focus_runtime),
+    // POWER_OK activates the focused control (Prev/Next change the slide, Close dismisses).
+    if (event.button != button_service::ButtonId::kPowerOk) {
+        return result;
+    }
+
+    switch (event.event) {
+        case button_service::ButtonEvent::kSingleClick:
+            return ApplyOnboardingActivateResult(onboarding_page_runtime::ActivateFocusedItem());
+        case button_service::ButtonEvent::kPressDown:
+        case button_service::ButtonEvent::kPressUp:
+        case button_service::ButtonEvent::kPressRepeat:
+        case button_service::ButtonEvent::kLongPressStart:
+        case button_service::ButtonEvent::kLongPressUp:
+            result.handled = true;
+            result.interaction_result.consumed = true;
+            return result;
+        case button_service::ButtonEvent::kDoubleClick:
+        default:
+            return result;
+    }
+}
+
 // --- Details page ----------------------------------------------------------
 
 esp_err_t ApplyDetailsPageAndFooterDisplayState()
@@ -1689,6 +1791,13 @@ page_interaction_runtime::TouchProvider TouchProviderForScreen(display_service::
                 .activate_touch_target = &ActivateDetailsTouchTarget,
                 .context = nullptr,
             };
+        case display_service::ScreenId::kOnboarding:
+            return {
+                .resolve_touch_target = &ResolveOnboardingTouchTarget,
+                .focus_touch_target = &FocusOnboardingTouchTarget,
+                .activate_touch_target = &ActivateOnboardingTouchTarget,
+                .context = nullptr,
+            };
         case display_service::ScreenId::kLockScreen:
         default:
             return {};
@@ -1875,6 +1984,9 @@ void ResetFocusForScreen(display_service::ScreenId screen)
         case display_service::ScreenId::kDetails:
             details_page_runtime::ResetFocus();
             return;
+        case display_service::ScreenId::kOnboarding:
+            onboarding_page_runtime::ResetFocus();
+            return;
         case display_service::ScreenId::kLockScreen:
         default:
             return;
@@ -1938,6 +2050,8 @@ FocusMoveResult MoveFocusForCurrentScreen(int delta, bool page_jump)
             return ApplyFollowUpMoveResult(follow_up_page_runtime::MoveFocus(delta));
         case display_service::ScreenId::kDetails:
             return ApplyDetailsMoveResult(details_page_runtime::MoveFocus(delta));
+        case display_service::ScreenId::kOnboarding:
+            return ApplyOnboardingMoveResult(onboarding_page_runtime::MoveFocus(delta));
         case display_service::ScreenId::kLockScreen:
         default:
             return {};
@@ -1967,6 +2081,8 @@ ButtonResult HandleButtonEventForCurrentScreen(const button_service::ButtonEvent
             return HandleFollowUpButtonEvent(event);
         case display_service::ScreenId::kDetails:
             return HandleDetailsButtonEvent(event);
+        case display_service::ScreenId::kOnboarding:
+            return HandleOnboardingButtonEvent(event);
         case display_service::ScreenId::kLockScreen:
         default:
             return {};

@@ -13,6 +13,7 @@
 #include "epaper_ui/details_page.h"
 #include "epaper_ui/follow_up_page.h"
 #include "epaper_ui/notes_page.h"
+#include "epaper_ui/onboarding_page.h"
 #include "epaper_ui/summarize_page.h"
 #include "epaper_ui/todos_page.h"
 #include "epaper_ui/toast.h"
@@ -33,6 +34,7 @@ enum class ScreenId {
     kTodos,
     kFollowUp,
     kDetails,
+    kOnboarding,
     kLockScreen,
 };
 
@@ -93,6 +95,7 @@ esp_err_t SetNotesPageState(const epaper_ui::NotesPageState& state);
 esp_err_t SetTodosPageState(const epaper_ui::TodosPageState& state);
 esp_err_t SetFollowUpPageState(const epaper_ui::FollowUpPageState& state);
 esp_err_t SetDetailsPageState(const epaper_ui::DetailsPageState& state);
+esp_err_t SetOnboardingPageState(const epaper_ui::OnboardingPageState& state);
 esp_err_t SetLockScreenState(const epaper_ui::LockScreenState& state);
 esp_err_t SetKeyboardState(const epaper_ui::KeyboardState& state);
 esp_err_t SetCardModalState(const epaper_ui::CardModalState& state);

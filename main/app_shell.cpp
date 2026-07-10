@@ -36,6 +36,8 @@
 #include "details_page_runtime.h"
 #include "follow_up_page_runtime.h"
 #include "notes_page_runtime.h"
+#include "nvs.h"
+#include "onboarding_page_runtime.h"
 #include "status_bar_runtime.h"
 #include "todos_page_runtime.h"
 #include "storage_service.h"
@@ -350,6 +352,95 @@ esp_err_t ShowFollowUpScreen(display_service::RefreshMode refresh_mode)
     }
     return display_service::SetCurrentScreen(display_service::ScreenId::kFollowUp, refresh_mode,
                                              "show_follow_up_screen");
+}
+
+// Persisted first-run flag. Device/firmware state (not tied to the SD card), so it survives an SD
+// format; a future Settings action can clear it to replay onboarding.
+constexpr const char* kOnboardingNvsNamespace = "app_state";
+constexpr const char* kOnboardingNvsKey = "onboarded";
+
+// True while onboarding was opened via the Settings "Manual" button (as opposed to first boot). In
+// that mode dismissal returns to Settings and does NOT touch the "onboarded" flag.
+bool s_onboarding_from_settings = false;
+
+bool OnboardingViewed()
+{
+    nvs_handle_t handle = 0;
+    if (nvs_open(kOnboardingNvsNamespace, NVS_READONLY, &handle) != ESP_OK) {
+        return false;
+    }
+    uint8_t viewed = 0;
+    const esp_err_t err = nvs_get_u8(handle, kOnboardingNvsKey, &viewed);
+    nvs_close(handle);
+    return err == ESP_OK && viewed != 0;
+}
+
+void MarkOnboardingViewed()
+{
+    nvs_handle_t handle = 0;
+    if (nvs_open(kOnboardingNvsNamespace, NVS_READWRITE, &handle) != ESP_OK) {
+        ESP_LOGW(kTag, "Onboarding flag: nvs_open failed");
+        return;
+    }
+    if (nvs_set_u8(handle, kOnboardingNvsKey, 1) == ESP_OK) {
+        (void)nvs_commit(handle);
+    }
+    nvs_close(handle);
+}
+
+esp_err_t ShowOnboardingScreen(display_service::RefreshMode refresh_mode)
+{
+    SyncStatusBarState("show_onboarding_screen");
+    // The carousel's own control row replaces the footer. Hide the footer's layout so its touch
+    // layer stops intercepting taps in the bottom band (where the carousel controls live).
+    footer_runtime::LayoutState hidden_footer = {};
+    hidden_footer.visible = false;
+    hidden_footer.show_mic = false;
+    footer_runtime::SetLayoutState(hidden_footer);
+    page_input_runtime::ResetFocusForScreen(display_service::ScreenId::kOnboarding);
+    page_input_runtime::ConfigureTouchProviderForScreen(display_service::ScreenId::kOnboarding);
+    const esp_err_t page_err = onboarding_page_runtime::UpdateDisplayState();
+    if (page_err != ESP_OK && page_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Onboarding page state build failed: %s", esp_err_to_name(page_err));
+    }
+    return display_service::SetCurrentScreen(display_service::ScreenId::kOnboarding, refresh_mode,
+                                             "show_onboarding_screen");
+}
+
+// Open onboarding from the Settings "Manual" button, deferred out of input dispatch. Does not touch
+// the "onboarded" flag; dismissal returns to Settings (see HandleOnboardingDismissIfRequested).
+void ShowOnboardingFromSettingsIfRequested()
+{
+    if (!onboarding_page_runtime::ConsumePendingManualLaunch()) {
+        return;
+    }
+    s_onboarding_from_settings = true;
+    const esp_err_t err = ShowOnboardingScreen(display_service::RefreshMode::kFull);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Manual onboarding launch failed: %s", esp_err_to_name(err));
+    }
+}
+
+// Finish onboarding, deferred out of input dispatch. First-run onboarding persists the flag and
+// goes to the dashboard; a manual launch from Settings just returns to Settings, flag untouched.
+void HandleOnboardingDismissIfRequested()
+{
+    if (!onboarding_page_runtime::ConsumePendingDismiss()) {
+        return;
+    }
+    if (s_onboarding_from_settings) {
+        s_onboarding_from_settings = false;
+        const esp_err_t err = ShowSettingsScreen(display_service::RefreshMode::kFull);
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(kTag, "Onboarding dismiss -> settings failed: %s", esp_err_to_name(err));
+        }
+        return;
+    }
+    MarkOnboardingViewed();
+    const esp_err_t err = ShowHomeScreen(display_service::RefreshMode::kFull);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Onboarding dismiss -> home failed: %s", esp_err_to_name(err));
+    }
 }
 
 esp_err_t ShowDetailsScreen(const std::string& recording_id, DetailsPageSource source,
@@ -1207,6 +1298,8 @@ void HandleDispatchedButtonEvent(const button_service::ButtonEventInfo& event)
             PlayInteractionFeedback(footer_result);
         }
         HandleDetailsBackIfRequested();
+        HandleOnboardingDismissIfRequested();
+        ShowOnboardingFromSettingsIfRequested();
         FlushOverlayFeedback();
         return;
     }
@@ -1292,6 +1385,8 @@ void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
     PlayInteractionFeedback(touch_result);
     FlushOverlayFeedback();
     HandleDetailsBackIfRequested();
+    HandleOnboardingDismissIfRequested();
+    ShowOnboardingFromSettingsIfRequested();
     if (touch_result.select_modal_submitted) {
         if (!notes_page_runtime::HandleItemActionSelection(
                 touch_result.select_modal_selected_index) &&
@@ -1645,9 +1740,14 @@ void Run()
     if (footer_err != ESP_OK && footer_err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(kTag, "Initial footer update failed: %s", esp_err_to_name(footer_err));
     }
-    const esp_err_t home_err = ShowHomeScreen(display_service::RefreshMode::kFull);
-    if (home_err != ESP_OK && home_err != ESP_ERR_INVALID_STATE) {
-        ESP_LOGW(kTag, "Initial home screen show failed: %s", esp_err_to_name(home_err));
+    // First-run users see the onboarding carousel; returning users go straight to the dashboard.
+    const bool show_onboarding = !OnboardingViewed();
+    const esp_err_t initial_err =
+        show_onboarding ? ShowOnboardingScreen(display_service::RefreshMode::kFull)
+                        : ShowHomeScreen(display_service::RefreshMode::kFull);
+    if (initial_err != ESP_OK && initial_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Initial %s show failed: %s", show_onboarding ? "onboarding" : "home screen",
+                 esp_err_to_name(initial_err));
     }
     s_startup_complete.store(true, std::memory_order_relaxed);
 }

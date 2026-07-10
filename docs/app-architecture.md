@@ -506,8 +506,15 @@ active," so live updates partial-refresh normally.
 
 Current app-level button interactions are:
 
-- `UP` single click requests a partial refresh of the active screen.
-- `DOWN` single click requests a full refresh of the active screen.
+- `UP` / `DOWN` press down plus gated hold-repeat move roving focus with
+  wraparound on the active screen. A plain `UP` / `DOWN` single click is
+  intentionally inert -- navigation is driven on press-down/repeat, not on click.
+- `POWER_OK` single click activates / submits the focused item on the active
+  screen (footer target, page control, or modal action).
+- `DOWN` double click is the app-wide "exit an entered control" gesture, handled
+  per screen: it backs out of a control the user has stepped into -- e.g. the
+  Vibe Check card, or an entered scroll container / timeline item list on the
+  Summarize / Notes / Todos / Follow-up pages. It is a no-op at the app level.
 - `POWER_OK` double click toggles the lock screen.
 - pressing and holding `POWER_OK` arms then starts the recording-session flow;
   releasing the button stops recording and opens the select modal when a clip is
@@ -1082,8 +1089,11 @@ Current scope:
 
 Current app-shell usage on top of those low-level events is:
 
-- `UP` single click: partial refresh
-- `DOWN` single click: full refresh
+- `UP` / `DOWN` press down + gated hold-repeat: move roving focus (wraparound).
+  A plain `UP` / `DOWN` single click is intentionally inert.
+- `POWER_OK` single click: activate / submit the focused item
+- `DOWN` double click: app-wide "exit an entered control" gesture, handled per
+  screen (no-op at the app level)
 - `POWER_OK` double click: toggle the lock screen
 - hold `POWER_OK`: arm/start/finish the recording-session flow
 - `UP` held plus `POWER_OK` press down: open the shutdown confirmation modal

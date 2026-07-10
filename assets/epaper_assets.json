@@ -75,6 +75,14 @@
       "symbol": "kCheckboxUnchecked"
     },
     {
+      "path": "assets/icons/chevron-left.png",
+      "symbol": "kChevronLeft"
+    },
+    {
+      "path": "assets/icons/chevron-right.png",
+      "symbol": "kChevronRight"
+    },
+    {
       "path": "assets/icons/close.png",
       "symbol": "kClose"
     },

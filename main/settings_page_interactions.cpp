@@ -40,6 +40,14 @@ ActivateResult HandlePrimaryActivate(const SettingsPageCoordinator& coordinator)
             .play_activate_cue = true,
         };
     }
+    if (coordinator.IsRoleFocused(
+            page_navigation::NavigationItemRole::kSettingsManualOnboardingButton)) {
+        return {
+            .intent = ActivateIntent::kShowOnboarding,
+            .handled = true,
+            .play_activate_cue = true,
+        };
+    }
 
     return {};
 }
@@ -85,6 +93,11 @@ void ApplyPrimaryActivateResult(const ActivateResult& result,
         case ActivateIntent::kShowFormatSdModal:
             if (callbacks.show_format_sd_modal) {
                 callbacks.show_format_sd_modal();
+            }
+            return;
+        case ActivateIntent::kShowOnboarding:
+            if (callbacks.show_onboarding) {
+                callbacks.show_onboarding();
             }
             return;
         case ActivateIntent::kNone:

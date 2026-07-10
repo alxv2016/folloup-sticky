@@ -105,6 +105,11 @@ epaper_ui::SettingsPageState SettingsPageCoordinator::BuildState(
         .selected =
             IsRoleFocused(page_navigation::NavigationItemRole::kSettingsFormatSdButton),
     };
+    state.manual_onboarding_button = {
+        .label_text = "Manual",
+        .selected = IsRoleFocused(
+            page_navigation::NavigationItemRole::kSettingsManualOnboardingButton),
+    };
     return state;
 }
 

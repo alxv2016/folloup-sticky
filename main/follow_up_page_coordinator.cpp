@@ -1,15 +1,14 @@
 #include "follow_up_page_coordinator.h"
 
 #include <algorithm>
-#include <cstdio>
 #include <ctime>
 
 #include "project_assets.h"
+#include "timeline_format.h"
 
 namespace {
 
 using recording_archive_service::RecordingEntry;
-using recording_archive_service::RecordingMetadata;
 using recording_archive_service::RecordingTag;
 
 int64_t EntryUnixSeconds(const RecordingEntry& entry)
@@ -20,15 +19,6 @@ int64_t EntryUnixSeconds(const RecordingEntry& entry)
     return entry.modified_unix_seconds;
 }
 
-// Group recordings by day. created_local_date is "YYYY-MM-DD" for new recordings, but older ones
-// on the SD card may carry a "YYYY-MM-DD HH:MM:SS" timestamp; key on the date portion so both
-// group under a single date chip.
-std::string DateKey(const std::string& created_local_date)
-{
-    const auto space = created_local_date.find(' ');
-    return space == std::string::npos ? created_local_date : created_local_date.substr(0, space);
-}
-
 std::string TrimTranscript(const std::string& text)
 {
     const auto begin = text.find_first_not_of(" \t\r\n");
@@ -37,29 +27,6 @@ std::string TrimTranscript(const std::string& text)
     }
     const auto end = text.find_last_not_of(" \t\r\n");
     return text.substr(begin, end - begin + 1);
-}
-
-std::string FormatDateLabel(const RecordingMetadata& metadata)
-{
-    int year = 0;
-    int month = 0;
-    int day = 0;
-    if (std::sscanf(metadata.created_local_date.c_str(), "%d-%d-%d", &year, &month, &day) == 3) {
-        std::tm tm = {};
-        tm.tm_year = year - 1900;
-        tm.tm_mon = month - 1;
-        tm.tm_mday = day;
-        std::time_t stamp = std::mktime(&tm);
-        if (stamp != static_cast<std::time_t>(-1)) {
-            std::tm local = {};
-            localtime_r(&stamp, &local);
-            char buffer[24] = {};
-            if (std::strftime(buffer, sizeof(buffer), "%a %b %d", &local) > 0) {
-                return buffer;
-            }
-        }
-    }
-    return metadata.created_local_date.empty() ? "Today" : metadata.created_local_date;
 }
 
 std::string FormatTimeLabel(const RecordingEntry& entry)
@@ -129,9 +96,10 @@ void FollowUpPageCoordinator::BuildGroups(const std::vector<RecordingEntry>& rec
 
     for (const RecordingEntry* entry_ptr : sorted) {
         const RecordingEntry& entry = *entry_ptr;
-        const std::string date_key = !entry.metadata.created_local_date.empty()
-                                         ? DateKey(entry.metadata.created_local_date)
-                                         : FormatDateLabel(entry.metadata);
+        const std::string date_key =
+            !entry.metadata.created_local_date.empty()
+                ? timeline_format::DateKey(entry.metadata.created_local_date)
+                : timeline_format::FormatDateLabel(entry.metadata.created_local_date);
 
         int group_index = -1;
         for (size_t index = 0; index < timeline_groups_.size(); ++index) {
@@ -141,7 +109,8 @@ void FollowUpPageCoordinator::BuildGroups(const std::vector<RecordingEntry>& rec
             }
         }
         if (group_index < 0) {
-            timeline_groups_.push_back({date_key, FormatDateLabel(entry.metadata), {}});
+            timeline_groups_.push_back(
+                {date_key, timeline_format::FormatDateLabel(entry.metadata.created_local_date), {}});
             group_index = static_cast<int>(timeline_groups_.size()) - 1;
         }
 

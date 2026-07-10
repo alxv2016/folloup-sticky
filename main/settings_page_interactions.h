@@ -18,6 +18,7 @@ enum class ActivateIntent : uint8_t {
     kToggleWifi,
     kToggleAccessPoint,
     kShowFormatSdModal,
+    kShowOnboarding,
 };
 
 struct ActivateResult {
@@ -36,6 +37,7 @@ struct ActivateCallbacks {
     std::function<void()> toggle_wifi;
     std::function<void()> toggle_access_point;
     std::function<void()> show_format_sd_modal;
+    std::function<void()> show_onboarding;
 };
 
 ActivateResult HandlePrimaryActivate(const SettingsPageCoordinator& coordinator);

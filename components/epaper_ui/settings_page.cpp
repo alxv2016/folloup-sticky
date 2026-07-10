@@ -16,12 +16,14 @@ constexpr int kNetworkHeadingGap = 0;
 constexpr int kSectionGap = design::spacing::k24;
 constexpr int kStorageStatusGap = design::spacing::k12;
 constexpr int kStorageButtonTopGap = design::spacing::k16;
+constexpr int kButtonStackGap = design::spacing::k12;
 
 struct Layout {
     UiRect wifi_toggle = {};
     UiRect access_point_toggle = {};
     UiRect storage_status = {};
     UiRect format_sd_button = {};
+    UiRect manual_onboarding_button = {};
 };
 
 Layout BuildLayout(int portrait_width, int portrait_height, const SettingsPageState& state)
@@ -60,11 +62,18 @@ Layout BuildLayout(int portrait_width, int portrait_height, const SettingsPageSt
     const UiRect format_sd_button =
         ButtonBounds(page_x, button_y, state.format_sd_button, format_button_style);
 
+    ButtonStyle manual_button_style = {};
+    manual_button_style.width = page_width;
+    const UiRect manual_onboarding_button =
+        ButtonBounds(page_x, format_sd_button.bottom() + kButtonStackGap,
+                     state.manual_onboarding_button, manual_button_style);
+
     return {
         .wifi_toggle = wifi_toggle,
         .access_point_toggle = access_point_toggle,
         .storage_status = storage_status,
         .format_sd_button = format_sd_button,
+        .manual_onboarding_button = manual_onboarding_button,
     };
 }
 
@@ -83,6 +92,8 @@ UiRect SettingsPageItemBounds(int portrait_width,
             return layout.access_point_toggle;
         case SettingsPageItemId::kFormatSdButton:
             return layout.format_sd_button;
+        case SettingsPageItemId::kManualOnboardingButton:
+            return layout.manual_onboarding_button;
         case SettingsPageItemId::kNone:
         default:
             return {};
@@ -112,6 +123,7 @@ bool HitTestSettingsPageItem(int portrait_width,
         SettingsPageItemId::kWifiToggle,
         SettingsPageItemId::kAccessPointToggle,
         SettingsPageItemId::kFormatSdButton,
+        SettingsPageItemId::kManualOnboardingButton,
     };
     for (SettingsPageItemId candidate : kItems) {
         const UiRect bounds =
@@ -229,7 +241,7 @@ void DrawSettingsPage(uint8_t* framebuffer,
 
     ButtonStyle format_button_style = {};
     format_button_style.width = layout.format_sd_button.width;
-    // Sole action on the page -> primary (darker) variant.
+    // Primary action on the page -> primary (darker) variant.
     format_button_style.variant = ButtonVariant::kPrimary;
     DrawButton(framebuffer,
                raw_width,
@@ -240,6 +252,19 @@ void DrawSettingsPage(uint8_t* framebuffer,
                layout.format_sd_button.y,
                state.format_sd_button,
                format_button_style);
+
+    // Secondary utility action -> default (outlined) variant so it reads below Format SD.
+    ButtonStyle manual_button_style = {};
+    manual_button_style.width = layout.manual_onboarding_button.width;
+    DrawButton(framebuffer,
+               raw_width,
+               raw_height,
+               portrait_width,
+               portrait_height,
+               layout.manual_onboarding_button.x,
+               layout.manual_onboarding_button.y,
+               state.manual_onboarding_button,
+               manual_button_style);
 
     DrawGlobalFooter(framebuffer,
                      raw_width,
