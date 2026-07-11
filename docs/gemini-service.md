@@ -11,15 +11,17 @@ firmware.
 - Wi-Fi-driven Gemini readiness
 - Gemini-ready status consumed by the status bar
 
-It does not currently own:
+It does not own:
 
-- transcription requests
-- summary generation
-- token counting
-- archived recording enrichment
+- transcription requests — owned by the `transcription_service` component
+- summary generation — owned by the `summary_service` component
+- archived recording enrichment / indexing — owned by
+  `recording_archive_service`
 - a frontend portal UI
 
-Those broader Followup Gemini features have not been ported into Sticky yet.
+`transcription_service` and `summary_service` call the Gemini API directly; they
+were split into their own components rather than living inside `gemini_service`,
+which remains focused on key/settings precedence, auth readiness, and status.
 
 ## Ownership
 

@@ -6,7 +6,8 @@ based on the local hardware spec in
 
 ## Current Scope
 
-The repository is currently a minimal ESP-IDF application scaffold with:
+The repository is a multi-page ESP-IDF product application (dashboard home,
+onboarding, and a set of feature pages plus overlays) built on:
 
 - ESP32-S3 target configuration.
 - 32 MB QSPI flash configuration.
@@ -27,9 +28,12 @@ The repository is currently a minimal ESP-IDF application scaffold with:
   policy and maps app events onto buzzer patterns.
 - A `design_tokens` component that owns shared product UI constants such as
   spacing, colors, typography roles, and component sizing.
-- An `epaper_ui` component that owns reusable e-paper presentation primitives
-  such as the status bar renderer, lock-screen renderer, shutdown modal,
-  toast overlay, and future view widgets being ported from the old app.
+- An `epaper_ui` component that owns the reusable e-paper presentation
+  primitives (status bar, global footer, lock screen, card modal, select modal,
+  toast, keyboard, carousel, scroll container, timeline list, sticky note, and
+  the many list/menu/input widgets) plus the full page renderers (dashboard,
+  onboarding, vibe check, summarize, notes, todos, follow-up, details, settings,
+  wifi, time).
 - A ported `sd_card` component for SDSPI/FATFS MicroSD access.
 - A `storage_service` component that owns app-facing MicroSD mount, format, and
   debug status policy.
@@ -46,6 +50,16 @@ The repository is currently a minimal ESP-IDF application scaffold with:
 - A `recording_service` component that owns voice-input recording state,
   pre-roll buffering, PSRAM-backed clips, input-level tracking, and WAV export
   to MicroSD.
+- A `recording_session_service` component that owns the press/hold recording
+  flow, tag selection, and save/transcription orchestration.
+- A `recording_archive_service` component that owns the SD recording index
+  (listing, metadata, follow-up flags) surfaced by the Notes/Todos/Follow-up
+  pages and the sticky-note overlay.
+- A `transcription_service` and a `summary_service` component that own the
+  Gemini-backed transcription and summary flows respectively (these live in
+  their own components, not inside `gemini_service`).
+- A `shared_bus_service` component that serializes the shared SPI2 bus between
+  the SD card and the e-paper panel (`StorageBusGuard` / `DisplayBusGuard`).
 - A ported mono SSD1677 e-paper panel driver.
 - A `display_service` component that owns app-facing e-paper bring-up, blank
   screen refresh, display sleep, and light-sleep recovery.
@@ -103,6 +117,12 @@ main/
   page_input_runtime.h
   page_input_runtime.cpp
   shared_page_interactions.h
+  # Per-page runtime families. Each feature page has a {runtime, coordinator,
+  # interactions} trio (settings/wifi/time predate the coordinator split and
+  # keep their state in the runtime):
+  #   dashboard_page_*  onboarding_page_*  vibe_check_page_*  summarize_page_*
+  #   notes_page_*  todos_page_*  follow_up_page_*  details_page_*
+  #   settings_page_{runtime,coordinator,interactions}  wifi_page_*  time_page_*
   settings_page_interactions.h
   settings_page_interactions.cpp
   wifi_page_interactions.h
@@ -111,6 +131,8 @@ main/
   time_page_interactions.cpp
   page_interaction_runtime.h
   page_interaction_runtime.cpp
+  timeline_format.h                # shared timeline date/time formatters ("Today" logic)
+  timeline_format.cpp
   ui_refresh_runtime.h
   ui_refresh_runtime.cpp
   app_interaction_result.h
@@ -140,22 +162,27 @@ components/
   design_tokens/
     include/
       design_tokens.h
-  epaper_ui/
+  epaper_ui/                      # ~55 primitives + page renderers (not exhaustive here)
     include/
       epaper_ui/
         bitmap_font.h
         font_renderer.h
         generated_epaper_fonts.h
         overlay_geometry.h
-        shutdown_modal.h
         status_bar.h
-        toast.h
+        global_footer.h
+        # overlays: card_modal.h, select_modal.h, toast.h, keyboard*.h, sticky_note.h
+        # primitives: carousel.h, scroll_container.h, timeline_list.h, list_item*.h,
+        #   menu_*.h, tag.h, badge.h, toggle.h, checkbox.h, segment_control.h, *_input.h ...
+        # pages: dashboard_page.h, onboarding_page.h, vibe_check_page.h, summarize_page.h,
+        #   notes_page.h, todos_page.h, follow_up_page.h, details_page.h, settings_page.h,
+        #   wifi_page.h, time_page.h, lock_screen.h
     bitmap_font.cpp
     font_renderer.cpp
     generated_epaper_fonts.cpp
-    shutdown_modal.cpp
     status_bar.cpp
-    toast.cpp
+    # ... one .cpp per header above (global_footer.cpp, card_modal.cpp, sticky_note.cpp,
+    #     carousel.cpp, scroll_container.cpp, dashboard_page.cpp, onboarding_page.cpp, ...)
   project_assets/
     CMakeLists.txt
     asset_manifest.h
@@ -196,6 +223,11 @@ components/
     include/
       recording_service.h
     recording_service.cpp
+  recording_session_service/
+  recording_archive_service/
+  transcription_service/
+  summary_service/
+  shared_bus_service/
   display_service/
     include/
       display_service.h
@@ -263,10 +295,13 @@ partitions.csv
 sdkconfig
 sdkconfig.defaults
 docs/
-  asset-generation.md
   app-architecture.md
+  asset-generation.md
+  auto-sleep.md
   gemini-service.md
+  gt911-touch-reset-debugging.md
   reTerminal_Sticky_Hardware_Spec_Software_Porting-en.md
+  shared-spi-bus-contention.md
 scripts/
   generate_epaper_assets_common.py
   generate_epaper_footer_icons.py
@@ -357,19 +392,54 @@ mode decisions, and sleep/wake transitions. It may consume `epaper_ui`
 renderers, but it should not become the home for product state composition or a
 grab bag of reusable widgets.
 
+### Screens and overlays
+
+Screens are mutually-exclusive full-screen underlays selected by `ScreenId`.
+Overlays composite on top of the active screen and (except the toast) capture
+input while visible.
+
+Screens (`ScreenId`):
+
+- `kHome` — the dashboard: a focusable menu that opens the feature pages.
+- `kOnboarding` — a first-boot carousel (Close / Prev / Next). Shown once, gated
+  by NVS `app_state`/`onboarded`; re-launchable from Settings → "Manual".
+- `kVibeCheck`, `kSummarize` — AI idea / summary cards.
+- `kNotes`, `kTodos`, `kFollowUp` — recording timelines (two-level: date-group
+  chips → an entered, scrollable item list) built on the `timeline_list`
+  primitive and `timeline_format` (the "Today"/absolute-date labels).
+- `kDetails` — a single recording's details with an entered transcript scroll
+  container.
+- `kSettings` (WiFi/AP toggles, Format SD, "Manual" onboarding), `kWifi`,
+  `kTime`, `kLockScreen`.
+
+Overlays (`overlay_runtime` + drawn in `display_service::DrawCurrentOverlays`,
+z-order keyboard → toast → select modal → card modal → sticky note):
+
+- **card modal** — shutdown/storage confirmations (replaces the old
+  "shutdown modal").
+- **select modal** — single-choice pickers (e.g. tag / timezone).
+- **keyboard** — on-screen text entry.
+- **toast** — transient status, optionally closable.
+- **sticky note** — a full-page overlay opened by the footer Sticky button that
+  flips through the follow-up notes (Prev/Next wrap, Close), with a Details-style
+  scroll container for each transcript.
+
 ### Overlay refresh suppression
 
 All page, status-bar, footer, and overlay repaints flow through
 `ui_refresh_runtime`, a keyed latest-wins worker. Each caller schedules an
 *apply callback* (which pushes fresh state into `display_service`) plus a
 refresh request, keyed by a `SurfaceKey` (`kOverlay`, `kLockScreen`,
-`kStatusBar`, `kFooter`, `kSettingsPage`, `kWifiPage`, `kTimePage`). The worker
+`kStatusBar`, `kFooter`, and one key per page: `kSettingsPage`, `kWifiPage`,
+`kTimePage`, `kDashboardPage`, `kVibeCheckPage`, `kSummarizePage`, `kNotesPage`,
+`kTodosPage`, `kFollowUpPage`, `kDetailsPage`, `kOnboardingPage`). The worker
 coalesces pending work per surface and issues at most one screen (underlay)
 refresh and one overlay refresh per drain.
 
 **The overlay rule:** while an overlay owns the screen — that is, while
-`overlay_runtime::IsInputCaptured()` is true (keyboard, select/storage/shutdown
-modal, or a closable toast) — the worker *suppresses underlay refreshes*
+`overlay_runtime::IsInputCaptured()` is true (keyboard, select modal, card modal,
+the sticky-note overlay, a shutdown request in progress, or a closable toast) —
+the worker *suppresses underlay refreshes*
 (page/status/footer). The apply callbacks still run, so the stored state stays
 current; only the panel rebuild *beneath* the open overlay is skipped. Overlay
 refreshes (the overlay repainting itself) always proceed. When the overlay
@@ -417,10 +487,17 @@ The current app-runtime helpers under `main/` are:
 
 - `status_bar_runtime`: compose Wi-Fi, Gemini, battery, sleep, and shutdown
   state into `epaper_ui::StatusBarState`
-- `footer_runtime`: project footer layout and future shared page focus into
-  `epaper_ui::GlobalFooterState`
-- `overlay_runtime`: own retained shutdown/select/storage/toast overlay state,
-  hit testing, and overlay presentation hooks
+- `footer_runtime`: project footer layout and shared page focus into
+  `epaper_ui::GlobalFooterState` (Settings/WiFi/Time/Folder/Sticky/Home + Mic)
+- `overlay_runtime`: own retained overlay state (card modal, select modal,
+  keyboard, toast, and the full-page sticky-note overlay), hit testing, and
+  overlay presentation hooks
+- one runtime family per feature page — `{dashboard, onboarding, vibe_check,
+  summarize, notes, todos, follow_up, details}_page_{runtime, coordinator,
+  interactions}`, plus `settings/wifi/time` (runtime + interactions) — composing
+  page state and translating focus into neutral page outcomes + follow-on intents
+- `timeline_format`: shared date/time formatters for the Notes/Todos/Follow-up
+  timelines and the sticky-note overlay (the "Today"-vs-absolute-date logic)
 - `input_runtime_setup`: own app-facing button/touch binding setup plus the
   shared inputs-enabled gate before events enter app routing
 - `input_focus_runtime`: own overlay-first button routing for roving focus
@@ -472,8 +549,10 @@ The current early startup sequence is:
 - Initializes `recording_service` and logs recording status.
 - Initializes `recording_session_service`, which owns the press/hold recording
   flow, tag selection, and transcription/save orchestration.
-- Initializes `footer_runtime`, which seeds the current one-icon footer layout
-  and footer focus projection model.
+- Initializes `footer_runtime`, which seeds the footer layout (Settings, WiFi,
+  Time, Folder, Sticky, Home buttons — in that left-to-right order — plus the Mic
+  status) and the footer focus projection model. The Sticky button (left of Home)
+  opens the follow-up sticky-note overlay.
 - Initializes `button_service`.
 - Subscribes to button and touch events, forwards user activity into
   auto-sleep, forwards interaction feedback into `feedback_service`, and handles
@@ -483,13 +562,15 @@ The current early startup sequence is:
   available.
 - Runs a small shutdown task so button callbacks can request shutdown without
   directly executing the power-latch release sequence.
-- Seeds the status bar and footer state (no refresh), then renders the home
+- Seeds the status bar and footer state (no refresh), then renders the first
   screen with a single **full** refresh as the first thing the panel paints, and
-  finally sets `s_startup_complete`.
+  finally sets `s_startup_complete`. On first boot (NVS `app_state`/`onboarded`
+  unset) that first screen is the onboarding page (`ShowOnboardingScreen(kFull)`);
+  otherwise it is the dashboard home (`ShowHomeScreen(kFull)`).
 
 **Boot refresh policy — no partial refresh before the initial full paint.** The
-first thing the panel paints on boot is the single **full** refresh of the home
-screen (`ShowHomeScreen(RefreshMode::kFull)`, the last step above). No partial
+first thing the panel paints on boot is that single **full** refresh of the first
+screen (onboarding or home, the last step above). No partial
 refresh is allowed before it. Services initialize *before* that paint and several
 publish events during boot (the RTC time intent, Wi-Fi connection state, the
 recording-archive snapshot, storage mount); their handlers update UI state but
@@ -543,21 +624,25 @@ path has time to stop feeding `PWR_EN`.
 
 Current input precedence and focus ownership are:
 
-- select modal roving focus first
-- shutdown modal roving focus second
-- toast close action and future overlay focusables after those modal traps
+- overlay roving/hit focus first: card modal, select modal, keyboard, and the
+  full-page sticky-note overlay, plus the closable toast
 - footer targets when no overlay captures input
 - registered page targets after footer under the shared page-touch contract
 
 Current focus-surface inventory is:
 
-- `Home`: footer path only
-- `Settings`: shared page-focus path
+- `Home`: the dashboard page (focusable menu) plus the footer
+- `Onboarding`: the carousel page (Close / Prev / Next controls); no footer
+- `VibeCheck`, `Summarize`: shared page-focus path
+- `Notes`, `Todos`, `FollowUp`: shared page-focus path with a two-level timeline
+  (date-group chips → entered item list)
+- `Details`: shared page-focus path with an entered transcript scroll container
+- `Settings`: shared page-focus path (incl. the "Manual" onboarding button)
 - `WiFi`: shared page-focus path, with page-owned list sub-focus for networks
 - `Time`: shared page-focus path, with overlay editors (timezone select modal,
   numeric keyboard per field)
 - `Lock screen`: no focusable page or footer surface today
-- shutdown/storage/select/keyboard/toast overlays: overlay path
+- card modal / select modal / keyboard / toast / sticky-note overlays: overlay path
 
 Ownership is intentionally split as:
 
@@ -585,7 +670,8 @@ Ownership is intentionally split as:
 - `main/page_interaction_runtime.cpp`: registration point for future page
   runtimes/coordinators to provide `resolve -> focus -> activate` touch hooks
 - `main/overlay_runtime.cpp`: retained overlay state, focus-sync, submit, and
-  dismiss behavior for shutdown/select/toast overlays
+  dismiss behavior for the card modal, select modal, keyboard, toast, and
+  sticky-note overlays
 - `main/footer_runtime.cpp`: presentation-only projection of footer layout and
   shared page focus into the e-paper footer contract, plus footer
   touch resolve/focus/activate hooks for footer-owned surfaces such as `Home`
@@ -601,11 +687,11 @@ screens is:
 - `activate_touch_target(target)`: perform page-owned activation on touch
   release
 
-Today that contract is implemented by the current page-owned screens:
-
-- `Settings`
-- `WiFi`
-- `Time`
+This contract is implemented by every page-owned screen: `Dashboard` (home),
+`Onboarding`, `VibeCheck`, `Summarize`, `Notes`, `Todos`, `FollowUp`, `Details`,
+`Settings`, `WiFi`, and `Time`. Dispatch for the active screen is centralized in
+`main/page_input_runtime.cpp` (`resolve/focus/activate` and button handling per
+`ScreenId`).
 
 Future pages should keep page-local selected indexes as render projections of
 page-owned focus truth rather than inventing separate touch-only selection
@@ -1374,8 +1460,8 @@ Current scope:
 - initialize the raw SSD1677 panel driver
 - render the startup splash with `RefreshFullBase()`
 - own the current portrait framebuffer surface and its refresh policy
-- render the current active screen, including the home bridge screen or lock
-  screen, together with the appropriate UI chrome
+- render the current active screen (the dashboard home, onboarding, any feature
+  page, or the lock screen) together with the appropriate UI chrome
 - enter panel sleep without a special transitional text screen
 - restore the current screen with a forced full refresh after display wake or
   light-sleep recovery
@@ -1384,18 +1470,23 @@ Current scope:
 
 Current UI state:
 
-- `display_service` now owns a minimal screen model with the temporary home
-  demo/bridge surface plus a real lock screen
+- `display_service` owns the `ScreenId` screen model: the dashboard home,
+  onboarding, the feature pages (vibe check, summarize, notes, todos, follow-up,
+  details, settings, wifi, time), and a real lock screen
 - the status bar is now rendered through `epaper_ui`
 - the global footer is rendered through `epaper_ui` and fed by
   `main/footer_runtime.cpp`
 - the lock screen uses its own `epaper_ui` renderer and a dedicated runtime
   helper in `main/lock_screen_runtime.cpp`
-- overlay presentation now has two app-facing refresh paths:
+- overlays are composited on top of the active screen in `DrawCurrentOverlays`
+  (z-order keyboard → toast → select modal → card modal → sticky note); the
+  `RenderSnapshot` carries each overlay's state (`card_modal`, `select_modal`,
+  `keyboard`, `toast`, `sticky_note`)
+- overlay presentation has two app-facing refresh paths:
   - show/hide or footprint changes rebuild the underlay before redrawing the
     overlay
-  - same-visibility overlay churn such as roving-focus updates may reuse the
-    cached underlay snapshot
+  - same-visibility overlay churn such as roving-focus updates or sticky-note
+    scrolling may reuse the cached underlay snapshot
 - sleep and shutdown indicators are driven through `status_bar_runtime`
   immediately before display sleep, light sleep, and deep-sleep shutdown
   transitions
@@ -1419,9 +1510,8 @@ The current keyed surfaces are:
 - lock screen
 - status bar
 - footer
-- settings page
-- WiFi page
-- time page
+- one per page: dashboard, onboarding, vibe check, summarize, notes, todos,
+  follow-up, details, settings, WiFi, time
 
 Current refresh categories are:
 
@@ -1454,9 +1544,9 @@ The current focus path is:
   sync, and screen switch
 
 The temporary demo-selection machinery has been removed; `display_service` owns a
-`ScreenId`-based screen model. The home screen still renders a neutral placeholder
-card (`DrawHomePlaceholder`) — replacing that with a real home view is the remaining
-product work.
+`ScreenId`-based screen model. The home screen renders the real dashboard
+(`DrawHomeUnderlay` → `epaper_ui::DrawDashboardPage`), whose focusable menu opens
+the feature pages.
 
 Because the SSD1677 path shares `SPI2_HOST` with MicroSD, `display_service`
 depends on `storage_service` having already performed SD bring-up when a card is
