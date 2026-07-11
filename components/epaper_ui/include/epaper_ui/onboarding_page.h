@@ -7,15 +7,19 @@
 #include "epaper_ui/carousel.h"
 #include "epaper_ui/status_bar.h"
 
+struct EmbeddedImageAsset;
+
 namespace epaper_ui {
 
 // First-run onboarding: a carousel of slides below the status bar. This composer draws the active
-// slide's title + body into the carousel's content slot and the carousel chrome around it.
+// slide's title + body + illustration into the carousel's content slot and the carousel chrome
+// around it.
 struct OnboardingPageState {
     int navigation_focus_index = -1;
     CarouselState carousel = {};
     std::string slide_title = {};
     std::string slide_body = {};
+    const EmbeddedImageAsset* slide_image = nullptr;  // illustration drawn below the body
 
     bool operator==(const OnboardingPageState& other) const = default;
 };

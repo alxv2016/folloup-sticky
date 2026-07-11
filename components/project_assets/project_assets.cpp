@@ -3,6 +3,7 @@
 #include "generated_epaper_logos.h"
 #include "generated_epaper_icons.h"
 #include "generated_epaper_footer_icons.h"
+#include "generated_epaper_images.h"
 
 namespace project_assets {
 
@@ -145,6 +146,26 @@ const EmbeddedImageAsset* GetIcon(EmbeddedIconId id)
 const EmbeddedImageAsset* GetFooterIcon(EmbeddedFooterIconId id)
 {
     switch (id) {
+        default:
+            return nullptr;
+    }
+}
+
+const EmbeddedImageAsset* GetImage(EmbeddedImageId id)
+{
+    switch (id) {
+        case EmbeddedImageId::kSlide1:
+            return &epaper_images::kSlide1;
+        case EmbeddedImageId::kSlide2:
+            return &epaper_images::kSlide2;
+        case EmbeddedImageId::kSlide3:
+            return &epaper_images::kSlide3;
+        case EmbeddedImageId::kSlide4:
+            return &epaper_images::kSlide4;
+        case EmbeddedImageId::kSlide5:
+            return &epaper_images::kSlide5;
+        case EmbeddedImageId::kSlide6:
+            return &epaper_images::kSlide6;
         default:
             return nullptr;
     }

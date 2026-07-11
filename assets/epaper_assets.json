@@ -243,5 +243,31 @@
       "symbol": "kWifiConfig"
     }
   ],
-  "footer_icons": []
+  "footer_icons": [],
+  "images": [
+    {
+      "path": "assets/images/slide1.png",
+      "symbol": "kSlide1"
+    },
+    {
+      "path": "assets/images/slide2.png",
+      "symbol": "kSlide2"
+    },
+    {
+      "path": "assets/images/slide3.png",
+      "symbol": "kSlide3"
+    },
+    {
+      "path": "assets/images/slide4.png",
+      "symbol": "kSlide4"
+    },
+    {
+      "path": "assets/images/slide5.png",
+      "symbol": "kSlide5"
+    },
+    {
+      "path": "assets/images/slide6.png",
+      "symbol": "kSlide6"
+    }
+  ]
 }

@@ -59,6 +59,16 @@ CATEGORIES = [
         guard="GENERATED_EPAPER_FOOTER_ICONS_H",
         fixed_size=44,
     ),
+    AssetCategory(
+        manifest_key="images",
+        enum_name="EmbeddedImageId",
+        getter_name="GetImage",
+        namespace="epaper_images",
+        header_name="generated_epaper_images.h",
+        source_name="generated_epaper_images.cpp",
+        guard="GENERATED_EPAPER_IMAGES_H",
+        fixed_size=None,
+    ),
 ]
 
 

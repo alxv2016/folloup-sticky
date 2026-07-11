@@ -9,6 +9,7 @@ namespace project_assets {
 const EmbeddedImageAsset* GetLogo(EmbeddedLogoId id);
 const EmbeddedImageAsset* GetIcon(EmbeddedIconId id);
 const EmbeddedImageAsset* GetFooterIcon(EmbeddedFooterIconId id);
+const EmbeddedImageAsset* GetImage(EmbeddedImageId id);
 
 }  // namespace project_assets
 

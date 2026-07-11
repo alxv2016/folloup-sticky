@@ -72,4 +72,13 @@ enum class EmbeddedIconId : uint8_t {
 enum class EmbeddedFooterIconId : uint8_t {
 };
 
+enum class EmbeddedImageId : uint8_t {
+    kSlide1,
+    kSlide2,
+    kSlide3,
+    kSlide4,
+    kSlide5,
+    kSlide6,
+};
+
 #endif  // PROJECT_ASSET_MANIFEST_H_

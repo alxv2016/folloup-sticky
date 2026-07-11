@@ -2,6 +2,9 @@
 
 #include <array>
 
+#include "asset_manifest.h"
+#include "project_assets.h"
+
 namespace {
 
 using page_navigation::NavigationItemRole;
@@ -10,20 +13,32 @@ using epaper_ui::OnboardingControl;
 struct Slide {
     const char* title;
     const char* body;
+    EmbeddedImageId image;
 };
 
-// Dummy first-run content (5 slides). Swap for real copy later.
-constexpr std::array<Slide, 5> kSlides = {{
+constexpr std::array<Slide, 6> kSlides = {{
     {"Welcome to Folloup",
-     "Your pocket voice notebook. Capture thoughts out loud and let Folloup keep them organized."},
+     "Your pocket voice notebook. Capture thoughts out loud and let Folloup keep them organized.",
+     EmbeddedImageId::kSlide1},
     {"Capture in a tap",
-     "Press the mic to record a note, an idea, or a task. Everything is saved straight to the SD card."},
-    {"Notes, Todos & Follow-ups",
-     "Recordings are grouped by day. Browse them as Notes, mark tasks as Todos, and pin anything as a follow-up."},
+     "Press the mic to record a note, an idea, or a task. Everything is saved straight to the SD "
+     "card. Double-press to lock the screen.",
+     EmbeddedImageId::kSlide2},
+    {"Navigate with keys",
+     "Key 1 selects, key 2 navigates up, and key 3 navigates down. Hold key 3 to exit certain "
+     "components.",
+     EmbeddedImageId::kSlide3},
+    {"Sleep & power",
+     "The device sleeps when inactive. Hold keys 1 and 2 to shut it down; press and hold key 1 to "
+     "turn it on.",
+     EmbeddedImageId::kSlide4},
     {"Summaries with Gemini",
-     "Connect Gemini and let Folloup transcribe your recordings and summarize your day for you."},
-    {"You're all set",
-     "That's the tour. Tap Close to head to your dashboard and start capturing."},
+     "Connect Gemini and let Folloup transcribe your recordings and summarize your day for you.",
+     EmbeddedImageId::kSlide5},
+    {"Notes, Todos & Follow-ups",
+     "Recordings are grouped by day. Browse them as Notes, mark tasks as Todos, and pin anything as "
+     "a follow-up.",
+     EmbeddedImageId::kSlide6},
 }};
 
 NavigationItemRole RoleForControl(OnboardingControl control)
@@ -200,5 +215,6 @@ epaper_ui::OnboardingPageState OnboardingPageCoordinator::BuildState() const
     const Slide& slide = kSlides[static_cast<size_t>(active_index_)];
     state.slide_title = slide.title;
     state.slide_body = slide.body;
+    state.slide_image = project_assets::GetImage(slide.image);
     return state;
 }
