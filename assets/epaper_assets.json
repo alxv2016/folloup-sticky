@@ -83,6 +83,10 @@
       "symbol": "kChevronRight"
     },
     {
+      "path": "assets/icons/sticky.png",
+      "symbol": "kSticky"
+    },
+    {
       "path": "assets/icons/close.png",
       "symbol": "kClose"
     },

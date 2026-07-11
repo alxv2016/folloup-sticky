@@ -1,9 +1,11 @@
 #include "app_shell.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include "button_input_runtime.h"
 #include "button_service.h"
@@ -50,6 +52,7 @@
 #include "wifi_service.h"
 #include "dashboard_page_runtime.h"
 #include "recording_archive_service.h"
+#include "timeline_format.h"
 #include "time_page_runtime.h"
 #include "vibe_check_page_runtime.h"
 #include "wifi_page_runtime.h"
@@ -165,6 +168,8 @@ footer_runtime::LayoutState FooterLayoutForScreen(display_service::ScreenId scre
     // Home button is always visible, including on the home screen itself (tapping it
     // there does a full-screen refresh via HandleFooterActivate -> ShowHomeScreen(kFull)).
     layout.show_home = true;
+    // Sticky button sits left of Home; it opens the follow-up sticky-note overlay from any page.
+    layout.show_sticky = true;
     layout.show_mic = true;
     return layout;
 }
@@ -563,6 +568,71 @@ esp_err_t ShowTimeScreen(display_service::RefreshMode refresh_mode)
                                              "show_time_screen");
 }
 
+// Gather every follow-up recording (newest first) as sticky-note items, reusing the same content
+// shape as the Follow-up timeline rows.
+std::vector<overlay_runtime::StickyNoteItem> BuildFollowUpStickyItems()
+{
+    esp_err_t status = ESP_OK;
+    const std::vector<recording_archive_service::RecordingEntry> entries =
+        recording_archive_service::ListRecordings(&status);
+
+    std::vector<const recording_archive_service::RecordingEntry*> follow_ups;
+    for (const recording_archive_service::RecordingEntry& entry : entries) {
+        if (entry.metadata.follow_up) {
+            follow_ups.push_back(&entry);
+        }
+    }
+    const auto entry_time = [](const recording_archive_service::RecordingEntry* entry) {
+        return entry->metadata.created_unix_seconds > 0 ? entry->metadata.created_unix_seconds
+                                                        : entry->modified_unix_seconds;
+    };
+    std::sort(follow_ups.begin(), follow_ups.end(),
+              [&](const recording_archive_service::RecordingEntry* a,
+                  const recording_archive_service::RecordingEntry* b) {
+                  return entry_time(a) > entry_time(b);
+              });
+
+    std::vector<overlay_runtime::StickyNoteItem> items;
+    items.reserve(follow_ups.size());
+    for (const recording_archive_service::RecordingEntry* entry_ptr : follow_ups) {
+        const recording_archive_service::RecordingEntry& entry = *entry_ptr;
+        const std::string transcript = timeline_format::TrimTranscript(entry.transcript_text);
+        const bool has_transcription = entry.metadata.has_transcript && !transcript.empty();
+
+        overlay_runtime::StickyNoteItem item = {};
+        item.tag_text = timeline_format::TagText(entry.metadata.tag);
+        item.header.icon_asset = project_assets::GetIcon(
+            has_transcription ? EmbeddedIconId::kTranscribe : EmbeddedIconId::kAudio);
+        item.header.tag_icon_asset = project_assets::GetIcon(EmbeddedIconId::kPin);
+        item.header.time_text = timeline_format::FormatTimeLabel(
+            entry.metadata.time_valid, entry.metadata.created_unix_seconds);
+        item.header.minute_seconds_text =
+            timeline_format::FormatDurationLabel(entry.metadata.duration_ms);
+        item.body_text = has_transcription ? transcript : "Audio only follow-up item.";
+        items.push_back(std::move(item));
+    }
+    return items;
+}
+
+// Footer "Sticky" action: show the follow-up notes in the sticky overlay, or a nudge toast when
+// there are none yet.
+void ShowFollowUpStickyNotes()
+{
+    const std::vector<overlay_runtime::StickyNoteItem> items = BuildFollowUpStickyItems();
+    if (items.empty()) {
+        epaper_ui::ToastState toast = {};
+        toast.visible = true;
+        toast.body_text = "Follow up on a thought to view";
+        toast.leading_icon = project_assets::GetIcon(EmbeddedIconId::kPin);
+        (void)overlay_runtime::ShowToastForDuration(toast, 2000);
+        return;
+    }
+    const esp_err_t err = overlay_runtime::ShowStickyNotes(items);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Show sticky notes failed: %s", esp_err_to_name(err));
+    }
+}
+
 app_interaction::InputResult HandleFooterActivate(footer_runtime::FooterFocusItem item, void*)
 {
     app_interaction::InputResult result = {};
@@ -592,6 +662,11 @@ app_interaction::InputResult HandleFooterActivate(footer_runtime::FooterFocusIte
             result.feedback_cue = app_interaction::FeedbackCue::kClick;
             err = ShowTimeScreen(display_service::RefreshMode::kFull);
             break;
+        case footer_runtime::FooterFocusItem::kSticky:
+            // Opens the follow-up sticky overlay (or a nudge toast). The overlay owns its own
+            // refresh + feedback, and there is no underlying screen change, so return directly.
+            ShowFollowUpStickyNotes();
+            return result;
         case footer_runtime::FooterFocusItem::kFolder:
         case footer_runtime::FooterFocusItem::kMic:
         case footer_runtime::FooterFocusItem::kNone:

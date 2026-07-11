@@ -1,7 +1,6 @@
 #include "todos_page_coordinator.h"
 
 #include <algorithm>
-#include <ctime>
 
 #include "project_assets.h"
 #include "timeline_format.h"
@@ -23,43 +22,6 @@ int64_t EntryUnixSeconds(const RecordingEntry& entry)
         return entry.metadata.created_unix_seconds;
     }
     return entry.modified_unix_seconds;
-}
-
-std::string TrimTranscript(const std::string& text)
-{
-    const auto begin = text.find_first_not_of(" \t\r\n");
-    if (begin == std::string::npos) {
-        return {};
-    }
-    const auto end = text.find_last_not_of(" \t\r\n");
-    return text.substr(begin, end - begin + 1);
-}
-
-std::string FormatTimeLabel(const RecordingEntry& entry)
-{
-    if (entry.metadata.time_valid && entry.metadata.created_unix_seconds > 0) {
-        std::time_t stamp = static_cast<std::time_t>(entry.metadata.created_unix_seconds);
-        std::tm local = {};
-        localtime_r(&stamp, &local);
-        char buffer[16] = {};
-        if (std::strftime(buffer, sizeof(buffer), "%I:%M %p", &local) > 0) {
-            std::string text = buffer;
-            if (text.size() > 1 && text.front() == '0') {
-                text.erase(0, 1);
-            }
-            return text;
-        }
-    }
-    return "--:--";
-}
-
-std::string FormatDurationLabel(uint32_t duration_ms)
-{
-    const uint32_t seconds = duration_ms / 1000U;
-    if (seconds < 60U) {
-        return std::to_string(seconds) + "s";
-    }
-    return std::to_string(seconds / 60U) + "m";
 }
 
 const EmbeddedImageAsset* PinIcon()
@@ -106,7 +68,7 @@ void TodosPageCoordinator::BuildGroups(const std::vector<RecordingEntry>& record
             group_index = static_cast<int>(timeline_groups_.size()) - 1;
         }
 
-        const std::string transcript = TrimTranscript(entry.transcript_text);
+        const std::string transcript = timeline_format::TrimTranscript(entry.transcript_text);
         const bool has_transcription = entry.metadata.has_transcript && !transcript.empty();
 
         TimelineEntry timeline_entry = {};
@@ -118,9 +80,9 @@ void TodosPageCoordinator::BuildGroups(const std::vector<RecordingEntry>& record
         timeline_entry.item.header.icon_asset = project_assets::GetIcon(
             has_transcription ? EmbeddedIconId::kTranscribe : EmbeddedIconId::kAudio);
         timeline_entry.item.header.tag_icon_asset = entry.metadata.follow_up ? PinIcon() : nullptr;
-        timeline_entry.item.header.time_text = FormatTimeLabel(entry);
+        timeline_entry.item.header.time_text = timeline_format::FormatTimeLabel(entry.metadata.time_valid, entry.metadata.created_unix_seconds);
         timeline_entry.item.header.minute_seconds_text =
-            FormatDurationLabel(entry.metadata.duration_ms);
+            timeline_format::FormatDurationLabel(entry.metadata.duration_ms);
         timeline_entry.item.header.tag_text = "Task";
         timeline_entry.item.body_text = has_transcription ? transcript : "Audio only todo.";
         timeline_entry.item.accessory.kind = epaper_ui::ListItemAccessoryKind::kCheckbox;

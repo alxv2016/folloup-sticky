@@ -20,6 +20,8 @@ enum class Kind : uint8_t {
     kOverlaySelectModalItem,
     kOverlayToastCloseAction,
     kOverlayKeyboardKey,
+    // Footer control of the sticky-note overlay. primary_index = StickyNoteControl.
+    kOverlayStickyNoteControl,
     kFooterItem,
     kPageAction,
     kPageComposite,

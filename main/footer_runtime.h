@@ -20,6 +20,7 @@ enum class FooterFocusItem : uint8_t {
     kTime,
     kFolder,
     kMic,
+    kSticky,
 };
 
 struct LayoutState {
@@ -30,6 +31,7 @@ struct LayoutState {
     bool show_time = false;
     bool show_folder = false;
     bool show_mic = true;
+    bool show_sticky = false;
 };
 
 // Future page ports should project shared page focus into this state instead of

@@ -13,6 +13,7 @@
 #include "epaper_ui/lock_screen.h"
 #include "epaper_ui/settings_page.h"
 #include "epaper_ui/card_modal.h"
+#include "epaper_ui/sticky_note.h"
 #include "epaper_ui/toast.h"
 #include "epaper_ui/dashboard_page.h"
 #include "epaper_ui/details_page.h"
@@ -97,6 +98,7 @@ epaper_ui::KeyboardState s_keyboard_state = {};
 epaper_ui::CardModalState s_card_modal_state = {};
 epaper_ui::SelectModalState s_select_modal_state = {};
 epaper_ui::ToastState s_toast_state = {};
+epaper_ui::StickyNoteState s_sticky_note_state = {};
 std::array<uint8_t, STICKY_EPD_BUFFER_LEN> s_underlay_snapshot = {};
 bool s_underlay_snapshot_valid = false;
 
@@ -119,6 +121,7 @@ struct RenderSnapshot {
     epaper_ui::CardModalState card_modal = {};
     epaper_ui::SelectModalState select_modal = {};
     epaper_ui::ToastState toast = {};
+    epaper_ui::StickyNoteState sticky_note = {};
 };
 
 // Single shared snapshot reused across every render. The struct is large (it holds every
@@ -208,6 +211,7 @@ const RenderSnapshot& CaptureRenderSnapshot()
     snapshot.card_modal = s_card_modal_state;
     snapshot.select_modal = s_select_modal_state;
     snapshot.toast = s_toast_state;
+    snapshot.sticky_note = s_sticky_note_state;
     return snapshot;
 }
 
@@ -318,6 +322,14 @@ void DrawCurrentOverlays(uint8_t* framebuffer, const RenderSnapshot& snapshot)
                              kPortraitWidth,
                              kPortraitHeight,
                              snapshot.card_modal);
+    // Sticky-note overlay is full-page; draw it on top of every other overlay.
+    epaper_ui::DrawStickyNote(framebuffer,
+                              STICKY_EPD_WIDTH,
+                              STICKY_EPD_HEIGHT,
+                              kPortraitWidth,
+                              kPortraitHeight,
+                              snapshot.sticky_note,
+                              {});
 }
 
 void CaptureUnderlaySnapshot(const uint8_t* framebuffer)
@@ -1489,6 +1501,17 @@ esp_err_t SetToastState(const epaper_ui::ToastState& state)
 
     std::lock_guard<std::mutex> lock(s_state_mutex);
     s_toast_state = state;
+    return ESP_OK;
+}
+
+esp_err_t SetStickyNoteState(const epaper_ui::StickyNoteState& state)
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    std::lock_guard<std::mutex> lock(s_state_mutex);
+    s_sticky_note_state = state;
     return ESP_OK;
 }
 

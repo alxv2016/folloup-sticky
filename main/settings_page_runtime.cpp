@@ -41,6 +41,8 @@ footer_runtime::FooterFocusItem FooterItemForSelectedIndex(int selected_index)
             return footer_runtime::FooterFocusItem::kTime;
         case 0:
             return footer_runtime::FooterFocusItem::kHome;
+        case 4:
+            return footer_runtime::FooterFocusItem::kSticky;
         default:
             return footer_runtime::FooterFocusItem::kNone;
     }
@@ -57,6 +59,8 @@ page_navigation::NavigationItemRole FooterRoleForFooterItem(footer_runtime::Foot
             return page_navigation::NavigationItemRole::kFooterHome;
         case footer_runtime::FooterFocusItem::kTime:
             return page_navigation::NavigationItemRole::kFooterTime;
+        case footer_runtime::FooterFocusItem::kSticky:
+            return page_navigation::NavigationItemRole::kFooterSticky;
         case footer_runtime::FooterFocusItem::kNone:
         case footer_runtime::FooterFocusItem::kFolder:
         case footer_runtime::FooterFocusItem::kMic:
@@ -74,6 +78,8 @@ page_navigation::NavigationItemRole RoleForUiItem(epaper_ui::SettingsPageItemId 
             return page_navigation::NavigationItemRole::kSettingsEnableApToggle;
         case epaper_ui::SettingsPageItemId::kFormatSdButton:
             return page_navigation::NavigationItemRole::kSettingsFormatSdButton;
+        case epaper_ui::SettingsPageItemId::kManualOnboardingButton:
+            return page_navigation::NavigationItemRole::kSettingsManualOnboardingButton;
         case epaper_ui::SettingsPageItemId::kNone:
         default:
             return page_navigation::NavigationItemRole::kUnknown;

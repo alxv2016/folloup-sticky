@@ -31,6 +31,8 @@ const EmbeddedImageAsset* FooterIcon(FooterFocusItem item)
             return project_assets::GetIcon(EmbeddedIconId::kTime);
         case FooterFocusItem::kFolder:
             return project_assets::GetIcon(EmbeddedIconId::kFolder);
+        case FooterFocusItem::kSticky:
+            return project_assets::GetIcon(EmbeddedIconId::kSticky);
         case FooterFocusItem::kMic:
         case FooterFocusItem::kNone:
         default:
@@ -51,6 +53,8 @@ const char* FooterFocusItemName(FooterFocusItem item)
             return "time";
         case FooterFocusItem::kFolder:
             return "folder";
+        case FooterFocusItem::kSticky:
+            return "sticky";
         case FooterFocusItem::kMic:
             return "mic";
         case FooterFocusItem::kNone:
@@ -70,6 +74,7 @@ void ApplyProjectedSelection(epaper_ui::GlobalFooterState* state, FooterFocusIte
     state->wifi.selected = focused_item == FooterFocusItem::kWifi;
     state->time.selected = focused_item == FooterFocusItem::kTime;
     state->folder.selected = focused_item == FooterFocusItem::kFolder;
+    state->sticky.selected = focused_item == FooterFocusItem::kSticky;
     state->mic.selected = focused_item == FooterFocusItem::kMic;
 }
 
@@ -97,6 +102,7 @@ FooterFocusItem FooterFocusItemFromTargetIndex(int32_t index)
         case FooterFocusItem::kTime:
         case FooterFocusItem::kFolder:
         case FooterFocusItem::kMic:
+        case FooterFocusItem::kSticky:
             return static_cast<FooterFocusItem>(index);
         case FooterFocusItem::kNone:
         default:
@@ -117,6 +123,8 @@ FooterFocusItem FooterFocusItemFromUi(epaper_ui::GlobalFooterItemId item)
             return FooterFocusItem::kTime;
         case epaper_ui::GlobalFooterItemId::kFolder:
             return FooterFocusItem::kFolder;
+        case epaper_ui::GlobalFooterItemId::kSticky:
+            return FooterFocusItem::kSticky;
         case epaper_ui::GlobalFooterItemId::kMic:
             return FooterFocusItem::kMic;
         case epaper_ui::GlobalFooterItemId::kNone:
@@ -142,6 +150,8 @@ bool IsItemVisible(const LayoutState& layout, FooterFocusItem item)
             return layout.show_time;
         case FooterFocusItem::kFolder:
             return layout.show_folder;
+        case FooterFocusItem::kSticky:
+            return layout.show_sticky;
         case FooterFocusItem::kMic:
             return layout.show_mic;
         case FooterFocusItem::kNone:
@@ -155,7 +165,7 @@ bool LayoutStateEquals(const LayoutState& lhs, const LayoutState& rhs)
     return lhs.visible == rhs.visible && lhs.show_home == rhs.show_home &&
            lhs.show_settings == rhs.show_settings && lhs.show_wifi == rhs.show_wifi &&
            lhs.show_time == rhs.show_time && lhs.show_folder == rhs.show_folder &&
-           lhs.show_mic == rhs.show_mic;
+           lhs.show_mic == rhs.show_mic && lhs.show_sticky == rhs.show_sticky;
 }
 
 void LogFooterTouchProbe(const epaper_ui::GlobalFooterState& state,
@@ -404,6 +414,9 @@ epaper_ui::GlobalFooterState BuildState()
 
     state.folder.visible = layout.show_folder;
     state.folder.icon = FooterIcon(FooterFocusItem::kFolder);
+
+    state.sticky.visible = layout.show_sticky;
+    state.sticky.icon = FooterIcon(FooterFocusItem::kSticky);
 
     state.mic.visible = layout.show_mic;
     state.mic.idle_icon = project_assets::GetIcon(EmbeddedIconId::kMicOff);

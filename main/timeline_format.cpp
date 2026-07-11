@@ -7,6 +7,8 @@
 
 namespace timeline_format {
 
+using recording_archive_service::RecordingTag;
+
 std::string DateKey(const std::string& created_local_date)
 {
     const auto space = created_local_date.find(' ');
@@ -43,6 +45,56 @@ std::string FormatDateLabel(const std::string& created_local_date)
         }
     }
     return created_local_date.empty() ? "Today" : created_local_date;
+}
+
+std::string FormatTimeLabel(bool time_valid, int64_t created_unix_seconds)
+{
+    if (time_valid && created_unix_seconds > 0) {
+        std::time_t stamp = static_cast<std::time_t>(created_unix_seconds);
+        std::tm local = {};
+        localtime_r(&stamp, &local);
+        char buffer[16] = {};
+        if (std::strftime(buffer, sizeof(buffer), "%I:%M %p", &local) > 0) {
+            std::string text = buffer;
+            if (text.size() > 1 && text.front() == '0') {
+                text.erase(0, 1);
+            }
+            return text;
+        }
+    }
+    return "--:--";
+}
+
+std::string FormatDurationLabel(uint32_t duration_ms)
+{
+    const uint32_t seconds = duration_ms / 1000U;
+    if (seconds < 60U) {
+        return std::to_string(seconds) + "s";
+    }
+    return std::to_string(seconds / 60U) + "m";
+}
+
+std::string TrimTranscript(const std::string& text)
+{
+    const auto begin = text.find_first_not_of(" \t\r\n");
+    if (begin == std::string::npos) {
+        return {};
+    }
+    const auto end = text.find_last_not_of(" \t\r\n");
+    return text.substr(begin, end - begin + 1);
+}
+
+std::string TagText(RecordingTag tag)
+{
+    switch (tag) {
+        case RecordingTag::kTask:
+            return "Task";
+        case RecordingTag::kIdea:
+            return "Idea";
+        case RecordingTag::kNote:
+        default:
+            return "Note";
+    }
 }
 
 }  // namespace timeline_format

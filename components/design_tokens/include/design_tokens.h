@@ -258,6 +258,15 @@ inline constexpr uint8_t kDisabledControlColor = color::kGrayLight;  // greyed p
 
 }  // namespace carousel
 
+// Full-page overlay that flips through Follow-up notes one "sticky" at a time. Borrows the vibe
+// card's surface look and the modal's drop shadow; see epaper_ui/sticky_note.h.
+namespace sticky_note {
+
+inline constexpr int kScreenMargin = spacing::k20;  // 20px gap to every screen edge (below status bar)
+inline constexpr int kCornerRadius = 4;             // matches the vibe card
+
+}  // namespace sticky_note
+
 namespace progress_bar {
 
 inline constexpr int kBarHeight = spacing::k8;

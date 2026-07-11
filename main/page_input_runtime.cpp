@@ -2058,9 +2058,10 @@ FocusMoveResult MoveFocusForCurrentScreen(int delta, bool page_jump)
     }
 }
 
-ButtonResult HandleButtonEventForCurrentScreen(const button_service::ButtonEventInfo& event)
+ButtonResult HandleButtonEventForScreen(display_service::ScreenId screen,
+                                        const button_service::ButtonEventInfo& event)
 {
-    switch (display_service::GetCurrentScreen()) {
+    switch (screen) {
         case display_service::ScreenId::kSettings:
             return HandleSettingsButtonEvent(event);
         case display_service::ScreenId::kWifi:
@@ -2087,6 +2088,26 @@ ButtonResult HandleButtonEventForCurrentScreen(const button_service::ButtonEvent
         default:
             return {};
     }
+}
+
+ButtonResult HandleButtonEventForCurrentScreen(const button_service::ButtonEventInfo& event)
+{
+    const display_service::ScreenId screen = display_service::GetCurrentScreen();
+    ButtonResult result = HandleButtonEventForScreen(screen, event);
+
+    // The Sticky footer button is uniform across pages (always opens the sticky overlay), so rather
+    // than thread a per-page intent through every page's activation, handle it centrally: the shared
+    // per-page footer handler only maps Home/Settings/Wifi/Time, so a focused Sticky button falls
+    // through here on a POWER_OK single click.
+    if (!result.handled && event.button == button_service::ButtonId::kPowerOk &&
+        event.event == button_service::ButtonEvent::kSingleClick &&
+        BuildFooterProjectionForScreen(screen).focused_item ==
+            footer_runtime::FooterFocusItem::kSticky) {
+        result.handled = true;
+        result.interaction_result = MakeConsumedResult(true);
+        result.footer_item = footer_runtime::FooterFocusItem::kSticky;
+    }
+    return result;
 }
 
 }  // namespace page_input_runtime
