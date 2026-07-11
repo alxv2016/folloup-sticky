@@ -37,7 +37,6 @@ struct ScrollContainerStyle {
     uint8_t scrollbar_track_color = design::color::kWhite;
     uint8_t scrollbar_inactive_color = design::color::kGrayLight;
     uint8_t scrollbar_focused_color = design::color::kBlack;
-    uint8_t scrollbar_disabled_focused_color = design::color::kGrayDark;
     uint8_t scrollbar_border_color = design::color::kBlack;
     int width = 0;
     int panel_height = 0;

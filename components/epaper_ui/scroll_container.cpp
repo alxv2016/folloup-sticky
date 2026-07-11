@@ -217,11 +217,12 @@ void DrawScrollContainer(uint8_t* framebuffer,
     // Scrollbar: track (bordered) + thumb sized/positioned to the scroll fraction.
     const UiRect scrollbar = ScrollbarBounds(panel, style);
     const bool has_overflow = ScrollContainerHasOverflow(origin_x, origin_y, state, style);
+    if (!has_overflow) {
+        return;  // nothing to scroll -> hide the scrollbar entirely
+    }
     const bool scrollbar_focused = state.active;
     const uint8_t thumb_color =
-        scrollbar_focused
-            ? (has_overflow ? style.scrollbar_focused_color : style.scrollbar_disabled_focused_color)
-            : style.scrollbar_inactive_color;
+        scrollbar_focused ? style.scrollbar_focused_color : style.scrollbar_inactive_color;
     if (style.scrollbar_border_thickness > 0) {
         DrawPortraitBorder(framebuffer, raw_width, raw_height, portrait_width, portrait_height,
                            scrollbar, style.scrollbar_border_thickness, style.scrollbar_border_color);

@@ -17,9 +17,9 @@
 
 namespace overlay_runtime {
 
-// One sticky in the full-page sticky-note overlay. Content mirrors the vibe card / timeline row.
+// One sticky in the full-page sticky-note overlay. Content mirrors the timeline row.
 struct StickyNoteItem {
-    std::string tag_text;
+    std::string date_text;
     epaper_ui::ListItemHeaderState header;
     std::string body_text;
 };

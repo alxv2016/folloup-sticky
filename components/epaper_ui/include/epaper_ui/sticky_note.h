@@ -8,15 +8,14 @@
 #include "epaper_ui/button_icon.h"
 #include "epaper_ui/list_item_header.h"
 #include "epaper_ui/overlay_geometry.h"
-#include "epaper_ui/tag.h"
 
 namespace epaper_ui {
 
 // A full-page overlay that flips through the Follow-up notes one "sticky" at a time. It overlays the
 // page from just below the status bar with a 20px margin on every screen edge, drops a modal-style
-// shadow, and wears the vibe card's surface look. Content mirrors the vibe card (tag + header +
-// body). The footer carries a Close button plus Prev/Next chevrons (carousel order) on the right and
-// an "N/M Stickies" counter on the left. Prev/Next wrap around, so no control is ever disabled.
+// shadow, and wears the vibe card's surface look. Content is a plain-text date, the header row, and
+// the transcript body (a scroll container). The footer carries a Close button plus Prev/Next chevrons
+// (carousel order) on the right and an "N/M Stickies" counter on the left. Prev/Next wrap around.
 enum class StickyNoteControl : int {
     kNone = -1,
     kClose = 0,
@@ -31,12 +30,17 @@ struct StickyNoteState {
     bool visible = false;
     int active_index = 0;  // 0-based index of the sticky on screen
     int sticky_count = 0;  // total stickies, for the "N/M Stickies" counter
-    // Content, mirroring the vibe card.
-    std::string tag_text = {};
+    // Content: a plain-text recorded date on top, then the header row and the transcript body.
+    std::string date_text = {};
     ListItemHeaderState header = {};
     std::string body_text = {};
     // The footer control currently pressed / focused (drives its selected styling).
     StickyNoteControl selected_control = StickyNoteControl::kNone;
+    // Transcript scroll container (Details-style): `scroll_focused` draws its focus ring, `scroll_active`
+    // means it is entered (UP/DOWN scroll), and `scroll_position_percent` is the 0..100 position.
+    bool scroll_focused = false;
+    bool scroll_active = false;
+    int scroll_position_percent = 0;
 
     bool operator==(const StickyNoteState& other) const = default;
 };
@@ -45,10 +49,10 @@ struct StickyNoteStyle {
     int screen_margin = design::sticky_note::kScreenMargin;
     int corner_radius = design::sticky_note::kCornerRadius;
     int shadow_offset = design::modal::kShadowOffset;
-    int padding = design::vibe_card::kPadding;
+    int padding = design::spacing::k24;  // internal padding on all sides
     int border_thickness = design::vibe_card::kBorderThickness;
-    int tag_header_gap = design::vibe_card::kTagHeaderGap;
-    int header_body_gap = design::vibe_card::kHeaderBodyGap;
+    int date_header_gap = design::vibe_card::kTagHeaderGap;
+    int header_body_gap = design::spacing::k20;  // 20px between the header and the transcript
     int footer_gap = design::vibe_card::kFooterGap;
     int body_line_gap = design::vibe_card::kBodyLineGap;
     int footer_icon_slot_size = design::vibe_card::kFooterIconSlotSize;
@@ -56,17 +60,12 @@ struct StickyNoteStyle {
     uint8_t background_color = design::vibe_card::kBackgroundColor;
     uint8_t border_color = design::vibe_card::kBorderColor;
     uint8_t shadow_color = design::color::kShadow;
-    design::TypographyRole body_role = design::TypographyRole::kBodyLarge;
+    design::TypographyRole body_role = design::TypographyRole::kLabelLarge;
     uint8_t body_color = design::color::kBlack;
     design::TypographyRole counter_role = design::TypographyRole::kLabelSmall;
     uint8_t counter_color = design::color::kBlack;
-    TagStyle tag = {
-        .background_color = design::color::kBlack,
-        .selected_background_color = design::color::kBlack,
-        .text_color = design::color::kWhite,
-        .selected_text_color = design::color::kWhite,
-        .border_color = design::color::kBlack,
-    };
+    design::TypographyRole date_role = design::TypographyRole::kLabelMediumBlack;
+    uint8_t date_color = design::color::kBlack;
     ListItemHeaderStyle header = {
         .background_color = design::vibe_card::kBackgroundColor,
         .selected_background_color = design::vibe_card::kBackgroundColor,
@@ -77,14 +76,15 @@ struct StickyNoteStyle {
         .divider_color = design::color::kBlack,
         .selected_divider_color = design::color::kBlack,
     };
+    // Matches the global footer's button icons: borderless, status-bar background, and the icon
+    // outlined when unselected (filled black box + white icon when focused).
     ButtonIconStyle footer_button = {
-        .background_color = design::vibe_card::kFooterButtonBackgroundColor,
+        .background_color = design::status_bar::kBackgroundColor,
         .selected_background_color = design::color::kBlack,
-        .border_color = design::color::kBlack,
-        .icon_color = design::color::kBlack,
-        .selected_icon_color = design::color::kWhite,
         .size = design::global_footer::kButtonSize,
         .icon_size = design::global_footer::kIconSize,
+        .border_thickness = 0,
+        .outline_icon_when_unselected = true,
     };
 };
 
@@ -95,6 +95,12 @@ UiRect StickyNotePanelBounds(int portrait_width, int portrait_height, const Stic
 UiRect StickyNoteContentBounds(int portrait_width,
                                int portrait_height,
                                const StickyNoteStyle& style);
+// The transcript scroll-container region (below the header, above the footer). Depends on whether a
+// tag pill is present, so it takes the state.
+UiRect StickyNoteBodyBounds(int portrait_width,
+                            int portrait_height,
+                            const StickyNoteState& state,
+                            const StickyNoteStyle& style);
 
 // Resolved on-screen rectangles of the three footer controls (for hit-testing / wiring).
 struct StickyNoteControlRects {

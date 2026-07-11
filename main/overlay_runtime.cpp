@@ -153,33 +153,49 @@ app_interaction::InteractiveTarget MakeKeyboardKeyTarget(int index, int32_t gene
     };
 }
 
-app_interaction::InteractiveTarget MakeStickyNoteControlTarget(epaper_ui::StickyNoteControl control,
-                                                              int32_t generation)
+// The sticky overlay roves over 4 targets: the transcript scroll body (index 0) plus the three
+// footer controls (1 = Close, 2 = Prev, 3 = Next). UP/DOWN scroll the body by this percent when it
+// is "entered" (Details-style), otherwise they rove.
+constexpr int kStickyBodyFocusIndex = 0;
+constexpr int kStickyFocusCount = epaper_ui::kStickyNoteControlCount + 1;
+constexpr int kStickyScrollStepPercent = 10;
+
+bool StickyFocusIsBody(int index)
+{
+    return index == kStickyBodyFocusIndex;
+}
+
+// Focus index 1..3 map to the footer controls; index 0 (the body) is not a footer control.
+epaper_ui::StickyNoteControl StickyControlForFocusIndex(int index)
+{
+    const int control_index = index - 1;
+    return control_index >= 0 && control_index < epaper_ui::kStickyNoteControlCount
+               ? static_cast<epaper_ui::StickyNoteControl>(control_index)
+               : epaper_ui::StickyNoteControl::kNone;
+}
+
+app_interaction::InteractiveTarget MakeStickyNoteTarget(int focus_index, int32_t generation)
 {
     return {
         .owner = app_interaction::Owner::kOverlay,
         .kind = app_interaction::Kind::kOverlayStickyNoteControl,
-        .primary_index = static_cast<int32_t>(control),
+        .primary_index = focus_index,
         .secondary_index = generation,
     };
 }
 
-// Sticky control focus index (0..2) maps 1:1 to StickyNoteControl (kClose/kPrev/kNext).
-epaper_ui::StickyNoteControl StickyControlForFocusIndex(int index)
-{
-    return index >= 0 && index < epaper_ui::kStickyNoteControlCount
-               ? static_cast<epaper_ui::StickyNoteControl>(index)
-               : epaper_ui::StickyNoteControl::kNone;
-}
-
-// Refresh the visible sticky content from the backing item list (wrapping the active index).
+// Refresh the visible sticky content from the backing item list (wrapping the active index), and
+// reset the transcript scroll since the content changed.
 void ApplyStickyContentLocked()
 {
+    s_sticky_note_state.scroll_active = false;
+    s_sticky_note_state.scroll_position_percent = 0;
+
     const int count = static_cast<int>(s_sticky_note_items.size());
     s_sticky_note_state.sticky_count = count;
     if (count <= 0) {
         s_sticky_note_state.active_index = 0;
-        s_sticky_note_state.tag_text = {};
+        s_sticky_note_state.date_text = {};
         s_sticky_note_state.header = {};
         s_sticky_note_state.body_text = {};
         return;
@@ -188,14 +204,18 @@ void ApplyStickyContentLocked()
         page_navigation::RovingFocus::WrapIndex(s_sticky_note_state.active_index, count);
     s_sticky_note_state.active_index = index;
     const StickyNoteItem& item = s_sticky_note_items[static_cast<size_t>(index)];
-    s_sticky_note_state.tag_text = item.tag_text;
+    s_sticky_note_state.date_text = item.date_text;
     s_sticky_note_state.header = item.header;
     s_sticky_note_state.body_text = item.body_text;
 }
 
 void SyncStickyFocusLocked()
 {
-    s_sticky_note_state.selected_control = StickyControlForFocusIndex(s_sticky_note_focus.index());
+    const int index = s_sticky_note_focus.index();
+    s_sticky_note_state.selected_control = StickyControlForFocusIndex(index);
+    // Keep the scroll ring lit while the body is focused or entered (matches the Details page).
+    s_sticky_note_state.scroll_focused =
+        StickyFocusIsBody(index) || s_sticky_note_state.scroll_active;
 }
 
 void ClearStickyNoteLocked()
@@ -615,7 +635,15 @@ bool ResolveTouchTarget(int x, int y, app_interaction::InteractiveTarget* target
                                                 {}, x, y, &control) &&
             control != epaper_ui::StickyNoteControl::kNone) {
             if (target != nullptr) {
-                *target = MakeStickyNoteControlTarget(control, generation);
+                *target = MakeStickyNoteTarget(static_cast<int>(control) + 1, generation);
+            }
+            return true;
+        }
+        const epaper_ui::UiRect body = epaper_ui::StickyNoteBodyBounds(
+            portrait_width, portrait_height, sticky_note_state, {});
+        if (!body.IsEmpty() && body.Contains(x, y)) {
+            if (target != nullptr) {
+                *target = MakeStickyNoteTarget(kStickyBodyFocusIndex, generation);
             }
             return true;
         }
@@ -704,11 +732,14 @@ bool FocusTouchTarget(const app_interaction::InteractiveTarget& target)
         switch (target.kind) {
             case app_interaction::Kind::kOverlayStickyNoteControl: {
                 if (!s_sticky_note_state.visible || target.primary_index < 0 ||
-                    target.primary_index >= epaper_ui::kStickyNoteControlCount) {
+                    target.primary_index >= kStickyFocusCount) {
                     return false;
                 }
                 if (s_sticky_note_focus.index() != target.primary_index) {
                     s_sticky_note_focus.SetIndex(target.primary_index);
+                    if (!StickyFocusIsBody(target.primary_index)) {
+                        s_sticky_note_state.scroll_active = false;  // leaving the transcript
+                    }
                     SyncStickyFocusLocked();
                     changed = true;
                 }
@@ -824,26 +855,34 @@ app_interaction::InputResult ActivateTouchTarget(const app_interaction::Interact
         switch (target.kind) {
             case app_interaction::Kind::kOverlayStickyNoteControl: {
                 if (!s_sticky_note_state.visible || target.primary_index < 0 ||
-                    target.primary_index >= epaper_ui::kStickyNoteControlCount) {
+                    target.primary_index >= kStickyFocusCount) {
                     return result;
                 }
                 s_sticky_note_focus.SetIndex(target.primary_index);
-                SyncStickyFocusLocked();
-                const epaper_ui::StickyNoteControl control =
-                    StickyControlForFocusIndex(target.primary_index);
                 result.consumed = true;
                 play_click = true;
-                if (control == epaper_ui::StickyNoteControl::kClose) {
-                    ClearStickyNoteLocked();
-                    AdvanceOverlayInteractionGenerationLocked();
+                if (StickyFocusIsBody(target.primary_index)) {
+                    s_sticky_note_state.scroll_active = true;  // tap the transcript to scroll
                 } else {
-                    const int count = static_cast<int>(s_sticky_note_items.size());
-                    if (count > 0) {
-                        const int delta = control == epaper_ui::StickyNoteControl::kNext ? 1 : -1;
-                        s_sticky_note_state.active_index = page_navigation::RovingFocus::WrapIndex(
-                            s_sticky_note_state.active_index + delta, count);
-                        ApplyStickyContentLocked();
+                    const epaper_ui::StickyNoteControl control =
+                        StickyControlForFocusIndex(target.primary_index);
+                    if (control == epaper_ui::StickyNoteControl::kClose) {
+                        ClearStickyNoteLocked();
+                        AdvanceOverlayInteractionGenerationLocked();
+                    } else {
+                        const int count = static_cast<int>(s_sticky_note_items.size());
+                        if (count > 0) {
+                            const int delta =
+                                control == epaper_ui::StickyNoteControl::kNext ? 1 : -1;
+                            s_sticky_note_state.active_index =
+                                page_navigation::RovingFocus::WrapIndex(
+                                    s_sticky_note_state.active_index + delta, count);
+                            ApplyStickyContentLocked();
+                        }
                     }
+                }
+                if (s_sticky_note_state.visible) {
+                    SyncStickyFocusLocked();
                 }
                 request_refresh = true;
                 break;
@@ -1282,11 +1321,20 @@ bool MoveFocus(int delta)
 
         const OverlayRefreshSnapshot before = CaptureOverlayRefreshSnapshotLocked();
         if (s_sticky_note_state.visible) {
-            if (s_sticky_note_focus.item_count() <= 0) {
-                return false;
-            }
-
-            if (s_sticky_note_focus.Move(delta > 0 ? 1 : -1)) {
+            if (s_sticky_note_state.scroll_active) {
+                // Entered the transcript: UP/DOWN scroll by a fixed percent, clamped [0,100].
+                const int step =
+                    delta > 0 ? kStickyScrollStepPercent : -kStickyScrollStepPercent;
+                const int next =
+                    std::clamp(s_sticky_note_state.scroll_position_percent + step, 0, 100);
+                if (next != s_sticky_note_state.scroll_position_percent) {
+                    s_sticky_note_state.scroll_position_percent = next;
+                    refresh_policy = DetermineOverlayRefreshPolicy(
+                        before, CaptureOverlayRefreshSnapshotLocked());
+                    changed = true;
+                }
+            } else if (s_sticky_note_focus.item_count() > 0 &&
+                       s_sticky_note_focus.Move(delta > 0 ? 1 : -1)) {
                 SyncStickyFocusLocked();
                 refresh_policy =
                     DetermineOverlayRefreshPolicy(before, CaptureOverlayRefreshSnapshotLocked());
@@ -1387,24 +1435,45 @@ app_interaction::InputResult HandleButtonEvent(const button_service::ButtonEvent
         const OverlayRefreshSnapshot before = CaptureOverlayRefreshSnapshotLocked();
         if (s_sticky_note_state.visible) {
             result.consumed = true;
+            const int focus_index = s_sticky_note_focus.index();
             if (event.button == button_service::ButtonId::kPowerOk &&
                 event.event == button_service::ButtonEvent::kSingleClick) {
-                const epaper_ui::StickyNoteControl control =
-                    StickyControlForFocusIndex(s_sticky_note_focus.index());
                 play_click = true;
-                if (control == epaper_ui::StickyNoteControl::kClose) {
-                    ClearStickyNoteLocked();
-                    AdvanceOverlayInteractionGenerationLocked();
-                } else if (control != epaper_ui::StickyNoteControl::kNone) {
-                    const int count = static_cast<int>(s_sticky_note_items.size());
-                    if (count > 0) {
-                        const int delta =
-                            control == epaper_ui::StickyNoteControl::kNext ? 1 : -1;
-                        s_sticky_note_state.active_index = page_navigation::RovingFocus::WrapIndex(
-                            s_sticky_note_state.active_index + delta, count);
-                        ApplyStickyContentLocked();
+                if (StickyFocusIsBody(focus_index)) {
+                    // OK on the transcript enters scroll mode; inert if already entered.
+                    if (!s_sticky_note_state.scroll_active) {
+                        s_sticky_note_state.scroll_active = true;
+                        SyncStickyFocusLocked();
+                    }
+                } else {
+                    const epaper_ui::StickyNoteControl control =
+                        StickyControlForFocusIndex(focus_index);
+                    if (control == epaper_ui::StickyNoteControl::kClose) {
+                        ClearStickyNoteLocked();
+                        AdvanceOverlayInteractionGenerationLocked();
+                    } else if (control != epaper_ui::StickyNoteControl::kNone) {
+                        const int count = static_cast<int>(s_sticky_note_items.size());
+                        if (count > 0) {
+                            const int delta =
+                                control == epaper_ui::StickyNoteControl::kNext ? 1 : -1;
+                            s_sticky_note_state.active_index =
+                                page_navigation::RovingFocus::WrapIndex(
+                                    s_sticky_note_state.active_index + delta, count);
+                            ApplyStickyContentLocked();
+                            SyncStickyFocusLocked();
+                        }
                     }
                 }
+                request_refresh = true;
+                refresh_policy =
+                    DetermineOverlayRefreshPolicy(before, CaptureOverlayRefreshSnapshotLocked());
+            } else if (event.button == button_service::ButtonId::kDown &&
+                       event.event == button_service::ButtonEvent::kDoubleClick &&
+                       s_sticky_note_state.scroll_active) {
+                // DOWN double-click exits the transcript scroll, back to roving the controls.
+                s_sticky_note_state.scroll_active = false;
+                SyncStickyFocusLocked();
+                play_click = true;
                 request_refresh = true;
                 refresh_policy =
                     DetermineOverlayRefreshPolicy(before, CaptureOverlayRefreshSnapshotLocked());
@@ -1648,8 +1717,8 @@ esp_err_t ShowStickyNotes(const std::vector<StickyNoteItem>& items)
         s_sticky_note_state = {};
         s_sticky_note_state.visible = true;
         s_sticky_note_state.active_index = 0;
-        // Focus the Close control first, matching the button roving order (Close/Prev/Next).
-        s_sticky_note_focus.Configure(epaper_ui::kStickyNoteControlCount, 0);
+        // Rove over the transcript body (0) then Close/Prev/Next; start on the body so OK enters scroll.
+        s_sticky_note_focus.Configure(kStickyFocusCount, kStickyBodyFocusIndex);
         ApplyStickyContentLocked();
         SyncStickyFocusLocked();
         AdvanceOverlayInteractionGenerationLocked();

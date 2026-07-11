@@ -600,10 +600,12 @@ std::vector<overlay_runtime::StickyNoteItem> BuildFollowUpStickyItems()
         const bool has_transcription = entry.metadata.has_transcript && !transcript.empty();
 
         overlay_runtime::StickyNoteItem item = {};
-        item.tag_text = timeline_format::TagText(entry.metadata.tag);
+        // Recorded date on top (plain text); the tag sits in the header row, after the pin icon.
+        item.date_text = timeline_format::FormatDateLabel(entry.metadata.created_local_date);
         item.header.icon_asset = project_assets::GetIcon(
             has_transcription ? EmbeddedIconId::kTranscribe : EmbeddedIconId::kAudio);
         item.header.tag_icon_asset = project_assets::GetIcon(EmbeddedIconId::kPin);
+        item.header.tag_text = timeline_format::TagText(entry.metadata.tag);
         item.header.time_text = timeline_format::FormatTimeLabel(
             entry.metadata.time_valid, entry.metadata.created_unix_seconds);
         item.header.minute_seconds_text =

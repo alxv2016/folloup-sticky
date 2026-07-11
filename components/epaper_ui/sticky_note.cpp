@@ -3,9 +3,9 @@
 #include <algorithm>
 #include <array>
 #include <string>
-#include <vector>
 
 #include "epaper_ui/font_renderer.h"
+#include "epaper_ui/scroll_container.h"
 #include "epaper_ui/status_bar.h"
 #include "generated_epaper_icons.h"
 #include "render_utils.h"
@@ -39,49 +39,6 @@ int HeaderHeight(const StickyNoteStyle& style)
 {
     return std::max({ClampPositive(style.header.height), ClampPositive(style.header.icon_slot_size),
                      LineHeight(style.header.role)});
-}
-
-// Split on hard newlines, then greedily word-wrap each paragraph to `max_width` (mirrors the vibe
-// card so the sticky note wraps identically).
-std::vector<std::string> WrapBodyLines(design::TypographyRole role,
-                                       const std::string& text,
-                                       int max_width)
-{
-    std::vector<std::string> lines;
-    if (text.empty() || max_width <= 0) {
-        return lines;
-    }
-    size_t start = 0;
-    while (start <= text.size()) {
-        const size_t newline = text.find('\n', start);
-        const std::string paragraph = text.substr(
-            start, newline == std::string::npos ? std::string::npos : newline - start);
-        const std::vector<std::string> wrapped = WrapTextToWidth(role, paragraph, max_width);
-        if (wrapped.empty()) {
-            lines.emplace_back("");
-        } else {
-            lines.insert(lines.end(), wrapped.begin(), wrapped.end());
-        }
-        if (newline == std::string::npos) {
-            break;
-        }
-        start = newline + 1;
-    }
-    return lines;
-}
-
-template <typename DrawFn>
-void DrawOutlinedText(int origin_x, int origin_y, int stroke_thickness, DrawFn&& draw_fn)
-{
-    const int thickness = ClampPositive(stroke_thickness);
-    for (int dy = -thickness; dy <= thickness; ++dy) {
-        for (int dx = -thickness; dx <= thickness; ++dx) {
-            if (dx == 0 && dy == 0) {
-                continue;
-            }
-            draw_fn(origin_x + dx, origin_y + dy, design::color::kWhite);
-        }
-    }
 }
 
 struct Layout {
@@ -138,6 +95,46 @@ std::string CounterText(const StickyNoteState& state)
     return std::to_string(current) + "/" + std::to_string(total) + " Stickies";
 }
 
+// The transcript scroll-container region: below the tag pill + header (with the header/body gap),
+// filling the rest of the content area above the footer.
+UiRect BodyRegion(const Layout& layout, const StickyNoteState& state, const StickyNoteStyle& style)
+{
+    int top = layout.content.y;
+    if (!state.date_text.empty()) {
+        top += LineHeight(style.date_role) + ClampPositive(style.date_header_gap);
+    }
+    top += HeaderHeight(style) + ClampPositive(style.header_body_gap);
+    return {layout.content.x, top, layout.content.width,
+            std::max(0, layout.content.bottom() - top)};
+}
+
+// Borderless scroll container that blends into the sticky surface (only text, scrollbar and focus
+// ring show), left-aligned with the header (no content padding).
+ScrollContainerStyle BodyScrollStyle(const UiRect& body, const StickyNoteStyle& style)
+{
+    ScrollContainerStyle sc = {};
+    sc.width = body.width;
+    sc.panel_height = body.height;
+    sc.text_role = style.body_role;
+    sc.text_color = style.body_color;
+    sc.panel_border_thickness = 0;
+    sc.content_padding = 0;
+    sc.panel_background_color = style.background_color;
+    sc.focus_gap_color = style.background_color;
+    sc.scrollbar_track_color = style.background_color;
+    return sc;
+}
+
+ScrollContainerState BodyScrollState(const StickyNoteState& state)
+{
+    ScrollContainerState sc = {};
+    sc.content_text = state.body_text;
+    sc.focused = state.scroll_focused;
+    sc.active = state.scroll_active;
+    sc.scroll_position_percent = state.scroll_position_percent;
+    return sc;
+}
+
 }  // namespace
 
 UiRect StickyNotePanelBounds(int portrait_width, int portrait_height, const StickyNoteStyle& style)
@@ -150,6 +147,15 @@ UiRect StickyNoteContentBounds(int portrait_width,
                                const StickyNoteStyle& style)
 {
     return ComputeLayout(portrait_width, portrait_height, style).content;
+}
+
+UiRect StickyNoteBodyBounds(int portrait_width,
+                            int portrait_height,
+                            const StickyNoteState& state,
+                            const StickyNoteStyle& style)
+{
+    const Layout layout = ComputeLayout(portrait_width, portrait_height, style);
+    return BodyRegion(layout, state, style);
 }
 
 StickyNoteControlRects StickyNoteControlBounds(int portrait_width,
@@ -224,45 +230,22 @@ void DrawStickyNote(uint8_t* framebuffer,
     const UiRect content = layout.content;
     int cursor_y = content.y;
 
-    if (!state.tag_text.empty()) {
-        const TagState tag_state = {.label_text = state.tag_text};
-        DrawTag(framebuffer, raw_width, raw_height, portrait_width, portrait_height, content.x,
-                cursor_y, tag_state, style.tag);
-        cursor_y +=
-            TagBounds(0, 0, tag_state, style.tag).height + ClampPositive(style.tag_header_gap);
+    if (!state.date_text.empty()) {
+        DrawTypographyText(framebuffer, raw_width, raw_height, portrait_width, portrait_height,
+                           content.x, cursor_y, state.date_text, style.date_role, style.date_color);
+        cursor_y += LineHeight(style.date_role) + ClampPositive(style.date_header_gap);
     }
 
     ListItemHeaderStyle header_style = style.header;
     header_style.width = content.width;
     DrawListItemHeader(framebuffer, raw_width, raw_height, portrait_width, portrait_height,
                        content.x, cursor_y, state.header, header_style);
-    cursor_y += HeaderHeight(style);
 
-    const std::vector<std::string> body_lines =
-        WrapBodyLines(style.body_role, state.body_text, content.width);
-    if (!body_lines.empty()) {
-        cursor_y += ClampPositive(style.header_body_gap);
-        const int line_height = LineHeight(style.body_role);
-        const bool outline = style.background_color != design::color::kWhite;
-        for (size_t index = 0; index < body_lines.size(); ++index) {
-            if (cursor_y + line_height > content.bottom()) {
-                break;  // never overrun the footer row
-            }
-            const std::string& line = body_lines[index];
-            const auto draw_line = [&](int px, int py, uint8_t tone) {
-                DrawTypographyText(framebuffer, raw_width, raw_height, portrait_width,
-                                   portrait_height, px, py, line, style.body_role, tone);
-            };
-            if (outline) {
-                DrawOutlinedText(content.x, cursor_y, design::status_bar::kStrokeThickness,
-                                 [&](int px, int py, uint8_t tone) { draw_line(px, py, tone); });
-            }
-            draw_line(content.x, cursor_y, style.body_color);
-            cursor_y += line_height;
-            if (index + 1 < body_lines.size()) {
-                cursor_y += ClampPositive(style.body_line_gap);
-            }
-        }
+    // Transcript in a (borderless) scroll container -- scrolls when it overflows.
+    const UiRect body = BodyRegion(layout, state, style);
+    if (!body.IsEmpty()) {
+        DrawScrollContainer(framebuffer, raw_width, raw_height, portrait_width, portrait_height,
+                            body.x, body.y, BodyScrollState(state), BodyScrollStyle(body, style));
     }
 
     // Footer: counter on the left, controls on the right.
