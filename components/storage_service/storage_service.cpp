@@ -372,7 +372,12 @@ void RefreshMountedSnapshotAndNotify(SdCard& card, esp_err_t error)
         std::lock_guard<std::mutex> state_lock(s_state_mutex);
         s_snapshot.mode = card.IsMounted() ? Mode::kAppMounted : Mode::kError;
         RefreshSnapshotStorageLocked(card);
-        s_snapshot.last_error = error;
+        // This is a storage-status refresh (mount / post-op / light-sleep recovery), not an
+        // operation result. Clear any prior operation so a completed op (e.g. a format's
+        // kSucceeded) is broadcast once by CompleteOperation and NOT re-fired on every later SD
+        // read -- otherwise consumers re-run one-shot side effects (the format-success modal
+        // re-popped on each page's ListRecordings).
+        SetOperationLocked(Operation::kNone, OperationPhase::kIdle, error);
         CaptureNotificationLocked(&event, &handler, &context);
     }
     DispatchEvent(event, handler, context);
