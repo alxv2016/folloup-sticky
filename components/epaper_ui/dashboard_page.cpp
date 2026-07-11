@@ -10,7 +10,7 @@ namespace epaper_ui {
 namespace {
 
 constexpr int kMargin = design::spacing::k16;
-constexpr int kContentTopGap = design::spacing::k16;
+constexpr int kContentTopGap = design::spacing::k32;
 constexpr int kWelcomeMiddleGap = design::spacing::k48;
 constexpr int kMiddleMenuGap = design::spacing::k8;
 constexpr auto kProgressLabelRole = design::TypographyRole::kLabelSmallBlack;
