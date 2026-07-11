@@ -31,9 +31,10 @@ struct CompletionBannerStyle {
     int content_gap = design::completion_banner::kContentGap;
     int icon_container_size = design::completion_banner::kIconContainerSize;
     int icon_size = design::completion_banner::kIconSize;
-    // Uniform corner radius (followup uses an asymmetric left-pill / right-square shape; we
-    // approximate with a single rounded surface).
-    int corner_radius = design::completion_banner::kRightCornerRadius;
+    // Asymmetric corners: the left side is a full pill (fully rounded left corners) and the right
+    // side uses a small radius, matching the followup design.
+    int left_corner_radius = design::completion_banner::kLeftCornerRadius;
+    int right_corner_radius = design::completion_banner::kRightCornerRadius;
 };
 
 UiRect CompletionBannerBounds(int origin_x,

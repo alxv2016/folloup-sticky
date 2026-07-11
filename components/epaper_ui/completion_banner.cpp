@@ -55,8 +55,19 @@ void DrawCompletionBanner(uint8_t* framebuffer,
         return;
     }
 
+    // Asymmetric background: a full-height circle forms the fully rounded left corners (a rounded
+    // rect whose radius is half its size is a circle), then a right-rounded rect fills the rest.
+    const int left_radius = std::max(0, std::min(ClampPositive(style.left_corner_radius),
+                                                 bounds.height / 2));
+    const int right_radius = std::max(0, std::min(ClampPositive(style.right_corner_radius),
+                                                  bounds.height / 2));
+    const UiRect left_cap = {bounds.x, bounds.y, 2 * left_radius, bounds.height};
     FillRoundedPortraitRect(framebuffer, raw_width, raw_height, portrait_width, portrait_height,
-                            bounds, ClampPositive(style.corner_radius), style.background_color);
+                            left_cap, left_radius, style.background_color);
+    const UiRect right_body = {bounds.x + left_radius, bounds.y,
+                               std::max(0, bounds.width - left_radius), bounds.height};
+    FillRoundedPortraitRect(framebuffer, raw_width, raw_height, portrait_width, portrait_height,
+                            right_body, right_radius, style.background_color);
 
     const int padding = ClampPositive(style.padding);
     const int icon_container = ClampPositive(style.icon_container_size);
