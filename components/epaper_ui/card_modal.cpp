@@ -13,7 +13,7 @@
 namespace epaper_ui {
 namespace {
 
-constexpr design::TypographyRole kTitleRole = design::TypographyRole::kHeadingH2;
+constexpr design::TypographyRole kTitleRole = design::TypographyRole::kLabelMediumBlack;
 constexpr design::TypographyRole kBodyRole = design::TypographyRole::kBody;
 constexpr design::TypographyRole kButtonRole = design::TypographyRole::kLabelSmall;
 constexpr int kMaxActions = 2;

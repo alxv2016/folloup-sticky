@@ -9,7 +9,7 @@
 namespace epaper_ui {
 namespace {
 
-constexpr auto kTitleRole = design::TypographyRole::kHeadingH2;
+constexpr auto kTitleRole = design::TypographyRole::kLabelMediumBlack;
 constexpr int kMaxVisibleRows = 6;
 constexpr int kHorizontalPadding = design::spacing::k12;
 constexpr int kVerticalPadding = design::spacing::k12;
