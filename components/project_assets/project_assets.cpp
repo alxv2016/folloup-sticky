@@ -61,6 +61,8 @@ const EmbeddedImageAsset* GetIcon(EmbeddedIconId id)
             return &epaper_icons::kSticky;
         case EmbeddedIconId::kClose:
             return &epaper_icons::kClose;
+        case EmbeddedIconId::kDelete:
+            return &epaper_icons::kDelete;
         case EmbeddedIconId::kFileAudio:
             return &epaper_icons::kFileAudio;
         case EmbeddedIconId::kFileJson:

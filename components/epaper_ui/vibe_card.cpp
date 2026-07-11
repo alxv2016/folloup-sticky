@@ -17,7 +17,7 @@ constexpr int kCornerRadius = 4;
 // The three fixed footer actions, in focus order (Listen is intentionally absent).
 const std::array<const EmbeddedImageAsset*, kVibeCardActionCount> kActionIcons = {
     &epaper_icons::kRefresh,
-    &epaper_icons::kClose,
+    &epaper_icons::kDelete,
     &epaper_icons::kCheck,
 };
 constexpr std::array<VibeCardActionSelection, kVibeCardActionCount> kActionSelections = {

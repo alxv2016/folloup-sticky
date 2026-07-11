@@ -12,7 +12,9 @@
 #include "followup_task_config.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "overlay_runtime.h"
 #include "page_navigation/page_focus_projection.h"
+#include "project_assets.h"
 #include "recording_archive_service.h"
 #include "recording_session_service.h"
 #include "ui_refresh_runtime.h"
@@ -378,7 +380,15 @@ void DeleteCurrentIdea()
         return;
     }
     if (!recording_archive_service::DeleteRecording(recording_id)) {
+        // The SD delete failed -- keep the idea on the card so it stays consistent with the
+        // archive (otherwise it would vanish from the card but survive in Notes), and tell the user.
         ESP_LOGW(kTag, "Delete idea failed: id=%s", recording_id.c_str());
+        epaper_ui::ToastState toast = {};
+        toast.visible = true;
+        toast.body_text = "Couldn't delete -- try again";
+        toast.leading_icon = project_assets::GetIcon(EmbeddedIconId::kDelete);
+        (void)overlay_runtime::ShowToastForDuration(toast, 2000);
+        return;
     }
     {
         std::lock_guard<std::mutex> lock(s_mutex);

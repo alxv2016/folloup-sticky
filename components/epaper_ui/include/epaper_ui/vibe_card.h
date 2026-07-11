@@ -56,7 +56,8 @@ struct VibeCardState {
 struct VibeCardStyle {
     uint8_t background_color = design::vibe_card::kBackgroundColor;
     uint8_t border_color = design::vibe_card::kBorderColor;
-    uint8_t empty_state_background_color = design::vibe_card::kEmptyStateBackgroundColor;
+    // Empty state uses the same surface as the populated card (no grey fill).
+    uint8_t empty_state_background_color = design::vibe_card::kBackgroundColor;
     uint8_t body_outline_color = design::color::kWhite;
     uint8_t inactive_focus_ring_color = design::color::kFocusRingInactive;
     uint8_t active_focus_ring_color = design::color::kFocusRingActive;
@@ -70,7 +71,7 @@ struct VibeCardStyle {
     int padding = design::vibe_card::kPadding;
     int border_thickness = design::vibe_card::kBorderThickness;
     int tag_header_gap = design::vibe_card::kTagHeaderGap;
-    int header_body_gap = design::vibe_card::kHeaderBodyGap;
+    int header_body_gap = design::spacing::k24;  // 24px between the header and the body/transcript
     int footer_gap = design::vibe_card::kFooterGap;
     int body_line_gap = design::vibe_card::kBodyLineGap;
     int body_outline_thickness = design::vibe_card::kBodyOutlineThickness;
@@ -99,14 +100,15 @@ struct VibeCardStyle {
     };
     design::TypographyRole body_role = design::TypographyRole::kBodyLarge;
     uint8_t body_color = design::color::kBlack;
+    // Matches the global footer's button icons: borderless, status-bar background, and the icon
+    // outlined when unselected (filled black box + white icon when focused).
     ButtonIconStyle footer_button = {
-        .background_color = design::vibe_card::kFooterButtonBackgroundColor,
+        .background_color = design::status_bar::kBackgroundColor,
         .selected_background_color = design::color::kBlack,
-        .border_color = design::color::kBlack,
-        .icon_color = design::color::kBlack,
-        .selected_icon_color = design::color::kWhite,
         .size = design::global_footer::kButtonSize,
         .icon_size = design::global_footer::kIconSize,
+        .border_thickness = 0,
+        .outline_icon_when_unselected = true,
     };
     design::TypographyRole empty_state_body_role = design::TypographyRole::kLabelSmall;
     uint8_t empty_state_body_color = design::color::kBlack;

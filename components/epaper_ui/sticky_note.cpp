@@ -46,8 +46,6 @@ struct Layout {
     UiRect content = {};  // body area (inside padding, above the footer row)
     int footer_y = 0;
     std::array<UiRect, kStickyNoteControlCount> controls = {};  // close, prev, next
-    int counter_x = 0;
-    int counter_y = 0;
 };
 
 Layout ComputeLayout(int portrait_width, int portrait_height, const StickyNoteStyle& style)
@@ -71,20 +69,15 @@ Layout ComputeLayout(int portrait_width, int portrait_height, const StickyNoteSt
     const int content_bottom = layout.footer_y - ClampPositive(style.footer_gap);
     layout.content = {inner.x, inner.y, inner.width, std::max(0, content_bottom - inner.y)};
 
-    // Footer buttons, right-aligned in carousel order: [Close] <prev> <next>.
+    // Footer: Close in the bottom-left corner; Prev + Next grouped in the bottom-right.
     const int button = FooterButtonSize(style);
     const int gap = ClampPositive(style.footer_button_gap);
-    const int group_width = (kStickyNoteControlCount * button) +
-                            ((kStickyNoteControlCount - 1) * gap);
-    const int group_x = inner.right() - group_width;
     const int button_y = layout.footer_y + CenterOffset(footer_height, button);
-    for (int index = 0; index < kStickyNoteControlCount; ++index) {
-        layout.controls[index] = {group_x + (index * (button + gap)), button_y, button, button};
-    }
-
-    // "N/M Stickies" counter, bottom-left, vertically centered to the button row.
-    layout.counter_x = inner.x;
-    layout.counter_y = layout.footer_y + CenterOffset(footer_height, LineHeight(style.counter_role));
+    layout.controls[0] = {inner.x, button_y, button, button};  // Close (left corner)
+    const int right_group_width = (2 * button) + gap;
+    const int right_group_x = inner.right() - right_group_width;
+    layout.controls[1] = {right_group_x, button_y, button, button};                 // Prev
+    layout.controls[2] = {right_group_x + button + gap, button_y, button, button};  // Next
     return layout;
 }
 
@@ -92,17 +85,15 @@ std::string CounterText(const StickyNoteState& state)
 {
     const int total = std::max(0, state.sticky_count);
     const int current = total > 0 ? std::clamp(state.active_index, 0, total - 1) + 1 : 0;
-    return std::to_string(current) + "/" + std::to_string(total) + " Stickies";
+    return std::to_string(current) + "/" + std::to_string(total) + " follow ups";
 }
 
-// The transcript scroll-container region: below the tag pill + header (with the header/body gap),
-// filling the rest of the content area above the footer.
-UiRect BodyRegion(const Layout& layout, const StickyNoteState& state, const StickyNoteStyle& style)
+// The transcript scroll-container region: below the top row (date + follow-up counter) and header,
+// filling the rest of the content area above the footer. The top row is always present (the counter
+// shows even when there is no date).
+UiRect BodyRegion(const Layout& layout, const StickyNoteStyle& style)
 {
-    int top = layout.content.y;
-    if (!state.date_text.empty()) {
-        top += LineHeight(style.date_role) + ClampPositive(style.date_header_gap);
-    }
+    int top = layout.content.y + LineHeight(style.date_role) + ClampPositive(style.date_header_gap);
     top += HeaderHeight(style) + ClampPositive(style.header_body_gap);
     return {layout.content.x, top, layout.content.width,
             std::max(0, layout.content.bottom() - top)};
@@ -151,11 +142,10 @@ UiRect StickyNoteContentBounds(int portrait_width,
 
 UiRect StickyNoteBodyBounds(int portrait_width,
                             int portrait_height,
-                            const StickyNoteState& state,
                             const StickyNoteStyle& style)
 {
     const Layout layout = ComputeLayout(portrait_width, portrait_height, style);
-    return BodyRegion(layout, state, style);
+    return BodyRegion(layout, style);
 }
 
 StickyNoteControlRects StickyNoteControlBounds(int portrait_width,
@@ -230,11 +220,21 @@ void DrawStickyNote(uint8_t* framebuffer,
     const UiRect content = layout.content;
     int cursor_y = content.y;
 
+    // Top row: recorded date on the left, "N/M follow ups" counter on the right (vertically
+    // centered to the date line). The counter shows even when there is no date.
+    const int date_line = LineHeight(style.date_role);
     if (!state.date_text.empty()) {
         DrawTypographyText(framebuffer, raw_width, raw_height, portrait_width, portrait_height,
                            content.x, cursor_y, state.date_text, style.date_role, style.date_color);
-        cursor_y += LineHeight(style.date_role) + ClampPositive(style.date_header_gap);
     }
+    {
+        const std::string counter = CounterText(state);
+        const int counter_x = content.right() - MeasureText(style.counter_role, counter);
+        const int counter_y = cursor_y + CenterOffset(date_line, LineHeight(style.counter_role));
+        DrawTypographyText(framebuffer, raw_width, raw_height, portrait_width, portrait_height,
+                           counter_x, counter_y, counter, style.counter_role, style.counter_color);
+    }
+    cursor_y += date_line + ClampPositive(style.date_header_gap);
 
     ListItemHeaderStyle header_style = style.header;
     header_style.width = content.width;
@@ -242,18 +242,13 @@ void DrawStickyNote(uint8_t* framebuffer,
                        content.x, cursor_y, state.header, header_style);
 
     // Transcript in a (borderless) scroll container -- scrolls when it overflows.
-    const UiRect body = BodyRegion(layout, state, style);
+    const UiRect body = BodyRegion(layout, style);
     if (!body.IsEmpty()) {
         DrawScrollContainer(framebuffer, raw_width, raw_height, portrait_width, portrait_height,
                             body.x, body.y, BodyScrollState(state), BodyScrollStyle(body, style));
     }
 
-    // Footer: counter on the left, controls on the right.
-    const std::string counter = CounterText(state);
-    DrawTypographyText(framebuffer, raw_width, raw_height, portrait_width, portrait_height,
-                       layout.counter_x, layout.counter_y, counter, style.counter_role,
-                       style.counter_color);
-
+    // Footer controls: Close (bottom-left), Prev + Next (bottom-right).
     for (int index = 0; index < kStickyNoteControlCount; ++index) {
         const UiRect& bounds = layout.controls[index];
         const ButtonIconState button_state = {

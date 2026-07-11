@@ -587,15 +587,17 @@ active," so live updates partial-refresh normally.
 
 Current app-level button interactions are:
 
-- `UP` / `DOWN` press down plus gated hold-repeat move roving focus with
-  wraparound on the active screen. A plain `UP` / `DOWN` single click is
-  intentionally inert -- navigation is driven on press-down/repeat, not on click.
+- `UP` / `DOWN` move roving focus (or scroll an entered control) one step per
+  press, with wraparound, on the active screen. Navigation is driven on
+  press-down; a plain `UP` / `DOWN` single click (the release event) is inert.
 - `POWER_OK` single click activates / submits the focused item on the active
   screen (footer target, page control, or modal action).
-- `DOWN` double click is the app-wide "exit an entered control" gesture, handled
-  per screen: it backs out of a control the user has stepped into -- e.g. the
-  Vibe Check card, or an entered scroll container / timeline item list on the
-  Summarize / Notes / Todos / Follow-up pages. It is a no-op at the app level.
+- Pressing and **holding** `DOWN` (a long-press) is the app-wide "exit an entered
+  control" gesture, handled per screen: it backs out of a control the user has
+  stepped into -- e.g. the Vibe Check card, an entered scroll container /
+  timeline item list on the Summarize / Notes / Todos / Follow-up pages, the WiFi
+  network list, or the sticky-note transcript scroll. It is a no-op at the app
+  level. (This replaced the former `DOWN` double-click exit.)
 - `POWER_OK` double click toggles the lock screen.
 - pressing and holding `POWER_OK` arms then starts the recording-session flow;
   releasing the button stops recording and opens the select modal when a clip is
@@ -1175,11 +1177,11 @@ Current scope:
 
 Current app-shell usage on top of those low-level events is:
 
-- `UP` / `DOWN` press down + gated hold-repeat: move roving focus (wraparound).
-  A plain `UP` / `DOWN` single click is intentionally inert.
+- `UP` / `DOWN` press down: move roving focus (wraparound), one step per press.
+  A plain `UP` / `DOWN` single click (the release) is inert.
 - `POWER_OK` single click: activate / submit the focused item
-- `DOWN` double click: app-wide "exit an entered control" gesture, handled per
-  screen (no-op at the app level)
+- hold `DOWN` (long-press): app-wide "exit an entered control" gesture, handled
+  per screen (no-op at the app level; replaced the former `DOWN` double-click)
 - `POWER_OK` double click: toggle the lock screen
 - hold `POWER_OK`: arm/start/finish the recording-session flow
 - `UP` held plus `POWER_OK` press down: open the shutdown confirmation modal

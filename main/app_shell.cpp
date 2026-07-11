@@ -963,16 +963,9 @@ void HandleRecordingSessionEvent(const recording_session_service::Event& event, 
                 ESP_LOGW(kTag, "Show recording completion toast failed: %s",
                          esp_err_to_name(err));
             }
-            // A transcript just landed (e.g. re-transcribing a Vibe Check idea): reload the
-            // page so the card swaps "Audio only note..." for the transcript and drops the Star.
-            if (event.snapshot.transcript_saved &&
-                display_service::GetCurrentScreen() == display_service::ScreenId::kVibeCheck) {
-                const esp_err_t sync_err = vibe_check_page_runtime::SyncFromService(true);
-                if (sync_err != ESP_OK && sync_err != ESP_ERR_INVALID_STATE) {
-                    ESP_LOGW(kTag, "Vibe check sync after transcription failed: %s",
-                             esp_err_to_name(sync_err));
-                }
-            }
+            // A saved transcript flips the recording's has_transcript flag, which fires an archive
+            // event; HandleRecordingArchiveEvent re-syncs whichever page is on screen (so the card
+            // swaps "audio only" for the transcript). No page-specific reload is needed here.
             break;
         }
         case recording_session_service::Phase::kFailed: {
@@ -1634,6 +1627,34 @@ void HandleRecordingArchiveEvent(const recording_archive_service::Event&, void*)
     const esp_err_t err = dashboard_page_runtime::SyncFromService(home_active);
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(kTag, "Dashboard update after archive event failed: %s", esp_err_to_name(err));
+    }
+
+    // The archive changed (recording saved / deleted / re-tagged / follow-up toggled). If one of
+    // the archive-backed feature pages is on screen, re-sync it so it does not show stale data.
+    // Non-active pages re-sync on entry (ShowXScreen), so only the current screen is refreshed.
+    esp_err_t page_err = ESP_OK;
+    switch (display_service::GetCurrentScreen()) {
+        case display_service::ScreenId::kNotes:
+            page_err = notes_page_runtime::SyncFromArchive(true);
+            break;
+        case display_service::ScreenId::kTodos:
+            page_err = todos_page_runtime::SyncFromArchive(true);
+            break;
+        case display_service::ScreenId::kFollowUp:
+            page_err = follow_up_page_runtime::SyncFromArchive(true);
+            break;
+        case display_service::ScreenId::kVibeCheck:
+            page_err = vibe_check_page_runtime::SyncFromService(true);
+            break;
+        case display_service::ScreenId::kSummarize:
+            page_err = summarize_page_runtime::SyncFromService(true);
+            break;
+        default:
+            break;
+    }
+    if (page_err != ESP_OK && page_err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Active page update after archive event failed: %s",
+                 esp_err_to_name(page_err));
     }
 }
 

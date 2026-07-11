@@ -95,11 +95,9 @@ UiRect StickyNotePanelBounds(int portrait_width, int portrait_height, const Stic
 UiRect StickyNoteContentBounds(int portrait_width,
                                int portrait_height,
                                const StickyNoteStyle& style);
-// The transcript scroll-container region (below the header, above the footer). Depends on whether a
-// tag pill is present, so it takes the state.
+// The transcript scroll-container region (below the header, above the footer).
 UiRect StickyNoteBodyBounds(int portrait_width,
                             int portrait_height,
-                            const StickyNoteState& state,
                             const StickyNoteStyle& style);
 
 // Resolved on-screen rectangles of the three footer controls (for hit-testing / wiring).

@@ -91,6 +91,10 @@
       "symbol": "kClose"
     },
     {
+      "path": "assets/icons/delete.png",
+      "symbol": "kDelete"
+    },
+    {
       "path": "assets/icons/file-audio.png",
       "symbol": "kFileAudio"
     },

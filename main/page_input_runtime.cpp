@@ -789,9 +789,9 @@ ButtonResult HandleVibeCheckButtonEvent(const button_service::ButtonEventInfo& e
 {
     ButtonResult result = {};
 
-    // No dedicated back key: a DOWN double-click leaves the card's action row.
+    // No dedicated back key: holding DOWN leaves the card's action row.
     if (event.button == button_service::ButtonId::kDown &&
-        event.event == button_service::ButtonEvent::kDoubleClick) {
+        event.event == button_service::ButtonEvent::kLongPressStart) {
         if (vibe_check_page_runtime::ExitFocusedCard()) {
             result.handled = true;
             result.interaction_result = MakeConsumedResult(true);
@@ -946,9 +946,9 @@ ButtonResult HandleSummarizeButtonEvent(const button_service::ButtonEventInfo& e
 {
     ButtonResult result = {};
 
-    // App-wide gesture: DOWN double-click exits an entered control (segment / scroll).
+    // App-wide gesture: holding DOWN exits an entered control (segment / scroll).
     if (event.button == button_service::ButtonId::kDown &&
-        event.event == button_service::ButtonEvent::kDoubleClick) {
+        event.event == button_service::ButtonEvent::kLongPressStart) {
         if (summarize_page_runtime::ExitActiveControl()) {
             result.handled = true;
             result.interaction_result = MakeConsumedResult(true);
@@ -1107,9 +1107,9 @@ ButtonResult HandleNotesButtonEvent(const button_service::ButtonEventInfo& event
 {
     ButtonResult result = {};
 
-    // App-wide gesture: DOWN double-click exits an entered item list.
+    // App-wide gesture: holding DOWN exits an entered item list.
     if (event.button == button_service::ButtonId::kDown &&
-        event.event == button_service::ButtonEvent::kDoubleClick) {
+        event.event == button_service::ButtonEvent::kLongPressStart) {
         if (notes_page_runtime::ExitActiveControl()) {
             result.handled = true;
             result.interaction_result = MakeConsumedResult(true);
@@ -1267,9 +1267,9 @@ ButtonResult HandleTodosButtonEvent(const button_service::ButtonEventInfo& event
 {
     ButtonResult result = {};
 
-    // App-wide gesture: DOWN double-click exits an entered item list.
+    // App-wide gesture: holding DOWN exits an entered item list.
     if (event.button == button_service::ButtonId::kDown &&
-        event.event == button_service::ButtonEvent::kDoubleClick) {
+        event.event == button_service::ButtonEvent::kLongPressStart) {
         if (todos_page_runtime::ExitActiveControl()) {
             result.handled = true;
             result.interaction_result = MakeConsumedResult(true);
@@ -1429,9 +1429,9 @@ ButtonResult HandleFollowUpButtonEvent(const button_service::ButtonEventInfo& ev
 {
     ButtonResult result = {};
 
-    // App-wide gesture: DOWN double-click exits an entered item list.
+    // App-wide gesture: holding DOWN exits an entered item list.
     if (event.button == button_service::ButtonId::kDown &&
-        event.event == button_service::ButtonEvent::kDoubleClick) {
+        event.event == button_service::ButtonEvent::kLongPressStart) {
         if (follow_up_page_runtime::ExitActiveControl()) {
             result.handled = true;
             result.interaction_result = MakeConsumedResult(true);
@@ -1687,9 +1687,9 @@ ButtonResult HandleDetailsButtonEvent(const button_service::ButtonEventInfo& eve
 {
     ButtonResult result = {};
 
-    // App-wide gesture: DOWN double-click exits the entered scroll container.
+    // App-wide gesture: holding DOWN exits the entered scroll container.
     if (event.button == button_service::ButtonId::kDown &&
-        event.event == button_service::ButtonEvent::kDoubleClick) {
+        event.event == button_service::ButtonEvent::kLongPressStart) {
         if (details_page_runtime::ExitActiveControl()) {
             result.handled = true;
             result.interaction_result = MakeConsumedResult(true);
@@ -1838,17 +1838,21 @@ ButtonResult HandleWifiButtonEvent(const button_service::ButtonEventInfo& event)
                 return result;
             }
             return ApplyWifiActivateResult(wifi_page_runtime::ActivateFocusedItem());
-        case button_service::ButtonEvent::kDoubleClick:
-            // App-wide gesture: DOWN double-click exits an entered UI (here, the network list).
-            if (event.button != button_service::ButtonId::kDown) {
+        case button_service::ButtonEvent::kLongPressStart:
+            // App-wide gesture: holding DOWN exits an entered UI (here, the network list).
+            if (event.button == button_service::ButtonId::kDown) {
+                return ApplyWifiSecondaryActivateResult(
+                    wifi_page_runtime::SecondaryActivateFocusedItem());
+            }
+            if (event.button != button_service::ButtonId::kPowerOk) {
                 return result;
             }
-            return ApplyWifiSecondaryActivateResult(
-                wifi_page_runtime::SecondaryActivateFocusedItem());
+            result.handled = true;
+            result.interaction_result.consumed = true;
+            return result;
         case button_service::ButtonEvent::kPressDown:
         case button_service::ButtonEvent::kPressUp:
         case button_service::ButtonEvent::kPressRepeat:
-        case button_service::ButtonEvent::kLongPressStart:
         case button_service::ButtonEvent::kLongPressUp:
             if (event.button != button_service::ButtonId::kPowerOk) {
                 return result;
@@ -1856,6 +1860,7 @@ ButtonResult HandleWifiButtonEvent(const button_service::ButtonEventInfo& event)
             result.handled = true;
             result.interaction_result.consumed = true;
             return result;
+        case button_service::ButtonEvent::kDoubleClick:
         default:
             return result;
     }

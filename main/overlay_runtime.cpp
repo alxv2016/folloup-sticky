@@ -639,8 +639,8 @@ bool ResolveTouchTarget(int x, int y, app_interaction::InteractiveTarget* target
             }
             return true;
         }
-        const epaper_ui::UiRect body = epaper_ui::StickyNoteBodyBounds(
-            portrait_width, portrait_height, sticky_note_state, {});
+        const epaper_ui::UiRect body =
+            epaper_ui::StickyNoteBodyBounds(portrait_width, portrait_height, {});
         if (!body.IsEmpty() && body.Contains(x, y)) {
             if (target != nullptr) {
                 *target = MakeStickyNoteTarget(kStickyBodyFocusIndex, generation);
@@ -1468,9 +1468,9 @@ app_interaction::InputResult HandleButtonEvent(const button_service::ButtonEvent
                 refresh_policy =
                     DetermineOverlayRefreshPolicy(before, CaptureOverlayRefreshSnapshotLocked());
             } else if (event.button == button_service::ButtonId::kDown &&
-                       event.event == button_service::ButtonEvent::kDoubleClick &&
+                       event.event == button_service::ButtonEvent::kLongPressStart &&
                        s_sticky_note_state.scroll_active) {
-                // DOWN double-click exits the transcript scroll, back to roving the controls.
+                // Holding DOWN exits the transcript scroll, back to roving the controls.
                 s_sticky_note_state.scroll_active = false;
                 SyncStickyFocusLocked();
                 play_click = true;

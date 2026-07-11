@@ -905,20 +905,33 @@ esp_err_t DeleteRecordingOnMountedFilesystem(const char* mount_point, void* cont
         return ESP_ERR_INVALID_ARG;
     }
 
-    // Find which archive subdir currently holds the recording (anchored by its .wav).
+    constexpr std::array<const char*, 3> kSuffixes = {".wav", ".json", ".txt"};
+
+    // Find which archive subdir currently holds the recording. Anchor on ANY sidecar (not just the
+    // .wav) so an idea whose audio file is missing/removed can still be deleted.
     const char* subdir = nullptr;
     std::string base_path;
     for (const char* candidate_subdir : {"recordings", "todos"}) {
         const std::string candidate =
             JoinPath(JoinPath(mount_point, candidate_subdir), del->recording_id);
-        if (FileExists(candidate + ".wav")) {
+        bool has_sidecar = false;
+        for (const char* suffix : kSuffixes) {
+            if (FileExists(candidate + suffix)) {
+                has_sidecar = true;
+                break;
+            }
+        }
+        if (has_sidecar) {
             subdir = candidate_subdir;
             base_path = candidate;
             break;
         }
     }
     if (subdir == nullptr) {
-        return ESP_ERR_NOT_FOUND;
+        // Nothing to move: the recording is already gone from the live archive. Treat as a
+        // successful (idempotent) delete so callers can safely drop it from their in-memory lists.
+        del->deleted = true;
+        return ESP_OK;
     }
 
     const std::string trash_root = JoinPath(mount_point, "trash");
@@ -928,7 +941,6 @@ esp_err_t DeleteRecordingOnMountedFilesystem(const char* mount_point, void* cont
     }
     const std::string trash_base = JoinPath(trash_dir, del->recording_id);
 
-    constexpr std::array<const char*, 3> kSuffixes = {".wav", ".json", ".txt"};
     std::array<bool, kSuffixes.size()> source_exists = {};
     for (size_t index = 0; index < kSuffixes.size(); ++index) {
         source_exists[index] = FileExists(base_path + kSuffixes[index]);
@@ -1113,6 +1125,11 @@ SaveResult SaveTranscript(const std::string& recording_id, const std::string& tr
     if (err != ESP_OK && result.error_code.empty()) {
         result.error_code = "storage_error";
         result.error_message = esp_err_to_name(err);
+    }
+    if (result.transcript_saved) {
+        // The recording now has a transcript (has_transcript flips true): recompute archive state
+        // and notify subscribers so any open page swaps "audio only" for the transcript live.
+        (void)Refresh();
     }
     return result;
 }
