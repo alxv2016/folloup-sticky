@@ -254,7 +254,10 @@ inline constexpr int kTouchSlopY = spacing::k12;         // == footer's vertical
 inline constexpr int kTouchSlopX = kControlGap / 2;      // half the gap: targets meet, no dead zone
 inline constexpr uint8_t kActiveDotColor = color::kTextPrimary;      // filled black
 inline constexpr uint8_t kInactiveDotColor = color::kGrayLight;      // light grey
-inline constexpr uint8_t kDisabledControlColor = color::kGrayLight;  // greyed prev/next at the ends
+// Greyed prev/next at the ends. kGrayDark (50% checkerboard dither) instead of kGrayLight (25%
+// sparse) so the disabled chevron renders reliably on the first full refresh -- an isolated
+// sparse-dither icon does not develop from a fresh white clear until a later partial refresh.
+inline constexpr uint8_t kDisabledControlColor = color::kGrayDark;
 
 }  // namespace carousel
 
