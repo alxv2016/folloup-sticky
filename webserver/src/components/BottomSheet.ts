@@ -149,6 +149,7 @@ export class BottomSheet extends HTMLElement {
   private isAnimatingClose = false;
   private isSyncingOpenAttribute = false;
   private previousDocumentOverflow = "";
+  private previousBodyOverflow = "";
   private triggerElement: HTMLElement | null = null;
   private readonly descriptionElement: HTMLParagraphElement;
   private readonly dialog: HTMLDialogElement;
@@ -426,16 +427,22 @@ export class BottomSheet extends HTMLElement {
   }
 
   private lockDocumentScroll() {
-    if (this.previousDocumentOverflow.length === 0) {
+    // Lock both <html> and <body>: which one is the scroll container varies by browser (and on
+    // touch, html-only overflow:hidden can still let the page rubber-band behind the sheet).
+    if (this.previousDocumentOverflow.length === 0 && this.previousBodyOverflow.length === 0) {
       this.previousDocumentOverflow = document.documentElement.style.overflow;
+      this.previousBodyOverflow = document.body.style.overflow;
     }
 
     document.documentElement.style.overflow = "hidden";
+    document.body.style.overflow = "hidden";
   }
 
   private unlockDocumentScroll() {
     document.documentElement.style.overflow = this.previousDocumentOverflow;
+    document.body.style.overflow = this.previousBodyOverflow;
     this.previousDocumentOverflow = "";
+    this.previousBodyOverflow = "";
   }
 
   private restoreTriggerFocus() {
