@@ -263,7 +263,9 @@ button:disabled {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: var(--spacing-sm);
-  padding: var(--spacing-md);
+  /* Extra bottom padding so the footer buttons clear the iOS home indicator / safe area and
+     aren't clipped at the bottom of the sheet. */
+  padding: var(--spacing-md) var(--spacing-md) var(--spacing-6xl);
   border-top: var(--border-01) solid var(--color-border);
   background: var(--color-bg);
 }
