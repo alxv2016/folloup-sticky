@@ -1,0 +1,479 @@
+/* CSS RESET*/
+*:where(
+  :not(html, iframe, canvas, img, svg, video, audio):not(svg *, symbol *)
+) {
+  all: unset;
+  display: revert;
+}
+
+/* Preferred box-sizing value */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/* Fix mobile Safari increase font-size on landscape mode */
+html {
+  -moz-text-size-adjust: none;
+  -webkit-text-size-adjust: none;
+  text-size-adjust: none;
+}
+
+/* Reapply the pointer cursor for anchor tags */
+a,
+button {
+  cursor: pointer;
+}
+
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Remove list styles (bullets/numbers) */
+ol,
+ul,
+menu,
+summary {
+  list-style: none;
+}
+
+/* For images to not be able to exceed their container */
+img {
+  max-inline-size: 100%;
+  max-block-size: 100%;
+}
+
+/* removes spacing between cells in tables */
+table {
+  border-collapse: collapse;
+}
+
+/* Safari - solving issue when using user-select:none on the <body> text input doesn't working */
+input,
+textarea {
+  -webkit-user-select: auto;
+}
+
+/* revert the 'white-space' property for textarea elements on Safari */
+textarea {
+  white-space: revert;
+}
+
+/* minimum style to allow to style meter element */
+meter {
+  -webkit-appearance: revert;
+  appearance: revert;
+}
+
+/* preformatted text - use only for this feature */
+:where(pre) {
+  all: revert;
+  box-sizing: border-box;
+}
+
+/* reset default text opacity of input placeholder */
+::placeholder {
+  color: unset;
+}
+
+/* fix the feature of 'hidden' attribute.
+ display:revert; revert to element instead of attribute */
+:where([hidden]) {
+  display: none;
+}
+
+/* revert for bug in Chromium browsers
+ - fix for the content editable attribute will work properly.
+ - webkit-user-select: auto; added for Safari in case of using user-select:none on wrapper element*/
+:where([contenteditable]:not([contenteditable="false"])) {
+  -moz-user-modify: read-write;
+  -webkit-user-modify: read-write;
+  overflow-wrap: break-word;
+  -webkit-line-break: after-white-space;
+  -webkit-user-select: auto;
+}
+
+/* apply back the draggable feature - exist only in Chromium and Safari */
+:where([draggable="true"]) {
+  -webkit-user-drag: element;
+}
+
+/* Revert Modal native behavior */
+:where(dialog:modal) {
+  all: revert;
+  box-sizing: border-box;
+}
+
+/* Remove details summary webkit styles */
+::-webkit-details-marker {
+  display: none;
+}
+
+input[type="time"]::-webkit-calendar-picker-indicator,
+input[type="date"]::-webkit-calendar-picker-indicator  {
+    display: none;
+    -webkit-appearance: none;
+}
+
+/* Global variables */
+:root {
+  color-scheme: light;
+  --color-bg: #ffffff;
+  --color-bg-menu: #181818;
+  --color-bg-segment: #ffffff;
+  --color-bg-selected: #f5f5f5;
+  --color-bg-preview: #ffffff;
+  --color-bg-input: #f5f5f5;
+  --color-bg-input-inverse: #383838;
+  --color-bg-header-inverse: #2c2c2c;
+  --color-bg-brand: #009cff;
+  --color-bg-brand-hover: #0b8ce9;
+  --color-bg-active: #e1f6ff;
+  --color-bg-mute: #c4c4c4;
+  --color-bg-danger: #fde9e4;
+  --color-fg-active: #007ded;
+  --color-fg-knob-off: #c4c4c4;
+  --color-fg-knob-on: #ffffff;
+  --color-overlay: rgba(169, 169, 169, 0.125);
+  --color-text: #2c2c2c;
+  --color-text-brand: #009cff;
+  --color-text-inverse: #ffffff;
+  --color-text-secondary: #6d6d6d;
+  --color-text-mute: #ababab;
+  --color-text-menu: #cacaca;
+  --color-logo: var(--color-text-secondary);
+  --color-text-danger: #c7371a;
+  --color-text-warning: #b86200;
+  --color-border: #dbdbdb;
+  --color-border-inverse: #414141;
+  --color-meter-green: #39d98a;
+  --color-meter-yellow: #ffbe0b;
+  --color-meter-orange: #ff8a3d;
+  --color-meter-red: #ff5d4d;
+
+  --font-size-heading: 1.25rem;
+  --font-size-subheading: 1.125rem;
+  --font-size-label: 1rem;
+  --font-size-caption: 0.813rem;
+
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+
+  --border-01: 0.0625rem;
+  --border-02: 0.125rem;
+  --border-03: 0.25rem;
+  --border-04: 0.375rem;
+  --border-05: 0.5rem;
+
+  --radius-full: 624.938rem;
+  --radius-xl: 0.75rem;
+  --radius-lg: 0.5rem;
+  --radius-md: 0.375rem;
+  --radius-sm: 0.25rem;
+  --radius-xs: 0.125rem;
+
+  --focus-ring-color: #0c8ce9;
+  --focus-ring-offset: 1px;
+  --focus-ring-width: 2px;
+
+  --size-textarea-sm: 4rem;
+
+  --size-3xs: 0.125rem;
+  --size-2xs: 0.25rem;
+  --size-xs: 0.5rem;
+  --size-sm: 0.75rem;
+  --size-md: 1rem;
+  --size-lg: 1.25rem;
+  --size-xl: 1.5rem;
+  --size-2xl: 1.75rem;
+  --size-3xl: 2rem;
+  --size-4xl: 2.25rem;
+  --size-5xl: 2.5rem;
+  --size-6xl: 2.75rem;
+
+  --spacing-3xs: var(--size-3xs);
+  --spacing-2xs: var(--size-2xs);
+  --spacing-xs: var(--size-xs);
+  --spacing-sm: var(--size-sm);
+  --spacing-md: var(--size-md);
+  --spacing-lg: var(--size-lg);
+  --spacing-xl: var(--size-xl);
+  --spacing-2xl: var(--size-2xl);
+  --spacing-3xl: var(--size-3xl);
+  --spacing-4xl: var(--size-4xl);
+  --spacing-5xl: var(--size-5xl);
+  --spacing-6xl: var(--size-6xl);
+
+  --font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+
+  --button-radius: var(--radius-md);
+  --input-radius: var(--radius-md);
+  --menu-radius: var(--radius-md);
+}
+
+.b90-dark {
+  color-scheme: dark;
+  --color-bg: #2c2c2c;
+  --color-bg-selected: #383838;
+  --color-bg-preview: #2c2c2c;
+  --color-bg-input: #383838;
+  --color-bg-input-inverse: #383838;
+  --color-bg-segment: #2c2c2c;
+  --color-bg-mute: #555555;
+  --color-bg-danger: #1e0601;
+  --color-bg-active: #46597c;
+  --color-fg-active: #64c6fd;
+  --color-fg-knob-off: #888888;
+  --color-fg-knob-on: #ffffff;
+  --color-overlay: rgb(0 0 0 / 0.25);
+  --color-text: #ffffff;
+  --color-text-secondary: #bfbfbf;
+  --color-text-mute: #888888;
+  --color-logo: #ffffff;
+  --color-text-danger: #efaeae;
+  --color-text-warning: #f7d15f;
+  --color-border: #444444;
+  --color-border-inverse: #2c2c2c;
+  --color-meter-green: #4ae0a0;
+  --color-meter-yellow: #ffd05a;
+  --color-meter-orange: #ff9e57;
+  --color-meter-red: #ff7b6c;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --color-bg: #2c2c2c;
+    --color-bg-selected: #383838;
+    --color-bg-preview: #2c2c2c;
+    --color-bg-input: #383838;
+    --color-bg-input-inverse: #383838;
+    --color-bg-segment: #2c2c2c;
+    --color-bg-mute: #555555;
+    --color-bg-danger: #1e0601;
+    --color-bg-active: #46597c;
+    --color-fg-active: #64c6fd;
+    --color-fg-knob-off: #888888;
+    --color-fg-knob-on: #ffffff;
+    --color-overlay: rgb(0 0 0 / 0.25);
+    --color-text: #ffffff;
+    --color-text-secondary: #bfbfbf;
+    --color-text-mute: #888888;
+    --color-logo: #ffffff;
+    --color-text-danger: #efaeae;
+    --color-text-warning: #f7d15f;
+    --color-border: #444444;
+    --color-border-inverse: #2c2c2c;
+    --color-meter-green: #4ae0a0;
+    --color-meter-yellow: #ffd05a;
+    --color-meter-orange: #ff9e57;
+    --color-meter-red: #ff7b6c;
+  }
+}
+
+/* Set core body defaults */
+body {
+  min-height: 100vh;
+  text-rendering: optimizeSpeed;
+  font-weight: 400;
+  user-select: none;
+  font-family: var(--font-family);
+  background-color: var(--color-bg-selected);
+  color: var(--color-text);
+}
+
+/* App.css - Global styles */
+.followup-logo {
+  position: relative;
+  width: auto;
+  height: 48px;
+  color: var(--color-logo);
+  flex-shrink: 0;
+  margin-bottom: var(--spacing-2xl);
+}
+
+.followup-logo svg {
+  width: auto;
+  height: 100%;
+}
+
+@media (min-width: 768px) {
+  .followup-logo {
+    height: 64px;
+  }
+}
+
+main {
+  position: relative;
+  width: 100%;
+  height: 100vh;
+  max-width: 48rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin: auto;
+  padding: var(--spacing-2xl) var(--spacing-lg);
+}
+
+.connected-components {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  width: 100%;
+  padding-bottom: 8rem;
+}
+
+.gradual-blur {
+  overflow: hidden;
+  isolation: isolate;
+  transition: opacity 0.18s ease-out;
+}
+
+.gradual-blur__inner {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.gradual-blur__layer {
+  position: absolute;
+  inset: 0;
+}
+
+.gradual-blur--fallback {
+  background-repeat: no-repeat;
+}
+
+.xiaozhi-activation-status {
+  font-size: var(--font-size-heading);
+  line-height: 1.25;
+  margin-bottom: var(--spacing-lg);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-mute);
+}
+
+.xiaozhi-activation-status--active {
+  color: var(--color-text);
+}
+
+.page-gradual-blur {
+  bottom: 0;
+  left: 0 !important;
+  right: 0 !important;
+  width: 100vw !important;
+  transform: none !important;
+}
+
+/* Form Layout Helpers */
+/* ui-input ~ .form-control,
+ui-input ~ .form-control-row,
+ui-input ~ .form-group,
+ui-toggle ~ .form-control-row,
+ui-toggle ~ .form-group,
+ui-range-slider ~ .form-control-row,
+ui-range-slider ~ .form-group,
+.form-control-row ~ .form-control-row,
+.form-group ~ .form-group {
+  margin-top: var(--spacing-lg);
+} */
+
+.form-helper-text {
+  font-size: var(--font-size-caption);
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+}
+
+.wifi-sheet-notification,
+.bottom-sheet-notification {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-label);
+}
+
+.wifi-sheet-notification[hidden],
+.bottom-sheet-notification[hidden] {
+  display: none;
+}
+
+.wifi-sheet-notification[data-status="warning"],
+.bottom-sheet-notification[data-status="warning"] {
+  color: var(--color-text-warning);
+}
+
+.wifi-sheet-notification[data-status="success"],
+.bottom-sheet-notification[data-status="success"] {
+  color: var(--color-meter-green);
+}
+
+.wifi-sheet-notification[data-status="error"],
+.wifi-sheet-notification[data-status="danger"],
+.bottom-sheet-notification[data-status="error"],
+.bottom-sheet-notification[data-status="danger"] {
+  color: var(--color-text-danger);
+}
+
+.form-control-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.form-control-row > * {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.form-group {
+  position: relative;
+  padding-bottom: var(--spacing-md);
+  border-bottom: var(--border-01) solid var(--color-border);
+}
+
+.form-group:last-child, .form-group:last-of-type {
+  border-bottom: none;
+}
+
+.reminder-summary-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-sm);
+}
+
+.reminder-summary-row ui-toggle {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.reminder-summary-row ui-badge {
+  flex-shrink: 0;
+}
+
+.wifi-connection-form {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}

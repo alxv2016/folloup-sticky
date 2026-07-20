@@ -1,0 +1,6 @@
+# Frontend build/tooling artifacts. The *served* copy of the build lives in
+# components/wifi_service/portal/ and IS tracked; this dist/ is the raw Vite output.
+node_modules/
+dist/
+*.log
+.DS_Store

@@ -1,0 +1,127 @@
+:host {
+  display: block;
+  width: 100%;
+}
+
+:host([hidden]) {
+  display: none;
+  visibility: hidden;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+h2 {
+  margin: 0;
+}
+
+.card-component {
+  background-color: var(--color-bg-input);
+  border-radius: var(--radius-lg);
+  border: var(--border-01) solid var(--color-border);
+  box-shadow: none;
+}
+
+.card-component__container {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  background-color: var(--color-bg);
+  border-radius: inherit;
+  padding: var(--spacing-lg);
+  box-shadow: none;
+}
+
+.card-component__header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  margin-bottom: var(--spacing-sm);
+}
+
+.card-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.card-component__icon {
+  width: 24px;
+  height: 24px;
+  fill: var(--color-text-secondary);
+  margin-right: var(--spacing-xs);
+}
+
+.card-component__title {
+  font-size: var(--font-size-heading);
+  font-weight: var(--font-weight-semibold);
+  margin: 0;
+}
+
+.card-component__content {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  margin-top: var(--spacing-xs);
+  gap: var(--spacing-md);
+}
+
+.connection-notification {
+  position: relative;
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  margin-bottom: var(--spacing-sm);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-label);
+}
+
+.connection-notification[hidden] {
+  display: none;
+}
+
+.connection-notification[data-status="warning"] {
+  color: var(--color-text-warning);
+}
+
+.connection-notification[data-status="success"] {
+  color: var(--color-meter-green);
+}
+
+.connection-notification[data-status="error"],
+.connection-notification[data-status="danger"] {
+  color: var(--color-text-danger);
+}
+
+.card-actions {
+  margin-top: var(--spacing-xl);
+}
+
+.wifi-connection-form__actions {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: var(--spacing-sm);
+}
+
+.card-component__footer[hidden] {
+  display: none;
+}
+
+::slotted(.card-component__description) {
+  font-size: var(--font-size-label);
+  line-height: 1.5;
+  margin-bottom: var(--spacing-md);
+  color: var(--color-text-secondary);
+}
+
+::slotted([slot="footer"]) {
+  width: auto;
+}

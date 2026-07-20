@@ -42,6 +42,18 @@ constexpr const char* kPortalApiScanUri = "/api/scan";
 constexpr const char* kPortalApiConfigureUri = "/api/configure";
 constexpr const char* kPortalApiStatusUri = "/api/status";
 constexpr const char* kPortalApiDisconnectUri = "/api/disconnect";
+constexpr const char* kPortalIndexJsUri = "/index.js";
+constexpr const char* kPortalIndexCssUri = "/index.css";
+
+// Captive-portal frontend, embedded from components/wifi_service/portal/ (built by the Vite app in
+// //webserver; run `npm run build` there and copy dist/* into portal/). EMBED_FILES generates the
+// _binary_<basename>_{start,end} symbols; the asm labels bind these declarations to them.
+extern const uint8_t kIndexHtmlStart[] asm("_binary_index_html_start");
+extern const uint8_t kIndexHtmlEnd[] asm("_binary_index_html_end");
+extern const uint8_t kIndexJsStart[] asm("_binary_index_js_start");
+extern const uint8_t kIndexJsEnd[] asm("_binary_index_js_end");
+extern const uint8_t kIndexCssStart[] asm("_binary_index_css_start");
+extern const uint8_t kIndexCssEnd[] asm("_binary_index_css_end");
 
 enum class TransitionRequest : uint8_t {
     kStart,
@@ -546,17 +558,30 @@ esp_err_t RegisterRoute(httpd_handle_t server, const httpd_uri_t* handler)
     return err;
 }
 
+esp_err_t SendEmbeddedAsset(httpd_req_t* request, const uint8_t* start, const uint8_t* end,
+                            const char* content_type)
+{
+    httpd_resp_set_status(request, HTTPD_200);
+    httpd_resp_set_type(request, content_type);
+    const ssize_t length = end - start;
+    return httpd_resp_send(request, reinterpret_cast<const char*>(start),
+                           length > 0 ? length : 0);
+}
+
 esp_err_t HandlePortalRoot(httpd_req_t* request)
 {
-    cJSON* root = cJSON_CreateObject();
-    cJSON_AddBoolToObject(root, "success", true);
-    cJSON_AddStringToObject(root, "message", "Folloup Wi-Fi backend");
-    cJSON* endpoints = cJSON_AddArrayToObject(root, "endpoints");
-    cJSON_AddItemToArray(endpoints, cJSON_CreateString(kPortalApiStatusUri));
-    cJSON_AddItemToArray(endpoints, cJSON_CreateString(kPortalApiScanUri));
-    cJSON_AddItemToArray(endpoints, cJSON_CreateString(kPortalApiConfigureUri));
-    cJSON_AddItemToArray(endpoints, cJSON_CreateString(kPortalApiDisconnectUri));
-    return SendJsonResponse(request, 200, root);
+    return SendEmbeddedAsset(request, kIndexHtmlStart, kIndexHtmlEnd, "text/html; charset=utf-8");
+}
+
+esp_err_t HandlePortalIndexJs(httpd_req_t* request)
+{
+    return SendEmbeddedAsset(request, kIndexJsStart, kIndexJsEnd,
+                             "application/javascript; charset=utf-8");
+}
+
+esp_err_t HandlePortalIndexCss(httpd_req_t* request)
+{
+    return SendEmbeddedAsset(request, kIndexCssStart, kIndexCssEnd, "text/css; charset=utf-8");
 }
 
 esp_err_t HandlePortalStatus(httpd_req_t* request)
@@ -687,7 +712,9 @@ void StartConfigPortal()
     }
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_uri_handlers = 16;
+    // Root + WiFi API (scan/configure/status/disconnect) + portal assets (index.js/index.css) plus
+    // the timezone_service and gemini_service portal routes registered via the registrar below.
+    config.max_uri_handlers = 24;
     config.lru_purge_enable = true;
 
     esp_err_t err = httpd_start(&s_portal_server, &config);
@@ -727,12 +754,26 @@ void StartConfigPortal()
         .handler = HandlePortalDisconnect,
         .user_ctx = nullptr,
     };
+    httpd_uri_t index_js = {
+        .uri = kPortalIndexJsUri,
+        .method = HTTP_GET,
+        .handler = HandlePortalIndexJs,
+        .user_ctx = nullptr,
+    };
+    httpd_uri_t index_css = {
+        .uri = kPortalIndexCssUri,
+        .method = HTTP_GET,
+        .handler = HandlePortalIndexCss,
+        .user_ctx = nullptr,
+    };
 
     if (RegisterRoute(s_portal_server, &root) != ESP_OK ||
         RegisterRoute(s_portal_server, &scan) != ESP_OK ||
         RegisterRoute(s_portal_server, &configure) != ESP_OK ||
         RegisterRoute(s_portal_server, &status) != ESP_OK ||
-        RegisterRoute(s_portal_server, &disconnect) != ESP_OK) {
+        RegisterRoute(s_portal_server, &disconnect) != ESP_OK ||
+        RegisterRoute(s_portal_server, &index_js) != ESP_OK ||
+        RegisterRoute(s_portal_server, &index_css) != ESP_OK) {
         StopConfigPortal();
         return;
     }

@@ -1,0 +1,40 @@
+:host {
+  display: block;
+  width: 100%;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+.form-control {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.form-control label {
+  font-size: var(--font-size-label);
+  font-weight: var(--font-weight-regular);
+  margin-bottom: var(--spacing-xs);
+}
+
+.form-control__input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: var(--spacing-sm);
+}
+
+.duration-fields {
+  align-items: center;
+}
+
+.duration-fields ui-input {
+  min-width: 0;
+  flex: 1 1 0;
+}

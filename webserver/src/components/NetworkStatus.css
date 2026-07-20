@@ -1,0 +1,70 @@
+:host {
+  display: block;
+  width: 100%;
+}
+
+:host([hidden]) {
+  display: none;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+.wifi-status-card {
+  position: relative;
+  display: flex;
+  width: 100%;
+  align-items: center;
+  background-color: var(--color-bg-brand);
+  padding: var(--spacing-md) var(--spacing-md);
+  border-radius: var(--radius-lg);
+}
+
+.wifi-status-card__content {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-sm);
+  flex-wrap: wrap;
+  width: 100%;
+}
+
+.wifi-status-card__content .wifi-icon {
+  width: 32px;
+  height: 32px;
+  fill: var(--color-text-inverse);
+}
+
+.wifi-status-card__actions {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  margin-left: auto;
+}
+
+.wifi-status-card__status {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  min-width: 0;
+}
+
+.wifi-status-card__label {
+  font-size: var(--font-size-label);
+  color: var(--color-text-inverse);
+  font-weight: var(--font-weight-medium);
+}
+
+.wifi-status-card__network {
+  font-size: var(--font-size-label);
+  color: var(--color-text-inverse);
+  font-weight: var(--font-weight-semibold);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

@@ -1,0 +1,156 @@
+:host {
+  display: block;
+  width: 100%;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+input,
+button,
+select,
+textarea {
+  margin: 0;
+  font: inherit;
+  color: inherit;
+}
+
+input,
+textarea {
+  -webkit-user-select: auto;
+}
+
+p {
+  margin: 0;
+}
+
+.form-control__input-wrapper input,
+.password-toggle-btn {
+  font: inherit;
+}
+
+.form-control {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.form-control label {
+  font-size: var(--font-size-label);
+  font-weight: var(--font-weight-regular);
+  margin-bottom: var(--spacing-xs);
+}
+
+.form-helper-text {
+  margin-top: var(--spacing-xs);
+  font-size: var(--font-size-caption);
+  line-height: 1.25;
+  color: var(--color-text-secondary);
+}
+
+.form-control__input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: var(--spacing-sm);
+}
+
+.form-control__input-wrapper input {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  border: var(--border-01) solid var(--color-border);
+  min-height: 44px;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  border-radius: var(--input-radius);
+  background-color: var(--color-bg-input);
+  color: var(--color-text);
+  font-size: var(--font-size-label);
+  line-height: normal;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.form-control__input-wrapper input::placeholder {
+  color: var(--color-text-mute);
+}
+
+.form-control__input-wrapper input[type="time"]::-webkit-calendar-picker-indicator,
+.form-control__input-wrapper input[type="date"]::-webkit-calendar-picker-indicator {
+  display: none;
+  -webkit-appearance: none;
+}
+
+.form-control__input-wrapper input:focus-visible,
+.password-toggle-btn:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+
+:host(.error) input,
+:host([invalid]) input,
+:host([aria-invalid="true"]) input,
+.form-control__input-wrapper input.error {
+  outline: var(--focus-ring-width) solid var(--color-meter-red);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.duration-fields {
+  align-items: center;
+}
+
+.duration-fields input {
+  min-width: 0;
+  flex: 1 1 0;
+}
+
+.duration-fields__unit {
+  flex: 0 0 auto;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+}
+
+.duration-fields__unit[hidden] {
+  display: none;
+}
+
+.password-toggle-btn {
+  position: absolute;
+  right: 6px;
+  display: flex;
+  width: 36px;
+  height: 36px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-xs);
+  background-color: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.password-toggle-btn:disabled {
+  color: var(--color-text-mute);
+  cursor: default;
+}
+
+.password-toggle-btn:not(:disabled):is(:hover, :active) {
+  background-color: var(--color-overlay);
+}
+
+.password-icon {
+  width: 24px;
+  height: 24px;
+  fill: var(--color-text-secondary);
+}

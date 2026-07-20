@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Followup Setup</title>
+  </head>
+  <body>
+    <main role="main" aria-label="Followup Setup">
+      <div id="followupLogo" class="followup-logo" aria-hidden="true"></div>
+
+      <div class="connected-components">
+        <ui-network-status id="wifiStatusCard"></ui-network-status>
+
+        <ui-bottom-sheet
+          id="wifiSettingsSheet"
+          title="WiFi Settings"
+          description="Scan for available networks and connect your Followup to WiFi."
+        >
+          <ui-icon-button
+            id="wifiSettingsCloseBtn"
+            slot="header-actions"
+            variant="ghost"
+            aria-label="Close WiFi Settings"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M6.7 5.3 12 10.6l5.3-5.3 1.4 1.4L13.4 12l5.3 5.3-1.4 1.4L12 13.4l-5.3 5.3-1.4-1.4L10.6 12 5.3 6.7Z" />
+            </svg>
+          </ui-icon-button>
+
+          <div
+            id="wifiSettingsNotification"
+            class="wifi-sheet-notification"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            hidden
+          ></div>
+
+          <ui-network-list id="networkList"></ui-network-list>
+
+          <div class="wifi-connection-form">
+            <ui-input
+              id="password"
+              variant="password"
+              label="WiFi Password"
+              placeholder="Enter network password"
+              autocomplete="off"
+            ></ui-input>
+          </div>
+
+          <ui-button
+            slot="footer"
+            id="scanBtn"
+            variant="secondary"
+          >
+            Scan Network
+          </ui-button>
+          <ui-button
+            slot="footer"
+            id="connectBtn"
+            variant="primary"
+          >
+            Connect
+          </ui-button>
+        </ui-bottom-sheet>
+
+        <ui-card id="geminiCard" title="Gemini API Key">
+            <ui-input
+              id="geminiApiKeyInput"
+              label="Gemini API Key"
+              placeholder="Enter Gemini API key"
+              autocomplete="off"
+              inputmode="text"
+            ></ui-input>
+
+            <ui-button
+              slot="footer"
+              id="geminiClearBtn"
+              variant="secondary"
+            >
+              Clear
+            </ui-button>
+            <ui-button
+              slot="footer"
+              id="geminiSaveBtn"
+              variant="primary"
+            >
+              Save
+            </ui-button>
+        </ui-card>
+
+        <ui-card id="timezoneLocationCard" title="Time Configuration">
+            <ui-select
+              id="timezoneSelect"
+              label="Timezone"
+              aria-label="Timezone"
+            >
+              <option value="">Select timezone</option>
+            </ui-select>
+
+            <div class="form-control-row">
+              <ui-input
+                id="manualTimeInput"
+                variant="time"
+                label="Time"
+              ></ui-input>
+
+              <ui-input
+                id="manualDateInput"
+                variant="date"
+                label="Current Date"
+              ></ui-input>
+            </div>
+
+            <p class="form-helper-text">
+              Set the time zone and location first to sync the current local time. You can also
+              set the date and time manually if needed.
+            </p>
+
+            <ui-button
+              slot="footer"
+              id="timezoneLocationClearBtn"
+              variant="secondary"
+            >
+              Clear
+            </ui-button>
+            <ui-button
+              slot="footer"
+              id="timezoneLocationSaveBtn"
+              variant="primary"
+            >
+              Save
+            </ui-button>
+        </ui-card>
+      </div>
+    </main>
+
+    <ui-toast
+      id="statusToast"
+      aria-label="Status notification"
+    ></ui-toast>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

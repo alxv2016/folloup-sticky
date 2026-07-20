@@ -1,0 +1,108 @@
+:host {
+  display: inline-flex;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  vertical-align: middle;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+button {
+  all: unset;
+  box-sizing: border-box;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: var(--border-01) solid transparent;
+  border-radius: var(--button-radius);
+  background-color: var(--color-text-secondary);
+  color: var(--color-text-inverse);
+  cursor: pointer;
+}
+
+button:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+
+button:disabled {
+  background-color: var(--color-bg-mute);
+  color: var(--color-text-mute);
+  cursor: default;
+}
+
+:host([variant="primary"]) button {
+  background-color: var(--color-bg-brand);
+  color: var(--color-text-inverse);
+}
+
+:host([variant="primary"]) button:not(:disabled):is(:hover, :active) {
+  background-color: var(--color-bg-brand-hover);
+}
+
+:host([variant="secondary"]) button {
+  background-color: var(--color-bg-active);
+  color: var(--color-fg-active);
+}
+
+:host([variant="secondary"]) button:not(:disabled):is(:hover, :active) {
+  background-color: var(--color-bg-active);
+  color: var(--color-fg-active);
+}
+
+:host([variant="outline"]) button {
+  background-color: transparent;
+  border-color: var(--color-border);
+  color: var(--color-text-secondary);
+}
+
+:host([variant="outline"]) button:not(:disabled):is(:hover, :active) {
+  background-color: var(--color-border);
+  border-color: var(--color-border);
+}
+
+:host([variant="ghost"]) button {
+  background-color: transparent;
+  border-color: transparent;
+  color: var(--color-text-secondary);
+}
+
+:host([variant="ghost"]) button:not(:disabled):is(:hover, :active) {
+  background-color: var(--color-overlay);
+}
+
+:host([inverse]) button {
+  color: var(--color-text-inverse);
+}
+
+:host([variant="outline"][inverse]) button {
+  border-color: var(--color-text-inverse);
+}
+
+:host([variant="outline"][inverse]) button:not(:disabled):is(:hover, :active),
+:host([variant="ghost"][inverse]) button:not(:disabled):is(:hover, :active) {
+  background-color: var(--color-overlay);
+  border-color: var(--color-text-inverse);
+}
+
+:host([rounded]) button {
+  border-radius: var(--radius-full);
+}
+
+::slotted(svg) {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  fill: currentColor;
+}

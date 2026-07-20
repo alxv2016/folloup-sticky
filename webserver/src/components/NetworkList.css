@@ -1,0 +1,112 @@
+:host {
+  display: block;
+  width: 100%;
+}
+
+:host([hidden]) {
+  display: none;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+ol,
+ul,
+menu,
+summary {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+p {
+  margin: 0;
+}
+
+.networks {
+  position: relative;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  margin-bottom: var(--spacing-lg);
+}
+
+.networks__list {
+  position: relative;
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  height: 320px;
+  overflow-y: auto;
+  border: var(--border-01) solid var(--color-border);
+  padding: var(--spacing-xs);
+  border-radius: var(--radius-lg);
+}
+
+.networks__list:focus {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.networks__list-empty-state {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-heading);
+}
+
+.wifi-find-icon {
+  width: 64px;
+  height: 64px;
+  fill: var(--color-text-mute);
+}
+
+.networks__item {
+  position: relative;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  padding: var(--spacing-sm) var(--spacing-xs);
+  border: var(--border-01) solid transparent;
+  min-height: 32px;
+  font-size: var(--font-size-label);
+  justify-content: space-between;
+  border-radius: var(--radius-xs);
+}
+
+.networks__item-ssid {
+  font-weight: var(--font-weight-semibold);
+}
+
+.networks__item-details {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+}
+
+.networks__item ~ .networks__item {
+  border-top: var(--border-01) solid var(--color-bg-selected);
+}
+
+.networks__item[aria-selected="true"] {
+  background-color: var(--color-bg-active);
+  outline: var(--focus-ring-width) solid var(--color-fg-active);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.wifi-security-icon,
+.wifi-signal-icon,
+.wifi-connected-icon {
+  width: 16px;
+  height: 16px;
+  fill: var(--color-text-secondary);
+}

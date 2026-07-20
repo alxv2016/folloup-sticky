@@ -1,0 +1,106 @@
+:host {
+  display: block;
+  width: 100%;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+input,
+textarea {
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  -webkit-user-select: auto;
+}
+
+.form-control {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.form-control label {
+  font-size: var(--font-size-label);
+  font-weight: var(--font-weight-regular);
+  margin-bottom: var(--spacing-xs);
+}
+
+.range-slider {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.range-slider__range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 34px;
+  border-radius: var(--radius-full);
+  background: var(--color-bg-input);
+  outline: none;
+}
+
+.range-slider__range:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.range-slider__range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--color-bg);
+  border: var(--border-03) solid var(--color-bg-brand);
+  box-shadow: 0px 2px 6px -2px rgba(32, 32, 32, 0.4);
+  cursor: pointer;
+  transition: background 0.15s ease-in-out;
+}
+
+.range-slider__range::-webkit-slider-thumb:hover {
+  background: var(--color-bg);
+}
+
+.range-slider__range:active::-webkit-slider-thumb {
+  background: var(--color-bg);
+}
+
+.range-slider__range::-moz-range-thumb {
+  width: 30px;
+  height: 30px;
+  border: var(--border-03) solid var(--color-bg-brand);
+  border-radius: 50%;
+  background: var(--color-bg);
+  box-shadow: 0px 2px 6px -2px rgba(32, 32, 32, 0.4);
+  cursor: pointer;
+  transition: background 0.15s ease-in-out;
+}
+
+.range-slider__range::-moz-range-thumb:hover {
+  background: var(--color-bg);
+}
+
+.range-slider__range:active::-moz-range-thumb {
+  background: var(--color-bg);
+}
+
+.range-slider__value {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 48px;
+  height: 28px;
+  font-size: var(--font-size-label);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-inverse);
+  background: var(--color-bg-brand);
+  border-radius: var(--radius-md);
+}

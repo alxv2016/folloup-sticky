@@ -1,0 +1,91 @@
+:host {
+  display: block;
+  width: 100%;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+.form-control {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.switch-container {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.switch-label {
+  font-size: var(--font-size-label);
+  font-weight: var(--font-weight-medium);
+  flex-shrink: 0;
+}
+
+button {
+  all: unset;
+  box-sizing: border-box;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  width: 62px;
+  height: 34px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-full);
+  background-color: var(--color-bg-input);
+  color: inherit;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.switch-label[hidden] {
+  display: none;
+}
+
+button[data-checked] {
+  background-color: var(--color-bg-brand);
+}
+
+button::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  opacity: 0;
+  box-shadow: 0 0 0 var(--focus-ring-width) currentColor;
+  transition: opacity 0.2s ease;
+}
+
+button:focus-visible::before {
+  opacity: 0.35;
+}
+
+.knob {
+  position: absolute;
+  left: 2px;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-full);
+  background-color: var(--color-fg-knob-off);
+  box-shadow: 0 2px 6px -2px rgba(32, 32, 32, 0.4);
+  transition:
+    transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275),
+    background-color 0.2s ease;
+}
+
+button[data-checked] .knob {
+  background-color: var(--color-fg-knob-on);
+}

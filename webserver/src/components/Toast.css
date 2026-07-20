@@ -1,0 +1,85 @@
+:host {
+  display: contents;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+.toast-dialog {
+  position: fixed;
+  left: 50%;
+  bottom: var(--spacing-4xl);
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  width: min(50vw, calc(100vw - 2rem));
+  max-width: calc(100vw - 2rem);
+  pointer-events: none;
+  z-index: 30;
+}
+
+.toast-dialog[open] {
+  display: block;
+  animation: toast-dialog-fade 2.6s ease forwards;
+}
+
+.toast-dialog::backdrop {
+  display: none;
+}
+
+.toast-dialog__message {
+  margin: 0;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: var(--spacing-sm) var(--spacing-lg);
+  min-height: 44px;
+  overflow: hidden;
+  border: var(--border-01) solid var(--color-meter-green);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-active);
+  color: var(--color-text);
+  box-shadow: 0 0.5rem 1.25rem var(--color-overlay);
+  font-size: var(--font-size-label);
+  line-height: 1.25;
+  text-align: center;
+  text-overflow: ellipsis;
+}
+
+.toast-dialog[data-status='error'] .toast-dialog__message,
+.toast-dialog[data-status='danger'] .toast-dialog__message {
+  border-color: var(--color-text-danger);
+  background: var(--color-bg-danger);
+  color: var(--color-text-danger);
+}
+
+.toast-dialog[data-status='warning'] .toast-dialog__message {
+  border-color: var(--color-meter-yellow);
+  background: var(--color-bg-selected);
+  color: var(--color-text-warning);
+}
+
+@keyframes toast-dialog-fade {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 0.75rem);
+  }
+
+  12%,
+  78% {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -0.25rem);
+  }
+}

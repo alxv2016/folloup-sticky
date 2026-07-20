@@ -1,0 +1,118 @@
+:host {
+  display: block;
+  width: 100%;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+input,
+textarea {
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  -webkit-user-select: auto;
+}
+
+p {
+  margin: 0;
+}
+
+.form-control {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.form-control label {
+  font-size: var(--font-size-label);
+  font-weight: var(--font-weight-regular);
+  margin-bottom: var(--spacing-xs);
+}
+
+.form-control__input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: var(--spacing-sm);
+}
+
+.form-control__input-wrapper input {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  border: var(--border-01) solid var(--color-border);
+  min-height: 44px;
+  padding: var(--spacing-sm);
+  border-radius: var(--input-radius);
+  background-color: var(--color-bg-input);
+  color: var(--color-text);
+  font-size: var(--font-size-label);
+}
+
+.form-control__input-wrapper input:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.form-control__input-wrapper input::file-selector-button {
+  background-color: transparent;
+  border: var(--border-01) solid var(--color-border);
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  border-radius: var(--radius-sm);
+  min-height: 24px;
+  font-size: var(--font-size-label);
+  padding: var(--spacing-xs) var(--spacing-md);
+  margin-right: var(--spacing-md);
+}
+
+.progress-bar {
+  position: relative;
+  width: 100%;
+}
+
+.progress-bar[hidden] {
+  display: none;
+}
+
+.progress-bar progress[value] {
+  -webkit-appearance: none;
+  appearance: none;
+  border: none;
+  width: 100%;
+  height: 12px;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  margin-top: var(--spacing-sm);
+}
+
+.progress-bar progress[value]::-webkit-progress-bar {
+  background-color: var(--color-bg-active);
+  border-radius: var(--radius-lg);
+}
+
+.progress-bar progress[value]::-webkit-progress-value {
+  background-color: var(--color-meter-green);
+  border-radius: var(--radius-lg);
+}
+
+.progress-bar__message {
+  font-size: var(--font-size-label);
+  line-height: 1.25;
+  color: var(--color-text-secondary);
+  margin-top: var(--spacing-xs);
+}
+
+.form-helper-text {
+  margin-top: var(--spacing-lg);
+  font-size: var(--font-size-caption);
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+}
