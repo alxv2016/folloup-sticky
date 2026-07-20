@@ -43,6 +43,10 @@ DetailsPageSource SourcePage();
 void RequestBack();
 bool ConsumePendingBack();
 
+// Re-run transcription on the current audio-only recording (reuses the live transcription pipeline
+// on a dedicated worker). Safe to call from the input/touch task.
+void RequestTranscribe();
+
 // Leave the entered scroll container (DOWN double-click). Returns true if it was active.
 bool ExitActiveControl();
 

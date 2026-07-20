@@ -30,6 +30,13 @@ ActivateResult HandlePrimaryActivate(DetailsPageCoordinator& coordinator)
         return result;
     }
 
+    if (coordinator.IsRoleFocused(NavigationItemRole::kDetailsPageTranscribeButton)) {
+        result.intent = ActivateIntent::kTranscribe;
+        result.handled = true;
+        result.play_activate_cue = true;
+        return result;
+    }
+
     result.handled = true;
     result.play_activate_cue = true;
     if (coordinator.IsRoleFocused(NavigationItemRole::kFooterHome)) {
@@ -73,6 +80,11 @@ void ApplyPrimaryActivateResult(const ActivateResult& result, const ActivateCall
         case ActivateIntent::kShowPreviousPage:
             if (callbacks.show_previous_page) {
                 callbacks.show_previous_page();
+            }
+            break;
+        case ActivateIntent::kTranscribe:
+            if (callbacks.transcribe) {
+                callbacks.transcribe();
             }
             break;
         case ActivateIntent::kNone:

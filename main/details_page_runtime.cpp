@@ -2,12 +2,18 @@
 
 #include <atomic>
 #include <climits>
+#include <memory>
 #include <mutex>
+#include <string>
 
 #include "epaper_ui/details_page.h"
 #include "esp_log.h"
+#include "followup_task_config.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "page_navigation/page_focus_projection.h"
 #include "recording_archive_service.h"
+#include "recording_session_service.h"
 #include "ui_refresh_runtime.h"
 
 namespace details_page_runtime {
@@ -19,6 +25,22 @@ std::mutex s_mutex;
 DetailsPageCoordinator s_coordinator = {};
 int32_t s_interaction_generation = 1;
 std::atomic<bool> s_pending_back{false};
+
+// Re-transcription runs on a short-lived worker: reloading the WAV and starting the pipeline is far
+// too stack-heavy for the input/touch task that dispatches the tap. The flag serializes it to one
+// at a time (BeginArchivedTranscription also refuses to start over an in-flight request).
+constexpr uint32_t kTranscribeWorkerStackWords = 8192;
+std::atomic<bool> s_transcribe_worker_active{false};
+
+void TranscribeWorker(void* arg)
+{
+    std::unique_ptr<std::string> recording_id(static_cast<std::string*>(arg));
+    if (recording_id != nullptr) {
+        (void)recording_session_service::BeginArchivedTranscription(*recording_id);
+    }
+    s_transcribe_worker_active.store(false, std::memory_order_release);
+    vTaskDelete(nullptr);
+}
 
 void AdvanceInteractionGenerationLocked()
 {
@@ -167,6 +189,17 @@ bool ResolveTouchTarget(int x, int y, app_interaction::InteractiveTarget* target
         }
         return true;
     }
+    if (epaper_ui::HitTestDetailsTranscribeButton(portrait_width, portrait_height, state, x, y)) {
+        if (target != nullptr) {
+            *target = {
+                .owner = app_interaction::Owner::kPage,
+                .kind = app_interaction::Kind::kPageAction,  // Transcribe button
+                .primary_index = 1,
+                .secondary_index = generation,
+            };
+        }
+        return true;
+    }
     if (epaper_ui::HitTestDetailsScrollContainer(portrait_width, portrait_height, state, x, y)) {
         if (target != nullptr) {
             *target = {
@@ -199,7 +232,9 @@ page_actions::FocusUpdateOutcome FocusTouchTarget(const app_interaction::Interac
         if (target.kind == app_interaction::Kind::kPageComposite) {
             role = page_navigation::NavigationItemRole::kDetailsPageScrollContainer;
         } else if (target.kind == app_interaction::Kind::kPageAction) {
-            role = page_navigation::NavigationItemRole::kDetailsPageBackButton;
+            role = target.primary_index == 1
+                       ? page_navigation::NavigationItemRole::kDetailsPageTranscribeButton
+                       : page_navigation::NavigationItemRole::kDetailsPageBackButton;
             s_coordinator.ExitScrollContainer();
         } else {
             return result;
@@ -229,7 +264,9 @@ details_page_interactions::ActivateResult ActivateTouchTarget(
     if (target.kind == app_interaction::Kind::kPageComposite) {
         role = page_navigation::NavigationItemRole::kDetailsPageScrollContainer;
     } else if (target.kind == app_interaction::Kind::kPageAction) {
-        role = page_navigation::NavigationItemRole::kDetailsPageBackButton;
+        role = target.primary_index == 1
+                   ? page_navigation::NavigationItemRole::kDetailsPageTranscribeButton
+                   : page_navigation::NavigationItemRole::kDetailsPageBackButton;
     } else {
         return result;
     }
@@ -321,6 +358,34 @@ void RequestBack()
 bool ConsumePendingBack()
 {
     return s_pending_back.exchange(false, std::memory_order_relaxed);
+}
+
+void RequestTranscribe()
+{
+    std::string recording_id;
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        recording_id = s_coordinator.recording_id();
+    }
+    if (recording_id.empty()) {
+        return;
+    }
+    // Serialize to one re-transcription at a time; kick it off on a dedicated worker (never on the
+    // input task that dispatched us). The worker reuses the live transcription pipeline, so the same
+    // toasts fire and the transcript is saved to SD; app_shell re-syncs this page on completion.
+    bool expected = false;
+    if (!s_transcribe_worker_active.compare_exchange_strong(expected, true,
+                                                            std::memory_order_acq_rel)) {
+        return;
+    }
+    auto* recording_id_arg = new std::string(std::move(recording_id));
+    const BaseType_t created = xTaskCreatePinnedToCore(
+        TranscribeWorker, "det_txcribe", kTranscribeWorkerStackWords, recording_id_arg,
+        followup_task_config::kPriorityGemini, nullptr, followup_task_config::kAppCore);
+    if (created != pdPASS) {
+        delete recording_id_arg;
+        s_transcribe_worker_active.store(false, std::memory_order_release);
+    }
 }
 
 bool ExitActiveControl()

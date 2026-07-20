@@ -16,6 +16,7 @@ enum class ActivateIntent : uint8_t {
     kShowWifi,
     kShowTime,
     kShowPreviousPage,
+    kTranscribe,
 };
 
 struct ActivateResult {
@@ -33,6 +34,7 @@ struct ActivateCallbacks {
     std::function<void()> show_wifi;
     std::function<void()> show_time;
     std::function<void()> show_previous_page;
+    std::function<void()> transcribe;
 };
 
 ActivateResult HandlePrimaryActivate(DetailsPageCoordinator& coordinator);

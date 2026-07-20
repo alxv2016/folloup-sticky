@@ -71,6 +71,7 @@ enum class NavigationItemRole : uint8_t {
     kFollowUpPageTimelineGroup,
     kDetailsPageScrollContainer,
     kDetailsPageBackButton,
+    kDetailsPageTranscribeButton,
     kOnboardingPageClose,
     kOnboardingPagePrev,
     kOnboardingPageNext,
@@ -101,7 +102,9 @@ NavigationModel BuildSummarizePageNavigationModel();
 NavigationModel BuildNotesPageNavigationModel(int timeline_group_count);
 NavigationModel BuildTodosPageNavigationModel(int timeline_group_count);
 NavigationModel BuildFollowUpPageNavigationModel(int timeline_group_count);
-NavigationModel BuildDetailsPageNavigationModel();
+// with_transcribe adds a focusable Transcribe button (shown only for audio-only recordings that
+// have no transcript yet); when false the page has just the Back button.
+NavigationModel BuildDetailsPageNavigationModel(bool with_transcribe = false);
 NavigationModel BuildOnboardingPageNavigationModel();
 
 }  // namespace page_navigation

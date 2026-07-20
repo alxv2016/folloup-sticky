@@ -49,6 +49,9 @@ private:
         const std::vector<recording_archive_service::RecordingEntry>& recordings) const;
     void ApplyEntry(const recording_archive_service::RecordingEntry& entry);
     void ResetScrollPosition() { scroll_position_percent_ = 0; }
+    // Rebuilds the navigation model to add/drop the Transcribe button as has_transcript_ changes,
+    // re-homing focus on the scroll container when the set of controls changes.
+    void UpdateNavigationModel();
 
     page_navigation::NavigationModel navigation_model_ =
         page_navigation::BuildDetailsPageNavigationModel();

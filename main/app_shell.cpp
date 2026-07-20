@@ -1649,6 +1649,11 @@ void HandleRecordingArchiveEvent(const recording_archive_service::Event&, void*)
         case display_service::ScreenId::kSummarize:
             page_err = summarize_page_runtime::SyncFromService(true);
             break;
+        case display_service::ScreenId::kDetails:
+            // Re-sync so a just-finished transcription replaces the empty state (and drops the
+            // Transcribe button) without leaving the page.
+            page_err = details_page_runtime::SyncFromArchive(true);
+            break;
         default:
             break;
     }

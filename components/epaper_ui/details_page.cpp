@@ -13,6 +13,7 @@ constexpr int kHeadingHeaderGap = design::spacing::k16;
 constexpr int kHeaderScrollGap = design::spacing::k16;
 constexpr int kScrollButtonGap = design::spacing::k16;
 constexpr int kButtonFooterGap = design::spacing::k16;
+constexpr int kButtonGap = design::spacing::k16;
 constexpr auto kHeadingRole = design::TypographyRole::kHeadingH1;
 
 int PageWidth(int portrait_width)
@@ -41,12 +42,11 @@ ScrollContainerStyle ScrollStyle(int width, int panel_height)
     return style;
 }
 
-ButtonStyle BackButtonStyle(int width)
+ButtonStyle MakeButtonStyle(int width, ButtonVariant variant)
 {
     ButtonStyle style = {};
     style.width = width;
-    // Sole action on the page -> primary (darker) variant.
-    style.variant = ButtonVariant::kPrimary;
+    style.variant = variant;
     return style;
 }
 
@@ -54,11 +54,12 @@ struct Layout {
     UiRect heading = {};
     UiRect header = {};
     UiRect scroll = {};
-    UiRect button = {};
+    UiRect back_button = {};
+    UiRect transcribe_button = {};
     int scroll_panel_height = 0;
 };
 
-Layout BuildLayout(int portrait_width, int portrait_height)
+Layout BuildLayout(int portrait_width, int portrait_height, bool show_transcribe)
 {
     const int page_width = PageWidth(portrait_width);
     const int content_top = StatusBarHeight() + kContentTopGap;
@@ -74,7 +75,16 @@ Layout BuildLayout(int portrait_width, int portrait_height)
     const int button_top = std::max(scroll_top, footer_top - kButtonFooterGap - button_height);
     layout.scroll_panel_height = std::max(0, button_top - scroll_top - kScrollButtonGap);
     layout.scroll = {kMargin, scroll_top, page_width, layout.scroll_panel_height};
-    layout.button = {kMargin, button_top, page_width, button_height};
+    if (show_transcribe) {
+        // Back (secondary) on the left, Transcribe (primary) on the right, split evenly.
+        const int half_width = std::max(0, (page_width - kButtonGap) / 2);
+        layout.back_button = {kMargin, button_top, half_width, button_height};
+        const int right_x = kMargin + half_width + kButtonGap;
+        layout.transcribe_button = {right_x, button_top,
+                                    std::max(0, portrait_width - kMargin - right_x), button_height};
+    } else {
+        layout.back_button = {kMargin, button_top, page_width, button_height};
+    }
     return layout;
 }
 
@@ -82,22 +92,38 @@ Layout BuildLayout(int portrait_width, int portrait_height)
 
 bool HitTestDetailsScrollContainer(int portrait_width,
                                    int portrait_height,
-                                   const DetailsPageState&,
+                                   const DetailsPageState& state,
                                    int x,
                                    int y)
 {
-    const Layout layout = BuildLayout(portrait_width, portrait_height);
+    const Layout layout =
+        BuildLayout(portrait_width, portrait_height, state.show_transcribe_button);
     return !layout.scroll.IsEmpty() && layout.scroll.Contains(x, y);
 }
 
 bool HitTestDetailsBackButton(int portrait_width,
                               int portrait_height,
-                              const DetailsPageState&,
+                              const DetailsPageState& state,
                               int x,
                               int y)
 {
-    const Layout layout = BuildLayout(portrait_width, portrait_height);
-    return !layout.button.IsEmpty() && layout.button.Contains(x, y);
+    const Layout layout =
+        BuildLayout(portrait_width, portrait_height, state.show_transcribe_button);
+    return !layout.back_button.IsEmpty() && layout.back_button.Contains(x, y);
+}
+
+bool HitTestDetailsTranscribeButton(int portrait_width,
+                                    int portrait_height,
+                                    const DetailsPageState& state,
+                                    int x,
+                                    int y)
+{
+    if (!state.show_transcribe_button) {
+        return false;
+    }
+    const Layout layout =
+        BuildLayout(portrait_width, portrait_height, state.show_transcribe_button);
+    return !layout.transcribe_button.IsEmpty() && layout.transcribe_button.Contains(x, y);
 }
 
 void DrawDetailsPage(uint8_t* framebuffer,
@@ -119,7 +145,8 @@ void DrawDetailsPage(uint8_t* framebuffer,
                   status_bar_state);
 
     const int page_width = PageWidth(portrait_width);
-    const Layout layout = BuildLayout(portrait_width, portrait_height);
+    const Layout layout =
+        BuildLayout(portrait_width, portrait_height, state.show_transcribe_button);
 
     if (!state.title_text.empty()) {
         DrawTypographyText(framebuffer, raw_width, raw_height, portrait_width, portrait_height,
@@ -135,8 +162,18 @@ void DrawDetailsPage(uint8_t* framebuffer,
                         layout.scroll.x, layout.scroll.y, state.scroll_container,
                         ScrollStyle(page_width, layout.scroll_panel_height));
 
-    DrawButton(framebuffer, raw_width, raw_height, portrait_width, portrait_height, layout.button.x,
-               layout.button.y, state.back_button, BackButtonStyle(page_width));
+    // When Transcribe is shown, Back drops to the secondary (kDefault) variant; alone it stays the
+    // sole primary action.
+    const ButtonVariant back_variant =
+        state.show_transcribe_button ? ButtonVariant::kDefault : ButtonVariant::kPrimary;
+    DrawButton(framebuffer, raw_width, raw_height, portrait_width, portrait_height,
+               layout.back_button.x, layout.back_button.y, state.back_button,
+               MakeButtonStyle(layout.back_button.width, back_variant));
+    if (state.show_transcribe_button) {
+        DrawButton(framebuffer, raw_width, raw_height, portrait_width, portrait_height,
+                   layout.transcribe_button.x, layout.transcribe_button.y, state.transcribe_button,
+                   MakeButtonStyle(layout.transcribe_button.width, ButtonVariant::kPrimary));
+    }
 
     DrawGlobalFooter(framebuffer, raw_width, raw_height, portrait_width, portrait_height,
                      footer_state);

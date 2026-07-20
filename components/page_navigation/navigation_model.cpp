@@ -248,7 +248,7 @@ NavigationModel BuildOnboardingPageNavigationModel()
     return model;
 }
 
-NavigationModel BuildDetailsPageNavigationModel()
+NavigationModel BuildDetailsPageNavigationModel(bool with_transcribe)
 {
     NavigationModel model = {};
     model.scope = NavigationScope::kDetails;
@@ -257,6 +257,11 @@ NavigationModel BuildDetailsPageNavigationModel()
             NavigationItemRole::kDetailsPageScrollContainer, 0);
     AddItem(model, NavigationItemSection::kDetailsPageControls,
             NavigationItemRole::kDetailsPageBackButton, 1);
+    // Audio-only recordings (no transcript yet) gain a Transcribe button to the right of Back.
+    if (with_transcribe) {
+        AddItem(model, NavigationItemSection::kDetailsPageControls,
+                NavigationItemRole::kDetailsPageTranscribeButton, 2);
+    }
     AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterSettings, 1);
     AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterWifi, 2);
     AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterTime, 3);

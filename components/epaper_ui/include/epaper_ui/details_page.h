@@ -19,6 +19,10 @@ struct DetailsPageState {
     ListItemHeaderState recording_header = {};
     ScrollContainerState scroll_container = {};
     ButtonState back_button = {};
+    // Audio-only recordings (no transcript yet) show a primary Transcribe button beside a secondary
+    // Back button; otherwise Back is the sole, full-width primary action.
+    bool show_transcribe_button = false;
+    ButtonState transcribe_button = {};
 
     bool operator==(const DetailsPageState& other) const = default;
 };
@@ -33,6 +37,11 @@ bool HitTestDetailsBackButton(int portrait_width,
                               const DetailsPageState& state,
                               int x,
                               int y);
+bool HitTestDetailsTranscribeButton(int portrait_width,
+                                    int portrait_height,
+                                    const DetailsPageState& state,
+                                    int x,
+                                    int y);
 void DrawDetailsPage(uint8_t* framebuffer,
                      int raw_width,
                      int raw_height,
