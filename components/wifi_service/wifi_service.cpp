@@ -1,6 +1,7 @@
 #include "wifi_service.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -21,6 +22,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "lwip/sockets.h"
 #include "nvs.h"
 #include "sdkconfig.h"
 
@@ -388,8 +390,11 @@ void UpdateAccessPointIdentity()
     s_ap_url = kApUrl;
 }
 
+void StopCaptiveDns();  // defined below, near the captive-portal handlers
+
 void StopConfigPortal()
 {
+    StopCaptiveDns();
     if (s_portal_server == nullptr) {
         return;
     }
@@ -556,6 +561,127 @@ esp_err_t RegisterRoute(httpd_handle_t server, const httpd_uri_t* handler)
                  esp_err_to_name(err));
     }
     return err;
+}
+
+// --- Captive portal --------------------------------------------------------------------------
+// A minimal DNS server answers every query with the AP IP (192.168.4.1), and an httpd 404 handler
+// 302-redirects any unrecognised request (OS connectivity probes, unknown hosts) to the portal.
+// Together these make phones/laptops auto-pop the "Sign in to network" browser on join, instead of
+// the user having to type the IP.
+
+constexpr uint16_t kCaptiveDnsPort = 53;
+constexpr const char* kApRedirectUrl = "http://192.168.4.1/";
+
+TaskHandle_t s_dns_task = nullptr;
+int s_dns_socket = -1;
+std::atomic<bool> s_dns_stop{false};
+
+void CaptiveDnsTask(void*)
+{
+    uint8_t rx[512];
+    uint8_t tx[512];
+    while (!s_dns_stop.load(std::memory_order_relaxed)) {
+        sockaddr_in client = {};
+        socklen_t client_len = sizeof(client);
+        const int len = recvfrom(s_dns_socket, rx, sizeof(rx), 0,
+                                 reinterpret_cast<sockaddr*>(&client), &client_len);
+        if (len < 12) {
+            continue;  // recv timeout (SO_RCVTIMEO) or a malformed/too-short query
+        }
+
+        // Walk the first question's QNAME so we know where to append the answer record.
+        int question_end = 12;
+        while (question_end < len && rx[question_end] != 0) {
+            question_end += rx[question_end] + 1;
+        }
+        question_end += 1 + 4;  // terminating zero label + QTYPE + QCLASS
+        if (question_end > len || question_end + 16 > static_cast<int>(sizeof(tx))) {
+            continue;
+        }
+
+        memcpy(tx, rx, question_end);  // reuse the request header + question
+        tx[2] = 0x81;                  // QR=1, opcode=0, RD=1
+        tx[3] = 0x80;                  // RA=1, RCODE=0
+        tx[6] = 0x00;
+        tx[7] = 0x01;  // ANCOUNT = 1
+        tx[8] = 0x00;
+        tx[9] = 0x00;  // NSCOUNT = 0
+        tx[10] = 0x00;
+        tx[11] = 0x00;  // ARCOUNT = 0
+
+        int p = question_end;
+        tx[p++] = 0xC0;  // NAME = pointer...
+        tx[p++] = 0x0C;  // ...to offset 12 (the question name)
+        tx[p++] = 0x00;
+        tx[p++] = 0x01;  // TYPE A
+        tx[p++] = 0x00;
+        tx[p++] = 0x01;  // CLASS IN
+        tx[p++] = 0x00;
+        tx[p++] = 0x00;
+        tx[p++] = 0x00;
+        tx[p++] = 0x3C;  // TTL = 60s
+        tx[p++] = 0x00;
+        tx[p++] = 0x04;  // RDLENGTH = 4
+        tx[p++] = 192;
+        tx[p++] = 168;
+        tx[p++] = 4;
+        tx[p++] = 1;  // RDATA = 192.168.4.1
+
+        sendto(s_dns_socket, tx, p, 0, reinterpret_cast<sockaddr*>(&client), client_len);
+    }
+
+    if (s_dns_socket >= 0) {
+        close(s_dns_socket);
+        s_dns_socket = -1;
+    }
+    s_dns_task = nullptr;
+    vTaskDelete(nullptr);
+}
+
+void StartCaptiveDns()
+{
+    if (s_dns_task != nullptr) {
+        return;
+    }
+    s_dns_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (s_dns_socket < 0) {
+        ESP_LOGW(kTag, "Captive DNS socket create failed");
+        return;
+    }
+    sockaddr_in addr = {};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(kCaptiveDnsPort);
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (bind(s_dns_socket, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
+        ESP_LOGW(kTag, "Captive DNS bind failed");
+        close(s_dns_socket);
+        s_dns_socket = -1;
+        return;
+    }
+    timeval tv = {};
+    tv.tv_sec = 1;  // wake periodically so the stop flag is observed promptly
+    setsockopt(s_dns_socket, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    s_dns_stop.store(false, std::memory_order_relaxed);
+    if (xTaskCreate(CaptiveDnsTask, "captive_dns", 3072, nullptr, 5, &s_dns_task) != pdPASS) {
+        ESP_LOGW(kTag, "Captive DNS task create failed");
+        close(s_dns_socket);
+        s_dns_socket = -1;
+        s_dns_task = nullptr;
+    }
+}
+
+void StopCaptiveDns()
+{
+    // The task observes the flag on its next recv timeout (~1s), closes the socket, and self-deletes.
+    s_dns_stop.store(true, std::memory_order_relaxed);
+}
+
+esp_err_t HandleCaptivePortalRedirect(httpd_req_t* request, httpd_err_code_t)
+{
+    httpd_resp_set_status(request, "302 Found");
+    httpd_resp_set_hdr(request, "Location", kApRedirectUrl);
+    return httpd_resp_send(request, "", 0);
 }
 
 esp_err_t SendEmbeddedAsset(httpd_req_t* request, const uint8_t* start, const uint8_t* end,
@@ -777,6 +903,11 @@ void StartConfigPortal()
         StopConfigPortal();
         return;
     }
+
+    // Make it a real captive portal: redirect any unrecognised request (OS connectivity probes,
+    // unknown hosts resolved to us by the DNS server below) to the portal root.
+    httpd_register_err_handler(s_portal_server, HTTPD_404_NOT_FOUND, HandleCaptivePortalRedirect);
+    StartCaptiveDns();
 
     PortalRouteRegistrar registrar = nullptr;
     void* context = nullptr;
