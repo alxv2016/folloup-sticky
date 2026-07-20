@@ -417,32 +417,26 @@ esp_err_t ShowFieldKeyboard(page_navigation::NavigationItemRole field)
     {
         std::lock_guard<std::mutex> lock(s_mutex);
         std::string value = {};
-        const char* title = "";
         size_t max_length = 2;
         switch (field) {
             case page_navigation::NavigationItemRole::kTimePageHour:
                 value = s_coordinator.hour();
-                title = "Hour";
                 max_length = 2;
                 break;
             case page_navigation::NavigationItemRole::kTimePageMinute:
                 value = s_coordinator.minute();
-                title = "Minute";
                 max_length = 2;
                 break;
             case page_navigation::NavigationItemRole::kTimePageMonth:
                 value = s_coordinator.month();
-                title = "Month";
                 max_length = 2;
                 break;
             case page_navigation::NavigationItemRole::kTimePageDay:
                 value = s_coordinator.day();
-                title = "Day";
                 max_length = 2;
                 break;
             case page_navigation::NavigationItemRole::kTimePageYear:
                 value = s_coordinator.year();
-                title = "Year";
                 max_length = 4;
                 break;
             default:
@@ -450,7 +444,6 @@ esp_err_t ShowFieldKeyboard(page_navigation::NavigationItemRole field)
         }
         s_editing_field = field;
         keyboard_state.visible = true;
-        keyboard_state.title_text = title;
         keyboard_state.input.value_text = value;
         keyboard_state.input.max_length = max_length;
         keyboard_state.input.focused = true;

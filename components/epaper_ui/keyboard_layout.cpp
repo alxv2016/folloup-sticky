@@ -28,9 +28,9 @@ constexpr KeyboardKeySpec kLettersLowerRow3[] = {
     {.kind = KeyboardKeyKind::kBackspace, .label = "Bksp", .width_units = 3},
 };
 constexpr KeyboardKeySpec kLettersLowerRow4[] = {
-    {.kind = KeyboardKeyKind::kMode123, .label = "123", .width_units = 3},
-    {.kind = KeyboardKeyKind::kSpace, .label = "Space", .width_units = 14},
-    {.kind = KeyboardKeyKind::kEnter, .label = "Done", .width_units = 3},
+    {.kind = KeyboardKeyKind::kMode123, .label = "123", .width_units = 5},
+    {.kind = KeyboardKeyKind::kSpace, .label = "Space", .width_units = 10},
+    {.kind = KeyboardKeyKind::kEnter, .label = "Done", .width_units = 5},
 };
 constexpr KeyboardRowSpec kLettersLowerRows[] = {
     {kLettersLowerRow1, std::size(kLettersLowerRow1)},
@@ -62,9 +62,9 @@ constexpr KeyboardKeySpec kLettersUpperRow3[] = {
     {.kind = KeyboardKeyKind::kBackspace, .label = "Bksp", .width_units = 3},
 };
 constexpr KeyboardKeySpec kLettersUpperRow4[] = {
-    {.kind = KeyboardKeyKind::kMode123, .label = "123", .width_units = 3},
-    {.kind = KeyboardKeyKind::kSpace, .label = "Space", .width_units = 14},
-    {.kind = KeyboardKeyKind::kEnter, .label = "Done", .width_units = 3},
+    {.kind = KeyboardKeyKind::kMode123, .label = "123", .width_units = 5},
+    {.kind = KeyboardKeyKind::kSpace, .label = "Space", .width_units = 10},
+    {.kind = KeyboardKeyKind::kEnter, .label = "Done", .width_units = 5},
 };
 constexpr KeyboardRowSpec kLettersUpperRows[] = {
     {kLettersUpperRow1, std::size(kLettersUpperRow1)},
@@ -96,9 +96,9 @@ constexpr KeyboardKeySpec kSymbolsRow3[] = {
     {.kind = KeyboardKeyKind::kBackspace, .label = "Bksp", .width_units = 3},
 };
 constexpr KeyboardKeySpec kSymbolsRow4[] = {
-    {.kind = KeyboardKeyKind::kModeAbc, .label = "ABC", .width_units = 3},
-    {.kind = KeyboardKeyKind::kSpace, .label = "Space", .width_units = 14},
-    {.kind = KeyboardKeyKind::kEnter, .label = "Done", .width_units = 3},
+    {.kind = KeyboardKeyKind::kModeAbc, .label = "ABC", .width_units = 5},
+    {.kind = KeyboardKeyKind::kSpace, .label = "Space", .width_units = 10},
+    {.kind = KeyboardKeyKind::kEnter, .label = "Done", .width_units = 5},
 };
 constexpr KeyboardRowSpec kSymbolsRows[] = {
     {kSymbolsRow1, std::size(kSymbolsRow1)},
@@ -131,9 +131,9 @@ constexpr KeyboardKeySpec kSymbols2Row3[] = {
     {.kind = KeyboardKeyKind::kBackspace, .label = "Bksp", .width_units = 3},
 };
 constexpr KeyboardKeySpec kSymbols2Row4[] = {
-    {.kind = KeyboardKeyKind::kModeAbc, .label = "ABC", .width_units = 3},
-    {.kind = KeyboardKeyKind::kSpace, .label = "Space", .width_units = 14},
-    {.kind = KeyboardKeyKind::kEnter, .label = "Done", .width_units = 3},
+    {.kind = KeyboardKeyKind::kModeAbc, .label = "ABC", .width_units = 5},
+    {.kind = KeyboardKeyKind::kSpace, .label = "Space", .width_units = 10},
+    {.kind = KeyboardKeyKind::kEnter, .label = "Done", .width_units = 5},
 };
 constexpr KeyboardRowSpec kSymbols2Rows[] = {
     {kSymbols2Row1, std::size(kSymbols2Row1)},

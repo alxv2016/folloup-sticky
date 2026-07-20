@@ -184,7 +184,6 @@ esp_err_t ShowPasswordKeyboardImpl()
     {
         std::lock_guard<std::mutex> lock(s_mutex);
         keyboard_state.visible = true;
-        keyboard_state.title_text = "WiFi Password";
         keyboard_state.input =
             epaper_ui::PasswordInputToKeyboardInput(s_coordinator.password_input_state());
         keyboard_state.input.focused = true;
