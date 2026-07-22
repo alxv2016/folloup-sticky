@@ -4,8 +4,8 @@
 #include <esp_heap_caps.h>
 
 #include <cstddef>
+#include <cstdlib>
 #include <limits>
-#include <new>
 #include <vector>
 
 template <typename T>
@@ -18,9 +18,11 @@ public:
     template <typename U>
     PsramAllocator(const PsramAllocator<U>&) noexcept {}
 
+    // The firmware builds with -fno-exceptions, so signal allocation failure with
+    // abort() (matching the recording service's PSRAM allocator) rather than throw.
     [[nodiscard]] T* allocate(std::size_t count) {
         if (count > std::numeric_limits<std::size_t>::max() / sizeof(T)) {
-            throw std::bad_alloc();
+            std::abort();
         }
 
         void* memory = heap_caps_malloc(count * sizeof(T), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -28,7 +30,7 @@ public:
             memory = heap_caps_malloc(count * sizeof(T), MALLOC_CAP_8BIT);
         }
         if (memory == nullptr) {
-            throw std::bad_alloc();
+            std::abort();
         }
         return static_cast<T*>(memory);
     }
