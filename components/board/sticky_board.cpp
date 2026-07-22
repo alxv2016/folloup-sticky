@@ -1,14 +1,12 @@
 #include "sticky_board.h"
 
+#include <memory>
+
 #include "sticky_board_config.h"
 
-#include "esp_check.h"
-#include "esp_adc/adc_cali.h"
-#include "esp_adc/adc_cali_scheme.h"
-#include "esp_adc/adc_oneshot.h"
+#include "axp2101.h"
+#include "board_es8311_codec.h"
 #include "esp_log.h"
-#include "esp_rom_sys.h"
-#include "driver/spi_master.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -16,22 +14,10 @@ namespace sticky_board {
 namespace {
 
 constexpr const char* kTag = "StickyBoard";
-// Self-hold latch behaves like a D flip-flop: PWR_HOLD is the data (1 = stay on, 0 = off)
-// and PWR_LOCK is the commit clock. The latch samples PWR_HOLD on a PWR_LOCK 0->1->0 pulse.
-// Edge-triggered, so a few tens of microseconds is ample for the pulse width.
-constexpr uint32_t kPowerLatchPulseUs = 50;
-constexpr TickType_t kPowerLatchShutdownHoldDelay = pdMS_TO_TICKS(500);
-constexpr adc_atten_t kPowerSenseAttenuation = ADC_ATTEN_DB_12;
-constexpr adc_bitwidth_t kPowerSenseBitWidth = ADC_BITWIDTH_DEFAULT;
-constexpr int kPowerSenseSampleCount = 8;
 
-adc_oneshot_unit_handle_t s_power_adc_handle = nullptr;
-adc_cali_handle_t s_power_adc_cali_handle = nullptr;
-adc_unit_t s_power_adc_unit = ADC_UNIT_1;
-adc_channel_t s_power_adc_channel = ADC_CHANNEL_0;
-bool s_power_adc_calibrated = false;
-bool s_shared_spi_bus_initialized = false;
 i2c_master_bus_handle_t s_sensor_i2c_bus = nullptr;
+std::unique_ptr<Axp2101> s_pmic;
+std::unique_ptr<Es8311Codec> s_audio_codec;
 
 esp_err_t EnableOutputPin(gpio_num_t pin, int level)
 {
@@ -47,98 +33,6 @@ esp_err_t EnableOutputPin(gpio_num_t pin, int level)
         return err;
     }
     return gpio_set_level(pin, level);
-}
-
-esp_err_t PreparePowerLatchPins(const char* phase)
-{
-    gpio_deep_sleep_hold_dis();
-
-    esp_err_t err = gpio_hold_dis(STICKY_POWER_HOLD_PIN);
-    if (err != ESP_OK) {
-        ESP_LOGW(kTag, "%s gpio_hold_dis(GPIO%d) failed: %s", phase,
-                 STICKY_POWER_HOLD_PIN, esp_err_to_name(err));
-        return err;
-    }
-    err = gpio_hold_dis(STICKY_POWER_LOCK_PIN);
-    if (err != ESP_OK) {
-        ESP_LOGW(kTag, "%s gpio_hold_dis(GPIO%d) failed: %s", phase,
-                 STICKY_POWER_LOCK_PIN, esp_err_to_name(err));
-        return err;
-    }
-
-    err = gpio_reset_pin(STICKY_POWER_HOLD_PIN);
-    if (err != ESP_OK) {
-        ESP_LOGW(kTag, "%s gpio_reset_pin(GPIO%d) failed: %s", phase,
-                 STICKY_POWER_HOLD_PIN, esp_err_to_name(err));
-        return err;
-    }
-    err = gpio_reset_pin(STICKY_POWER_LOCK_PIN);
-    if (err != ESP_OK) {
-        ESP_LOGW(kTag, "%s gpio_reset_pin(GPIO%d) failed: %s", phase,
-                 STICKY_POWER_LOCK_PIN, esp_err_to_name(err));
-        return err;
-    }
-
-    ESP_LOGI(kTag, "%s latch GPIO holds disabled and pads reset", phase);
-    return ESP_OK;
-}
-
-void LogPowerLatchLevels(const char* phase)
-{
-    ESP_LOGI(kTag, "%s PWR_HOLD(GPIO%d)=%d PWR_LOCK(GPIO%d)=%d", phase,
-             STICKY_POWER_HOLD_PIN, gpio_get_level(STICKY_POWER_HOLD_PIN),
-             STICKY_POWER_LOCK_PIN, gpio_get_level(STICKY_POWER_LOCK_PIN));
-}
-
-// Configure both latch lines as push-pull outputs in one shot so the commit pulse can be
-// driven with plain gpio_set_level() calls — no per-edge gpio_config()/gpio_reset_pin()
-// churn that could glitch GPIO45/46 (ESP32-S3 strapping pins) mid-pulse.
-esp_err_t ConfigureLatchOutputs()
-{
-    gpio_config_t config = {};
-    config.pin_bit_mask =
-        (1ULL << STICKY_POWER_HOLD_PIN) | (1ULL << STICKY_POWER_LOCK_PIN);
-    config.mode = GPIO_MODE_INPUT_OUTPUT;
-    config.pull_up_en = GPIO_PULLUP_DISABLE;
-    config.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    config.intr_type = GPIO_INTR_DISABLE;
-    return gpio_config(&config);
-}
-
-bool CreateAdcCalibration(adc_unit_t unit, adc_channel_t channel,
-                          adc_cali_handle_t* out_handle)
-{
-    if (out_handle == nullptr) {
-        return false;
-    }
-
-    *out_handle = nullptr;
-    esp_err_t err = ESP_ERR_NOT_SUPPORTED;
-
-#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
-    adc_cali_curve_fitting_config_t cali_config = {
-        .unit_id = unit,
-        .chan = channel,
-        .atten = kPowerSenseAttenuation,
-        .bitwidth = kPowerSenseBitWidth,
-    };
-    err = adc_cali_create_scheme_curve_fitting(&cali_config, out_handle);
-#elif ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
-    adc_cali_line_fitting_config_t cali_config = {
-        .unit_id = unit,
-        .atten = kPowerSenseAttenuation,
-        .bitwidth = kPowerSenseBitWidth,
-    };
-    err = adc_cali_create_scheme_line_fitting(&cali_config, out_handle);
-#endif
-
-    if (err == ESP_OK) {
-        return true;
-    }
-    if (err != ESP_ERR_NOT_SUPPORTED) {
-        ESP_LOGW(kTag, "ADC calibration init failed: %s", esp_err_to_name(err));
-    }
-    return false;
 }
 
 esp_err_t CreateI2cBus(i2c_port_num_t port, gpio_num_t scl_pin, gpio_num_t sda_pin,
@@ -159,295 +53,95 @@ esp_err_t CreateI2cBus(i2c_port_num_t port, gpio_num_t scl_pin, gpio_num_t sda_p
     return i2c_new_master_bus(&config, out_bus);
 }
 
-esp_err_t PrepareSharedSpiPinsForIdle()
+// Bring the AXP2101 rails and charger to the Waveshare board's operating profile.
+// DC1 + ALDO1..3 all sit at 3.3 V (system, e-paper, audio, and SD/sensor rails);
+// the charger targets a single-cell 4.2 V pack at 400 mA CC.
+void ConfigurePmicRails(Axp2101* pmic)
 {
-    ESP_RETURN_ON_ERROR(EnableOutputPin(STICKY_SD_POWER_EN_PIN, 0),
-                        kTag,
-                        "configure SD power idle state failed");
-    ESP_RETURN_ON_ERROR(EnableOutputPin(STICKY_SD_CS_PIN, 1),
-                        kTag,
-                        "configure SD CS idle state failed");
-    ESP_RETURN_ON_ERROR(EnableOutputPin(STICKY_EPD_CS_PIN, 1),
-                        kTag,
-                        "configure EPD CS idle state failed");
-    ESP_RETURN_ON_ERROR(EnableOutputPin(STICKY_EPD_DC_PIN, 0),
-                        kTag,
-                        "configure EPD DC idle state failed");
-    ESP_RETURN_ON_ERROR(EnableOutputPin(STICKY_EPD_RST_PIN, 1),
-                        kTag,
-                        "configure EPD reset idle state failed");
-    return ESP_OK;
+    pmic->setVbusVoltageLimit(XPOWERS_AXP2101_VBUS_VOL_LIM_4V36);
+    pmic->setVbusCurrentLimit(XPOWERS_AXP2101_VBUS_CUR_LIM_900MA);
+    pmic->setSysPowerDownVoltage(2800);
+
+    pmic->enableDC1();
+    pmic->setDC1Voltage(3300);
+    pmic->enableALDO1();
+    pmic->setALDO1Voltage(3300);
+    pmic->enableALDO2();
+    pmic->setALDO2Voltage(3300);
+    pmic->enableALDO3();
+    pmic->setALDO3Voltage(3300);
+
+    pmic->setChargeTargetVoltage(XPOWERS_AXP2101_CHG_VOL_4V2);
+    pmic->setPrechargeCurr(XPOWERS_AXP2101_PRECHARGE_75MA);
+    pmic->setChargerConstantCurr(XPOWERS_AXP2101_CHG_CUR_400MA);
+    pmic->setChargerTerminationCurr(XPOWERS_AXP2101_CHG_ITERM_25MA);
+    pmic->enableButtonBatteryCharge();
+
+    // Hardware power key: a long press cuts the rails; short presses raise an IRQ.
+    pmic->SetPowerKeyPressOffTime(Axp2101::PowerKeyPressOffTime::k6S);
+    pmic->SetPowerKeyPressOnTime(Axp2101::PowerKeyPressOnTime::k1S);
+    pmic->SetButtonPowerOffEnabled(true);
 }
 
 }  // namespace
 
 esp_err_t EnablePowerHold()
 {
-    esp_err_t err = PreparePowerLatchPins("Power latch enable prepare:");
-    if (err != ESP_OK) {
-        return err;
-    }
-    err = ConfigureLatchOutputs();
-    if (err != ESP_OK) {
-        return err;
-    }
-
-    // Latch ON: HOLD = 1 (stay on), LOCK idle low, then commit with a 0->1->0 pulse.
-    gpio_set_level(STICKY_POWER_HOLD_PIN, 1);
-    gpio_set_level(STICKY_POWER_LOCK_PIN, 0);
-    esp_rom_delay_us(kPowerLatchPulseUs);
-    gpio_set_level(STICKY_POWER_LOCK_PIN, 1);
-    esp_rom_delay_us(kPowerLatchPulseUs);
-    gpio_set_level(STICKY_POWER_LOCK_PIN, 0);
-
-    ESP_LOGI(kTag, "Power hold enabled on GPIO%d/GPIO%d", STICKY_POWER_HOLD_PIN,
-             STICKY_POWER_LOCK_PIN);
-    LogPowerLatchLevels("Power latch enabled:");
-    return ESP_OK;
-}
-
-esp_err_t ReleasePowerHold()
-{
-    esp_err_t err = PreparePowerLatchPins("Power latch release prepare:");
-    if (err != ESP_OK) {
-        return err;
-    }
-    err = ConfigureLatchOutputs();
-    if (err != ESP_OK) {
-        return err;
-    }
-
-    LogPowerLatchLevels("Power latch release start:");
-
-    // Latch OFF: drive HOLD low (request off), then clock it in with a LOCK 0->1->0 pulse.
-    // On battery the system rail collapses inside the pulse and nothing below runs. Leave
-    // HOLD low afterward — re-asserting it would feed the hold node and keep the rail on.
-    gpio_set_level(STICKY_POWER_HOLD_PIN, 0);
-    gpio_set_level(STICKY_POWER_LOCK_PIN, 0);
-    esp_rom_delay_us(kPowerLatchPulseUs);
-    gpio_set_level(STICKY_POWER_LOCK_PIN, 1);
-    esp_rom_delay_us(kPowerLatchPulseUs);
-    gpio_set_level(STICKY_POWER_LOCK_PIN, 0);
-
-    // Reaching here means the rail did not collapse (e.g. USB still feeding it). Give it a
-    // beat in case the supply is just slow, then report back so the caller can fall back.
-    vTaskDelay(kPowerLatchShutdownHoldDelay);
-    LogPowerLatchLevels("Power latch release complete:");
-    ESP_LOGW(kTag, "Power hold released but board still running (USB-powered?)");
-    return ESP_OK;
-}
-
-esp_err_t RestorePowerHold()
-{
-    ESP_LOGW(kTag, "Reasserting power hold");
-    return EnablePowerHold();
-}
-
-esp_err_t ConfigureChargerPins()
-{
-    gpio_config_t charge_enable_config = {};
-    charge_enable_config.pin_bit_mask = 1ULL << STICKY_BATTERY_CHARGE_EN_PIN;
-    charge_enable_config.mode = GPIO_MODE_OUTPUT;
-    charge_enable_config.pull_up_en = GPIO_PULLUP_DISABLE;
-    charge_enable_config.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    charge_enable_config.intr_type = GPIO_INTR_DISABLE;
-    esp_err_t err = gpio_config(&charge_enable_config);
-    if (err != ESP_OK) {
-        return err;
-    }
-
-    gpio_config_t charge_state_config = {};
-    charge_state_config.pin_bit_mask = 1ULL << STICKY_CHARGE_STATE_PIN;
-    charge_state_config.mode = GPIO_MODE_INPUT;
-    charge_state_config.pull_up_en = GPIO_PULLUP_ENABLE;
-    charge_state_config.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    charge_state_config.intr_type = GPIO_INTR_DISABLE;
-    return gpio_config(&charge_state_config);
-}
-
-esp_err_t SetChargerEnabled(bool enabled)
-{
-    return gpio_set_level(STICKY_BATTERY_CHARGE_EN_PIN, enabled ? 0 : 1);
-}
-
-esp_err_t ReadChargeState(bool* charging)
-{
-    if (charging == nullptr) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    *charging = gpio_get_level(STICKY_CHARGE_STATE_PIN) == 0;
-    return ESP_OK;
-}
-
-esp_err_t InitPowerInputSense()
-{
-    if (s_power_adc_handle != nullptr) {
+    if (s_pmic != nullptr) {
         return ESP_OK;
     }
 
-    esp_err_t err = adc_oneshot_io_to_channel(STICKY_POWER_INPUT_VOLT_PIN,
-                                              &s_power_adc_unit,
-                                              &s_power_adc_channel);
+    i2c_master_bus_handle_t bus = nullptr;
+    esp_err_t err = EnsureSensorI2cBus(&bus);
     if (err != ESP_OK) {
-        ESP_LOGW(kTag, "GPIO%d is not a valid ADC input: %s",
-                 STICKY_POWER_INPUT_VOLT_PIN, esp_err_to_name(err));
+        ESP_LOGE(kTag, "PMIC I2C bus init failed: %s", esp_err_to_name(err));
         return err;
     }
 
-    adc_oneshot_unit_init_cfg_t unit_config = {};
-    unit_config.unit_id = s_power_adc_unit;
-    err = adc_oneshot_new_unit(&unit_config, &s_power_adc_handle);
-    if (err != ESP_OK) {
-        s_power_adc_handle = nullptr;
-        return err;
-    }
+    // The AXP2101 base ctor talks to the chip and aborts if it is absent; on this
+    // board it feeds every rail, so a missing PMIC is unrecoverable by design.
+    s_pmic = std::make_unique<Axp2101>(bus, STICKY_AXP2101_I2C_ADDR, STICKY_PMIC_IRQ_PIN);
+    ConfigurePmicRails(s_pmic.get());
 
-    adc_oneshot_chan_cfg_t channel_config = {};
-    channel_config.atten = kPowerSenseAttenuation;
-    channel_config.bitwidth = kPowerSenseBitWidth;
-    err = adc_oneshot_config_channel(s_power_adc_handle, s_power_adc_channel,
-                                     &channel_config);
-    if (err != ESP_OK) {
-        adc_oneshot_del_unit(s_power_adc_handle);
-        s_power_adc_handle = nullptr;
-        return err;
-    }
-
-    s_power_adc_calibrated = CreateAdcCalibration(s_power_adc_unit,
-                                                  s_power_adc_channel,
-                                                  &s_power_adc_cali_handle);
-    if (!s_power_adc_calibrated) {
-        s_power_adc_cali_handle = nullptr;
-        ESP_LOGW(kTag, "Power-input ADC calibration unavailable");
-    }
-
+    ESP_LOGI(kTag, "AXP2101 power hold established (batt=%d%% vbus=%d charging=%d)",
+             s_pmic->GetBatteryLevel(), s_pmic->isVbusIn() ? 1 : 0,
+             s_pmic->IsCharging() ? 1 : 0);
     return ESP_OK;
 }
 
-esp_err_t ReadPowerInputSample(PowerInputSample* out_sample)
+Axp2101* GetPmic()
 {
-    if (out_sample == nullptr) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    if (s_power_adc_handle == nullptr || !s_power_adc_calibrated ||
-        s_power_adc_cali_handle == nullptr) {
-        return ESP_ERR_INVALID_STATE;
-    }
+    return s_pmic.get();
+}
 
-    int raw_sum = 0;
-    int raw_min = 0;
-    int raw_max = 0;
-    int valid_samples = 0;
-    for (int i = 0; i < kPowerSenseSampleCount; ++i) {
-        int raw = 0;
-        esp_err_t err = adc_oneshot_read(s_power_adc_handle, s_power_adc_channel, &raw);
-        if (err != ESP_OK) {
-            return err;
-        }
-
-        if (valid_samples == 0) {
-            raw_min = raw;
-            raw_max = raw;
-        } else {
-            if (raw < raw_min) {
-                raw_min = raw;
-            }
-            if (raw > raw_max) {
-                raw_max = raw;
-            }
-        }
-        raw_sum += raw;
-        ++valid_samples;
+AudioCodec* GetAudioCodec()
+{
+    if (s_audio_codec != nullptr) {
+        return s_audio_codec.get();
     }
 
-    const int raw_average = raw_sum / valid_samples;
-    int calibrated_mv = 0;
-    esp_err_t err = adc_cali_raw_to_voltage(s_power_adc_cali_handle,
-                                            raw_average, &calibrated_mv);
+    i2c_master_bus_handle_t bus = nullptr;
+    esp_err_t err = EnsureSensorI2cBus(&bus);
     if (err != ESP_OK) {
-        return err;
+        ESP_LOGE(kTag, "Audio codec I2C bus init failed: %s", esp_err_to_name(err));
+        return nullptr;
     }
 
-    out_sample->raw_average = raw_average;
-    out_sample->raw_min = raw_min;
-    out_sample->raw_max = raw_max;
-    out_sample->calibrated_mv = calibrated_mv;
-    out_sample->sample_count = valid_samples;
-    return ESP_OK;
-}
-
-esp_err_t ConfigureBq27220InterruptPin()
-{
-    gpio_config_t config = {};
-    config.pin_bit_mask = 1ULL << STICKY_BQ27220_INT_PIN;
-    config.mode = GPIO_MODE_INPUT;
-    config.pull_up_en = GPIO_PULLUP_ENABLE;
-    config.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    config.intr_type = GPIO_INTR_DISABLE;
-    return gpio_config(&config);
-}
-
-esp_err_t ReadBq27220InterruptLevel(int* level)
-{
-    if (level == nullptr) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    *level = gpio_get_level(STICKY_BQ27220_INT_PIN);
-    return ESP_OK;
-}
-
-esp_err_t EnsureSharedSpiBus()
-{
-    if (s_shared_spi_bus_initialized) {
-        return ESP_OK;
-    }
-
-    ESP_RETURN_ON_ERROR(PrepareSharedSpiPinsForIdle(),
-                        kTag,
-                        "shared SPI idle pin setup failed");
-
-    spi_bus_config_t bus_config = {};
-    bus_config.mosi_io_num = STICKY_SHARED_SPI_MOSI_PIN;
-    bus_config.miso_io_num = STICKY_SHARED_SPI_MISO_PIN;
-    bus_config.sclk_io_num = STICKY_SHARED_SPI_CLK_PIN;
-    bus_config.quadwp_io_num = -1;
-    bus_config.quadhd_io_num = -1;
-    bus_config.max_transfer_sz = STICKY_SHARED_SPI_MAX_TRANSFER_SIZE;
-
-    esp_err_t err = spi_bus_initialize(STICKY_SHARED_SPI_HOST, &bus_config, SPI_DMA_CH_AUTO);
-    if (err == ESP_ERR_INVALID_STATE) {
-        ESP_LOGW(kTag, "Shared SPI bus already initialized on host %d",
-                 static_cast<int>(STICKY_SHARED_SPI_HOST));
-        s_shared_spi_bus_initialized = true;
-        return ESP_OK;
-    }
-    if (err != ESP_OK) {
-        ESP_LOGW(kTag, "Shared SPI bus init failed on host %d: %s",
-                 static_cast<int>(STICKY_SHARED_SPI_HOST), esp_err_to_name(err));
-        return err;
-    }
-
-    s_shared_spi_bus_initialized = true;
-    ESP_LOGI(kTag, "Shared SPI bus initialized: host=%d sck=GPIO%d mosi=GPIO%d miso=GPIO%d",
-             static_cast<int>(STICKY_SHARED_SPI_HOST),
-             static_cast<int>(STICKY_SHARED_SPI_CLK_PIN),
-             static_cast<int>(STICKY_SHARED_SPI_MOSI_PIN),
-             static_cast<int>(STICKY_SHARED_SPI_MISO_PIN));
-    return ESP_OK;
-}
-
-esp_err_t EnableEpaperPower()
-{
-    esp_err_t err = EnableOutputPin(STICKY_EPD_POWER_EN_PIN, 1);
-    if (err != ESP_OK) {
-        return err;
-    }
-
-    vTaskDelay(pdMS_TO_TICKS(STICKY_EPD_POWER_DELAY_MS));
-    ESP_LOGI(kTag, "E-paper power enabled on GPIO%d", STICKY_EPD_POWER_EN_PIN);
-    return ESP_OK;
+    // ES8311 control shares the sensor I2C bus; audio streams over I2S0. Full-duplex
+    // at a single 16 kHz clock (input == output) drives both capture and playback.
+    s_audio_codec = std::make_unique<Es8311Codec>(
+        bus, STICKY_SENSOR_I2C_PORT,
+        STICKY_AUDIO_SAMPLE_RATE_HZ, STICKY_AUDIO_SAMPLE_RATE_HZ,
+        STICKY_AUDIO_I2S_MCLK, STICKY_AUDIO_I2S_BCLK, STICKY_AUDIO_I2S_WS,
+        STICKY_AUDIO_I2S_DOUT, STICKY_AUDIO_I2S_DIN, STICKY_AUDIO_PA_PIN,
+        ES8311_CODEC_DEFAULT_ADDR);
+    // Keep the output path (and PA) enabled for the codec's lifetime so system
+    // sound cues and clip playback can write to it without per-event PA toggling
+    // (input is enabled on demand by the recording service).
+    s_audio_codec->EnableOutput(true);
+    ESP_LOGI(kTag, "ES8311 audio codec created (%d Hz duplex, output enabled)",
+             STICKY_AUDIO_SAMPLE_RATE_HZ);
+    return s_audio_codec.get();
 }
 
 esp_err_t EnableTouchPower()
@@ -494,8 +188,6 @@ esp_err_t EnsureSensorI2cBus(i2c_master_bus_handle_t* out_bus)
         return ESP_OK;
     }
 
-    // GPIO0 is also an ESP32-S3 strapping pin, so call this after startup
-    // levels are no longer part of the boot-mode decision.
     esp_err_t err = CreateI2cBus(STICKY_SENSOR_I2C_PORT, STICKY_SENSOR_I2C_SCL_PIN,
                                  STICKY_SENSOR_I2C_SDA_PIN, &s_sensor_i2c_bus);
     if (err != ESP_OK) {
@@ -522,7 +214,7 @@ esp_err_t CreateTouchI2cBus(i2c_master_bus_handle_t* out_bus)
                         STICKY_TOUCH_I2C_SDA_PIN, out_bus);
 }
 
-esp_err_t AddBq27220Device(i2c_master_bus_handle_t bus,
+esp_err_t AddPcf85063Device(i2c_master_bus_handle_t bus,
                            i2c_master_dev_handle_t* out_device)
 {
     if (bus == nullptr || out_device == nullptr) {
@@ -531,55 +223,7 @@ esp_err_t AddBq27220Device(i2c_master_bus_handle_t bus,
 
     i2c_device_config_t config = {};
     config.dev_addr_length = I2C_ADDR_BIT_LEN_7;
-    config.device_address = STICKY_BQ27220_I2C_ADDR;
-    config.scl_speed_hz = STICKY_I2C_SPEED_HZ;
-
-    return i2c_master_bus_add_device(bus, &config, out_device);
-}
-
-esp_err_t AddPcf8563Device(i2c_master_bus_handle_t bus,
-                           i2c_master_dev_handle_t* out_device)
-{
-    if (bus == nullptr || out_device == nullptr) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    i2c_device_config_t config = {};
-    config.dev_addr_length = I2C_ADDR_BIT_LEN_7;
-    config.device_address = STICKY_PCF8563_I2C_ADDR;
-    config.scl_speed_hz = STICKY_I2C_SPEED_HZ;
-
-    return i2c_master_bus_add_device(bus, &config, out_device);
-}
-
-esp_err_t AddLsm6ds3Device(i2c_master_bus_handle_t bus,
-                           i2c_master_dev_handle_t* out_device)
-{
-    if (bus == nullptr || out_device == nullptr) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    i2c_device_config_t config = {};
-    config.dev_addr_length = I2C_ADDR_BIT_LEN_7;
-    config.device_address = STICKY_LSM6DS3_I2C_ADDR;
-    config.scl_speed_hz = STICKY_I2C_SPEED_HZ;
-
-    return i2c_master_bus_add_device(bus, &config, out_device);
-}
-
-esp_err_t AddSht40Device(i2c_master_bus_handle_t bus, uint8_t address,
-                         i2c_master_dev_handle_t* out_device)
-{
-    if (bus == nullptr || out_device == nullptr) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    if (address != STICKY_SHT40_I2C_ADDR && address != STICKY_SHT40_ALT_I2C_ADDR) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    i2c_device_config_t config = {};
-    config.dev_addr_length = I2C_ADDR_BIT_LEN_7;
-    config.device_address = address;
+    config.device_address = STICKY_PCF85063_I2C_ADDR;
     config.scl_speed_hz = STICKY_I2C_SPEED_HZ;
 
     return i2c_master_bus_add_device(bus, &config, out_device);

@@ -34,7 +34,6 @@
 #include "freertos/task.h"
 #include "project_assets.h"
 #include "shared_bus_service.h"
-#include "sticky_board.h"
 #include "sticky_board_config.h"
 
 namespace display_service {
@@ -166,15 +165,17 @@ private:
 EpaperPanelConfig BuildPanelConfig()
 {
     EpaperPanelConfig config = {};
-    config.spi_host = STICKY_SHARED_SPI_HOST;
+    // Waveshare: the EPD owns a dedicated SPI3 bus, so the panel initializes and
+    // manages the bus itself (no shared-bus coordination, write-only, no MISO).
+    config.spi_host = STICKY_EPD_SPI_HOST;
     config.cs = STICKY_EPD_CS_PIN;
     config.dc = STICKY_EPD_DC_PIN;
     config.rst = STICKY_EPD_RST_PIN;
     config.busy = STICKY_EPD_BUSY_PIN;
-    config.mosi = STICKY_SHARED_SPI_MOSI_PIN;
-    config.miso = STICKY_SHARED_SPI_MISO_PIN;
-    config.sck = STICKY_SHARED_SPI_CLK_PIN;
-    config.external_spi_bus = true;
+    config.mosi = STICKY_EPD_MOSI_PIN;
+    config.miso = STICKY_EPD_MISO_PIN;
+    config.sck = STICKY_EPD_SCK_PIN;
+    config.external_spi_bus = false;
     config.buffer_len = STICKY_EPD_BUFFER_LEN;
     config.busy_timeout_ms = 10000;
     config.reset_low_ms = 2;
@@ -1265,8 +1266,9 @@ esp_err_t Init()
     }
 
     ESP_RETURN_ON_ERROR(shared_bus_service::Init(), kTag, "shared bus init failed");
-    ESP_RETURN_ON_ERROR(sticky_board::EnsureSharedSpiBus(), kTag, "shared SPI bus init failed");
-    ESP_RETURN_ON_ERROR(sticky_board::EnableEpaperPower(), kTag, "enable e-paper power failed");
+    // The EPD owns SPI3 and is powered from the AXP2101 rails, so there is no
+    // shared SPI bus to bring up and no GPIO power-enable — the panel initializes
+    // its own bus in EpaperPanel::Initialize().
 
     DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
     ESP_RETURN_ON_ERROR(bus_guard.err(), kTag, "shared display bus acquire failed");

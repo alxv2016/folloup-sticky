@@ -9,8 +9,7 @@
 #include <sys/stat.h>
 #include <utility>
 
-#include "driver/sdspi_host.h"
-#include "driver/spi_master.h"
+#include "driver/sdmmc_host.h"
 #include "esp_log.h"
 #include "esp_vfs_fat.h"
 #include "sdmmc_cmd.h"
@@ -20,7 +19,6 @@
 namespace {
 
 constexpr const char* kTag = "SdCard";
-constexpr size_t kMaxTransferSize = 48 * 1024;
 constexpr const char* kSdmmcCommonTag = "sdmmc_common";
 constexpr const char* kVfsFatSdmmcTag = "vfs_fat_sdmmc";
 
@@ -163,37 +161,30 @@ esp_err_t SdCard::Mount(bool format_if_mount_failed, size_t allocation_unit_size
         .use_one_fat = false,
     };
 
-    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-    host.slot = pins_.host_id;
+    sdmmc_host_t host = SDMMC_HOST_DEFAULT();
+    host.slot = pins_.slot;
     host.max_freq_khz = SDMMC_FREQ_DEFAULT;
-
-    if (!pins_.external_spi_bus) {
-        spi_bus_config_t bus_config = {};
-        bus_config.mosi_io_num = pins_.mosi;
-        bus_config.miso_io_num = pins_.miso;
-        bus_config.sclk_io_num = pins_.clk;
-        bus_config.quadwp_io_num = -1;
-        bus_config.quadhd_io_num = -1;
-        bus_config.max_transfer_sz = kMaxTransferSize;
-
-        esp_err_t err = spi_bus_initialize(pins_.host_id, &bus_config, SDSPI_DEFAULT_DMA);
-        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-            if (log_failures) {
-                ESP_LOGW(kTag, "failed to initialize SPI bus for SD card: %s",
-                         esp_err_to_name(err));
-            }
-            SetPowerEnabled(false);
-            return err;
-        }
+    if (pins_.bus_width == 1) {
+        host.flags = SDMMC_HOST_FLAG_1BIT;
     }
 
-    sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
-    slot_config.host_id = pins_.host_id;
-    slot_config.gpio_cs = pins_.cs;
-    slot_config.gpio_cd = pins_.card_detect;
+    sdmmc_slot_config_t slot_config = SDMMC_SLOT_CONFIG_DEFAULT();
+    slot_config.width = static_cast<uint8_t>(pins_.bus_width);
+    slot_config.clk = pins_.clk;
+    slot_config.cmd = pins_.cmd;
+    slot_config.d0 = pins_.d0;
+    slot_config.d1 = pins_.d1;
+    slot_config.d2 = pins_.d2;
+    slot_config.d3 = pins_.d3;
+    if (pins_.card_detect != GPIO_NUM_NC) {
+        slot_config.cd = pins_.card_detect;
+    }
+    if (pins_.internal_pullup) {
+        slot_config.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
+    }
 
     ScopedLogSilencer silence_sdmmc_logs(kSdmmcCommonTag, kVfsFatSdmmcTag);
-    esp_err_t err = esp_vfs_fat_sdspi_mount(mount_point_.c_str(), &host, &slot_config,
+    esp_err_t err = esp_vfs_fat_sdmmc_mount(mount_point_.c_str(), &host, &slot_config,
                                             &mount_config, &card_);
     if (err != ESP_OK) {
         if (log_failures) {

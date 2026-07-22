@@ -13,7 +13,8 @@
 #include "followup_task_config.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "microphone_service.h"
+#include "audio_codec.h"
+#include "sticky_board.h"
 #include "storage_service.h"
 
 namespace recording_service {
@@ -24,8 +25,31 @@ constexpr uint32_t kPrerollMs = 1000;
 constexpr uint32_t kMaxRecordingMs = 10000;
 constexpr size_t kCaptureChunkSamples = 480;
 constexpr size_t kClipChunkSamples = 4096;
-constexpr uint32_t kReadTimeoutMs = 100;
 constexpr uint32_t kCaptureTaskStackWords = 4096;
+
+// The ES8311 codec captures at a single duplex rate; recordings and the Gemini
+// uplink are 16 kHz, so no resampling is needed.
+constexpr uint32_t kSampleRateHz = 16000;
+
+// Owned by the board (sticky_board::GetAudioCodec); the recording service only
+// borrows it for input capture.
+AudioCodec* s_codec = nullptr;
+
+// Average-absolute level in percent, matching the previous mic service so the UI
+// mic indicator behaves identically.
+uint8_t CalculateInputLevelPercent(const int16_t* samples, size_t sample_count)
+{
+    if (samples == nullptr || sample_count == 0) {
+        return 0;
+    }
+    uint64_t abs_sum = 0;
+    for (size_t i = 0; i < sample_count; ++i) {
+        const int32_t sample = samples[i];
+        abs_sum += static_cast<uint32_t>(sample < 0 ? -sample : sample);
+    }
+    const uint32_t avg_abs = static_cast<uint32_t>(abs_sum / sample_count);
+    return static_cast<uint8_t>(std::min<uint32_t>((avg_abs * 100U) / 32768U, 100U));
+}
 
 struct WavHeader {
     char riff[4];
@@ -196,13 +220,13 @@ public:
 size_t PrerollCapacitySamples()
 {
     return static_cast<size_t>(
-        (static_cast<uint64_t>(microphone_service::kSampleRateHz) * kPrerollMs) / 1000U);
+        (static_cast<uint64_t>(kSampleRateHz) * kPrerollMs) / 1000U);
 }
 
 size_t MaxRecordingSamples()
 {
     return static_cast<size_t>(
-        (static_cast<uint64_t>(microphone_service::kSampleRateHz) * kMaxRecordingMs) / 1000U);
+        (static_cast<uint64_t>(kSampleRateHz) * kMaxRecordingMs) / 1000U);
 }
 
 State ResolveStateLocked()
@@ -235,7 +259,7 @@ UiState BuildUiStateLocked()
     }
     state.duration_ms = static_cast<uint32_t>(
         (static_cast<uint64_t>(state.recorded_samples) * 1000U) /
-        microphone_service::kSampleRateHz);
+        kSampleRateHz);
     state.max_recording_ms = kMaxRecordingMs;
     state.input_level_percent = s_input_level_percent;
     state.stop_reason = s_stop_reason;
@@ -396,7 +420,7 @@ WavHeader BuildWavHeader(const RecordedClip& clip)
 
 void CaptureTask(void*)
 {
-    int16_t samples[kCaptureChunkSamples] = {};
+    std::vector<int16_t> samples(kCaptureChunkSamples, 0);
 
     while (true) {
         bool should_capture = false;
@@ -405,42 +429,36 @@ void CaptureTask(void*)
             should_capture = s_initialized && (s_capture_armed || s_recording);
         }
 
-        if (!should_capture) {
+        if (!should_capture || s_codec == nullptr) {
             vTaskDelay(pdMS_TO_TICKS(20));
             continue;
         }
 
-        size_t samples_read = 0;
-        const esp_err_t err =
-            microphone_service::ReadSamples(samples, kCaptureChunkSamples,
-                                            &samples_read, kReadTimeoutMs);
-        if (err != ESP_OK) {
-            if (err != ESP_ERR_TIMEOUT) {
-                ESP_LOGW(kTag, "Mic read failed: %s", esp_err_to_name(err));
-            }
+        // The codec read blocks until the chunk is filled (~30 ms at 16 kHz) and
+        // returns 0 when input is disabled or on error.
+        const int samples_read = s_codec->ReadInputSamples(samples);
+        if (samples_read <= 0) {
             continue;
         }
-        if (samples_read == 0) {
-            continue;
-        }
+        const size_t read_count = static_cast<size_t>(samples_read);
 
         bool reached_max = false;
         {
             std::lock_guard<std::mutex> lock(s_mutex);
-            s_input_level_percent = microphone_service::LastInputLevelPercent();
+            s_input_level_percent = CalculateInputLevelPercent(samples.data(), read_count);
 
             if (s_capture_armed) {
-                s_preroll_buffer.Push(samples, samples_read);
+                s_preroll_buffer.Push(samples.data(), read_count);
             }
 
             if (s_recording) {
-                s_clip_buffer.Append(samples, samples_read, MaxRecordingSamples());
+                s_clip_buffer.Append(samples.data(), read_count, MaxRecordingSamples());
                 if (s_clip_buffer.sample_count() >= MaxRecordingSamples()) {
                     s_recording = false;
                     s_capture_armed = false;
                     s_stop_reason = StopReason::kMaxDuration;
                     s_last_clip =
-                        s_clip_buffer.Finalize(microphone_service::kSampleRateHz);
+                        s_clip_buffer.Finalize(kSampleRateHz);
                     s_has_clip = s_last_clip && !s_last_clip->empty();
                     reached_max = true;
                 }
@@ -448,7 +466,7 @@ void CaptureTask(void*)
         }
 
         if (reached_max) {
-            microphone_service::Disable();
+            s_codec->EnableInput(false);
             Notify();
         }
     }
@@ -492,10 +510,12 @@ esp_err_t Init()
         }
     }
 
-    esp_err_t err = microphone_service::Init();
-    if (err != ESP_OK) {
-        return err;
+    s_codec = sticky_board::GetAudioCodec();
+    if (s_codec == nullptr) {
+        ESP_LOGE(kTag, "Audio codec unavailable; recording disabled");
+        return ESP_ERR_NOT_FOUND;
     }
+    s_codec->EnableInput(false);
 
     {
         std::lock_guard<std::mutex> lock(s_mutex);
@@ -546,7 +566,7 @@ esp_err_t Init()
 
     ESP_LOGI(kTag,
              "Recording service initialized: sample_rate=%lu preroll=%lums max=%lums",
-             static_cast<unsigned long>(microphone_service::kSampleRateHz),
+             static_cast<unsigned long>(kSampleRateHz),
              static_cast<unsigned long>(kPrerollMs),
              static_cast<unsigned long>(kMaxRecordingMs));
     Notify();
@@ -579,10 +599,7 @@ esp_err_t Arm()
         return err;
     }
 
-    err = microphone_service::Enable();
-    if (err != ESP_OK) {
-        return err;
-    }
+    s_codec->EnableInput(true);
 
     {
         std::lock_guard<std::mutex> lock(s_mutex);
@@ -652,13 +669,15 @@ esp_err_t Finish()
         s_capture_preview = false;
         s_stop_reason = StopReason::kFinished;
         if (had_recording) {
-            s_last_clip = s_clip_buffer.Finalize(microphone_service::kSampleRateHz);
+            s_last_clip = s_clip_buffer.Finalize(kSampleRateHz);
             s_has_clip = s_last_clip && !s_last_clip->empty();
         }
     }
 
     StopPreviewTimer();
-    microphone_service::Disable();
+    if (s_codec != nullptr) {
+        s_codec->EnableInput(false);
+    }
     ESP_LOGI(kTag, "Recording finished: had_recording=%d", had_recording ? 1 : 0);
     Notify();
     return ESP_OK;
@@ -684,7 +703,9 @@ esp_err_t Cancel()
     }
 
     StopPreviewTimer();
-    microphone_service::Disable();
+    if (s_codec != nullptr) {
+        s_codec->EnableInput(false);
+    }
     ESP_LOGI(kTag, "Recording canceled");
     Notify();
     return ESP_OK;

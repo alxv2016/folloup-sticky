@@ -5,7 +5,7 @@
 #include <vector>
 
 #include "driver/gpio.h"
-#include "driver/spi_master.h"
+#include "driver/sdmmc_host.h"
 #include "sdmmc_cmd.h"
 #include "esp_err.h"
 
@@ -17,13 +17,19 @@ struct SdCardFileEntry {
     uint64_t size_bytes = 0;
 };
 
+// Waveshare wires the SD card to the ESP32-S3 SDMMC controller (slot 1, routed
+// through the GPIO matrix) in 4-bit mode. There is no card-detect or power-enable
+// line, so those stay unbound.
 struct SdCardPins {
-    spi_host_device_t host_id = SPI2_HOST;
+    int slot = SDMMC_HOST_SLOT_1;
+    int bus_width = 4;
     gpio_num_t clk = GPIO_NUM_NC;
-    gpio_num_t mosi = GPIO_NUM_NC;
-    gpio_num_t miso = GPIO_NUM_NC;
-    gpio_num_t cs = GPIO_NUM_NC;
-    bool external_spi_bus = false;
+    gpio_num_t cmd = GPIO_NUM_NC;
+    gpio_num_t d0 = GPIO_NUM_NC;
+    gpio_num_t d1 = GPIO_NUM_NC;
+    gpio_num_t d2 = GPIO_NUM_NC;
+    gpio_num_t d3 = GPIO_NUM_NC;
+    bool internal_pullup = true;
     gpio_num_t power_enable = GPIO_NUM_NC;
     int power_active_level = 1;
     gpio_num_t card_detect = GPIO_NUM_NC;

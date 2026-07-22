@@ -2,31 +2,23 @@
 
 #include <mutex>
 
-#include "bq27220.h"
-#include "driver/gpio.h"
-#include "driver/i2c_master.h"
+#include "axp2101.h"
 #include "esp_log.h"
 #include "esp_sleep.h"
 #include "followup_task_config.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "pcf8563.h"
+#include "pcf85063.h"
 #include "sticky_board.h"
-#include "sticky_board_config.h"
 
 namespace power_service {
 namespace {
 
 constexpr const char* kTag = "PowerService";
-constexpr int kUsbSenseConnectedThresholdMv = 200;
 constexpr uint16_t kLowBatteryPercentThreshold = 10;
-constexpr uint16_t kBatteryStatusFullChargeMask = 1U << 9;
-constexpr TickType_t kSoftOffSettleDelay = pdMS_TO_TICKS(200);
-constexpr TickType_t kPowerButtonReleasePollDelay = pdMS_TO_TICKS(20);
-constexpr uint32_t kPowerButtonReleaseStableSamples = 10;
-constexpr uint32_t kPowerButtonReleaseMaxSamples = 250;
+constexpr TickType_t kShutdownSettleDelay = pdMS_TO_TICKS(200);
 
-// Battery/RTC telemetry sits on the shared sensor I2C bus and reads slowly under
+// Battery/RTC telemetry rides the shared sensor I2C bus and reads slowly under
 // load. A dedicated low-priority task polls it in the background and caches the
 // last-good values, so UI refreshes (status bar) never do synchronous sensor I2C
 // and never block on bus contention during SD writes / display refreshes.
@@ -36,20 +28,26 @@ constexpr uint32_t kSensorFailWarnThreshold = 5;
 
 i2c_master_bus_handle_t s_sensor_bus = nullptr;
 i2c_master_dev_handle_t s_rtc_device = nullptr;
-i2c_master_dev_handle_t s_battery_device = nullptr;
 bool s_initialized = false;
 bool s_power_hold_enabled = false;
 bool s_charger_enabled = false;
-bool s_charge_pins_ready = false;
-bool s_power_input_ready = false;
 bool s_rtc_ready = false;
-bool s_battery_ready = false;
+
+// AXP2101-derived power state, cached alongside the battery/RTC snapshot so
+// ReadStatus (on the UI refresh path) never touches I2C.
+struct PowerSnapshot {
+    ChargeState charge_state = ChargeState::kUnknown;
+    bool vbus_valid = false;
+    bool usb_detected = false;
+    int vbus_mv = 0;
+};
 
 // Cached telemetry published by the poll task and copied (never read via I2C) by
 // ReadStatus. The mutex is held only for the struct copies, never across I2C.
 std::mutex s_snapshot_mutex;
 BatteryStatus s_cached_battery = {};
 RtcStatus s_cached_rtc = {};
+PowerSnapshot s_cached_power = {};
 TaskHandle_t s_sensor_task = nullptr;
 uint32_t s_battery_fail_streak = 0;
 uint32_t s_rtc_fail_streak = 0;
@@ -83,34 +81,6 @@ const char* WakeupCauseName(esp_sleep_wakeup_cause_t cause)
     }
 }
 
-esp_err_t EnsureBatteryGauge()
-{
-    if (s_battery_device != nullptr && s_battery_ready) {
-        return ESP_OK;
-    }
-    if (s_sensor_bus == nullptr) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    if (s_battery_device == nullptr) {
-        esp_err_t err = sticky_board::AddBq27220Device(s_sensor_bus, &s_battery_device);
-        if (err != ESP_OK) {
-            s_battery_device = nullptr;
-            return err;
-        }
-    }
-
-    if (!bq27220_probe(s_battery_device)) {
-        i2c_master_bus_rm_device(s_battery_device);
-        s_battery_device = nullptr;
-        s_battery_ready = false;
-        return ESP_ERR_NOT_FOUND;
-    }
-
-    s_battery_ready = true;
-    return ESP_OK;
-}
-
 esp_err_t EnsureRtc()
 {
     if (s_rtc_device != nullptr && s_rtc_ready) {
@@ -121,22 +91,22 @@ esp_err_t EnsureRtc()
     }
 
     if (s_rtc_device == nullptr) {
-        esp_err_t err = sticky_board::AddPcf8563Device(s_sensor_bus, &s_rtc_device);
+        esp_err_t err = sticky_board::AddPcf85063Device(s_sensor_bus, &s_rtc_device);
         if (err != ESP_OK) {
             s_rtc_device = nullptr;
             return err;
         }
     }
 
-    if (!pcf8563::Probe(s_rtc_device)) {
+    if (!pcf85063::Probe(s_rtc_device)) {
         i2c_master_bus_rm_device(s_rtc_device);
         s_rtc_device = nullptr;
         s_rtc_ready = false;
         return ESP_ERR_NOT_FOUND;
     }
 
-    if (!pcf8563::DisableClkout(s_rtc_device)) {
-        ESP_LOGW(kTag, "PCF8563 CLKOUT disable failed");
+    if (!pcf85063::DisableClkout(s_rtc_device)) {
+        ESP_LOGW(kTag, "PCF85063 CLKOUT disable failed");
     }
 
     s_rtc_ready = true;
@@ -154,11 +124,11 @@ void FillRtcStatus(RtcStatus* rtc)
         return;
     }
 
-    pcf8563::InterruptStatus interrupt_status = {};
-    esp_err_t err = pcf8563::ReadInterruptStatus(s_rtc_device, &interrupt_status);
+    pcf85063::InterruptStatus interrupt_status = {};
+    esp_err_t err = pcf85063::ReadInterruptStatus(s_rtc_device, &interrupt_status);
     if (err != ESP_OK) {
         // Transient contention is expected; the poll task warns only if it persists.
-        ESP_LOGD(kTag, "PCF8563 interrupt status read failed: %s",
+        ESP_LOGD(kTag, "PCF85063 interrupt status read failed: %s",
                  esp_err_to_name(err));
         return;
     }
@@ -178,64 +148,51 @@ void FillBatteryStatus(BatteryStatus* battery)
     }
 
     battery->available = false;
-    if (EnsureBatteryGauge() != ESP_OK) {
+    Axp2101* pmic = sticky_board::GetPmic();
+    if (pmic == nullptr || !pmic->isBatteryConnect()) {
         return;
     }
 
-    Bq27220Data_t data = {};
-    if (!bq27220_read_data(s_battery_device, data)) {
-        // Transient contention is expected; the poll task warns only if it persists.
-        ESP_LOGD(kTag, "BQ27220 telemetry read failed");
+    const int soc = pmic->GetBatteryLevel();
+    if (soc < 0) {
+        // Gauge not ready / no calibrated pack yet.
         return;
     }
 
     battery->available = true;
-    battery->voltage_mv = data.voltage_mv;
-    battery->current_ma = data.current_ma;
-    battery->average_current_ma = data.average_current_ma;
-    battery->remaining_capacity_mah = data.remaining_capacity_mah;
-    battery->full_charge_capacity_mah = data.full_charge_capacity_mah;
-    battery->state_of_charge_percent = data.state_of_charge_percent;
-    battery->state_of_health_percent = data.state_of_health_percent;
-    battery->cycle_count = data.cycle_count;
-    battery->temperature_c = data.temperature_c;
-    battery->status_bits = data.battery_status;
-    battery->full_charge_detected =
-        (data.battery_status & kBatteryStatusFullChargeMask) != 0;
-    battery->low_battery_10_percent =
-        data.state_of_charge_percent <= kLowBatteryPercentThreshold;
-
-    operation_status_t operation_status = {};
-    if (bq27220_read_operation_status(s_battery_device, operation_status)) {
-        const uint16_t raw = *reinterpret_cast<uint16_t*>(&operation_status);
-        battery->operation_status_available = true;
-        battery->operation_status_bits = raw;
-        battery->operation_security_state = operation_status.SEC;
-        battery->operation_config_update = operation_status.CFGUPDATE;
-        battery->operation_btp_interrupt = operation_status.BTPINT;
-    }
-
-    uint16_t btp_discharge_set = 0;
-    uint16_t btp_charge_set = 0;
-    if (bq27220_read_word(s_battery_device, Bq27220Reg::BtpDischargeSet,
-                          btp_discharge_set) &&
-        bq27220_read_word(s_battery_device, Bq27220Reg::BtpChargeSet,
-                          btp_charge_set)) {
-        battery->btp_thresholds_available = true;
-        battery->btp_discharge_set = btp_discharge_set;
-        battery->btp_charge_set = btp_charge_set;
-    }
-
-    int interrupt_level = 0;
-    if (sticky_board::ReadBq27220InterruptLevel(&interrupt_level) == ESP_OK) {
-        battery->interrupt_level_available = true;
-        battery->interrupt_level = interrupt_level;
-    }
+    battery->voltage_mv = pmic->getBattVoltage();
+    battery->state_of_charge_percent = static_cast<uint16_t>(soc);
+    battery->temperature_c = pmic->GetTemperature();
+    battery->full_charge_detected = pmic->IsChargingDone();
+    battery->low_battery_10_percent = soc <= kLowBatteryPercentThreshold;
 }
 
-// Reads battery + RTC over I2C and publishes them to the cache. A failed read
-// keeps the previous last-good value (so the UI never flickers to "unavailable"
-// on a single blip); a sustained run of failures is logged once.
+void FillPowerSnapshot(PowerSnapshot* power)
+{
+    if (power == nullptr) {
+        return;
+    }
+
+    *power = PowerSnapshot{};
+    Axp2101* pmic = sticky_board::GetPmic();
+    if (pmic == nullptr) {
+        return;
+    }
+
+    power->charge_state =
+        pmic->IsCharging() ? ChargeState::kCharging : ChargeState::kNotCharging;
+
+    // The PMIC always reports VBUS presence, so the sample is unconditionally
+    // valid — callers use usb_detected to know whether external power is present.
+    power->vbus_valid = true;
+    power->usb_detected = pmic->isVbusIn();
+    power->vbus_mv = power->usb_detected ? pmic->getVbusVoltage() : 0;
+}
+
+// Reads battery + RTC + PMIC power state over I2C and publishes them to the
+// cache. A failed battery/RTC read keeps the previous last-good value (so the UI
+// never flickers to "unavailable" on a single blip); a sustained run of failures
+// is logged once.
 void PollSensorsOnce()
 {
     BatteryStatus battery = {};
@@ -243,6 +200,9 @@ void PollSensorsOnce()
 
     RtcStatus rtc = {};
     FillRtcStatus(&rtc);
+
+    PowerSnapshot power = {};
+    FillPowerSnapshot(&power);
 
     {
         std::lock_guard<std::mutex> lock(s_snapshot_mutex);
@@ -252,19 +212,20 @@ void PollSensorsOnce()
         if (rtc.available) {
             s_cached_rtc = rtc;
         }
+        s_cached_power = power;
     }
 
     if (battery.available) {
         s_battery_fail_streak = 0;
     } else if (++s_battery_fail_streak == kSensorFailWarnThreshold) {
-        ESP_LOGW(kTag, "BQ27220 telemetry unavailable for %u consecutive polls",
+        ESP_LOGW(kTag, "Battery telemetry unavailable for %u consecutive polls",
                  static_cast<unsigned>(s_battery_fail_streak));
     }
 
     if (rtc.available) {
         s_rtc_fail_streak = 0;
     } else if (++s_rtc_fail_streak == kSensorFailWarnThreshold) {
-        ESP_LOGW(kTag, "PCF8563 status unavailable for %u consecutive polls",
+        ESP_LOGW(kTag, "PCF85063 status unavailable for %u consecutive polls",
                  static_cast<unsigned>(s_rtc_fail_streak));
     }
 }
@@ -281,112 +242,26 @@ esp_err_t ClearRtcInterruptsForShutdown()
 {
     esp_err_t err = EnsureRtc();
     if (err != ESP_OK) {
-        ESP_LOGW(kTag, "PCF8563 unavailable before shutdown: %s",
+        ESP_LOGW(kTag, "PCF85063 unavailable before shutdown: %s",
                  esp_err_to_name(err));
         return err;
     }
 
-    pcf8563::InterruptStatus before = {};
-    err = pcf8563::ReadInterruptStatus(s_rtc_device, &before);
+    pcf85063::InterruptStatus before = {};
+    err = pcf85063::ReadInterruptStatus(s_rtc_device, &before);
     if (err != ESP_OK) {
-        ESP_LOGW(kTag, "PCF8563 pre-shutdown interrupt read failed: %s",
+        ESP_LOGW(kTag, "PCF85063 pre-shutdown interrupt read failed: %s",
                  esp_err_to_name(err));
         return err;
     }
 
-    ESP_LOGI(kTag,
-             "rtc before shutdown clear: cs2=0x%02X alarm_flag=%d timer_flag=%d "
-             "alarm_ie=%d timer_ie=%d",
-             before.raw, before.alarm_flag ? 1 : 0, before.timer_flag ? 1 : 0,
-             before.alarm_interrupt_enabled ? 1 : 0,
-             before.timer_interrupt_enabled ? 1 : 0);
-
-    err = pcf8563::ClearAndDisableInterrupts(s_rtc_device);
+    err = pcf85063::ClearAndDisableInterrupts(s_rtc_device);
     if (err != ESP_OK) {
-        ESP_LOGW(kTag, "PCF8563 interrupt clear failed: %s", esp_err_to_name(err));
+        ESP_LOGW(kTag, "PCF85063 interrupt clear failed: %s", esp_err_to_name(err));
         return err;
     }
 
-    pcf8563::InterruptStatus after = {};
-    err = pcf8563::ReadInterruptStatus(s_rtc_device, &after);
-    if (err != ESP_OK) {
-        ESP_LOGW(kTag, "PCF8563 post-shutdown interrupt read failed: %s",
-                 esp_err_to_name(err));
-        return err;
-    }
-
-    ESP_LOGI(kTag,
-             "rtc after shutdown clear: cs2=0x%02X alarm_flag=%d timer_flag=%d "
-             "alarm_ie=%d timer_ie=%d",
-             after.raw, after.alarm_flag ? 1 : 0, after.timer_flag ? 1 : 0,
-             after.alarm_interrupt_enabled ? 1 : 0,
-             after.timer_interrupt_enabled ? 1 : 0);
     return ESP_OK;
-}
-
-esp_err_t EnterSoftOffSleep()
-{
-    ESP_LOGW(kTag, "Hardware latch release returned; entering soft-off deep sleep");
-
-    gpio_config_t power_button_config = {};
-    power_button_config.pin_bit_mask = 1ULL << STICKY_POWER_BUTTON_PIN;
-    power_button_config.mode = GPIO_MODE_INPUT;
-    power_button_config.pull_up_en = GPIO_PULLUP_ENABLE;
-    power_button_config.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    power_button_config.intr_type = GPIO_INTR_DISABLE;
-    esp_err_t err = gpio_config(&power_button_config);
-    if (err != ESP_OK) {
-        ESP_LOGW(kTag, "Failed to configure POWER_OK wake GPIO: %s",
-                 esp_err_to_name(err));
-        return err;
-    }
-
-    uint32_t stable_high_samples = 0;
-    for (uint32_t sample = 0; sample < kPowerButtonReleaseMaxSamples; ++sample) {
-        const int level = gpio_get_level(STICKY_POWER_BUTTON_PIN);
-        if (level == 1) {
-            ++stable_high_samples;
-            if (stable_high_samples >= kPowerButtonReleaseStableSamples) {
-                break;
-            }
-        } else {
-            stable_high_samples = 0;
-        }
-        vTaskDelay(kPowerButtonReleasePollDelay);
-    }
-
-    if (stable_high_samples < kPowerButtonReleaseStableSamples) {
-        ESP_LOGW(kTag, "POWER_OK stayed active; soft-off sleep not armed");
-        return ESP_ERR_TIMEOUT;
-    }
-
-    err = esp_sleep_enable_ext1_wakeup_io(1ULL << STICKY_POWER_BUTTON_PIN,
-                                          ESP_EXT1_WAKEUP_ANY_LOW);
-    if (err != ESP_OK) {
-        ESP_LOGW(kTag, "Failed to enable POWER_OK deep-sleep wake: %s",
-                 esp_err_to_name(err));
-        return err;
-    }
-
-    ESP_LOGW(kTag, "Soft-off armed: press POWER_OK to wake");
-    vTaskDelay(kSoftOffSettleDelay);
-    esp_deep_sleep_start();
-    return ESP_ERR_INVALID_STATE;
-}
-
-// True when external (USB) power is feeding the system rail. On detection failure we assume
-// battery so shutdown still attempts a real power-off (the latch release is harmless on USB
-// and falls back to soft-off if the rail does not drop).
-bool IsUsbConnected()
-{
-    if (!s_power_input_ready) {
-        return false;
-    }
-    sticky_board::PowerInputSample sample = {};
-    if (sticky_board::ReadPowerInputSample(&sample) != ESP_OK) {
-        return false;
-    }
-    return sample.calibrated_mv >= kUsbSenseConnectedThresholdMv;
 }
 
 }  // namespace
@@ -398,52 +273,22 @@ esp_err_t Init()
     }
 
     const esp_sleep_wakeup_cause_t wakeup_cause = esp_sleep_get_wakeup_cause();
-    ESP_LOGI(kTag, "Wakeup cause: %s (%d), ext1_status=0x%llX",
-             WakeupCauseName(wakeup_cause), static_cast<int>(wakeup_cause),
-             esp_sleep_get_ext1_wakeup_status());
+    ESP_LOGI(kTag, "Wakeup cause: %s (%d)", WakeupCauseName(wakeup_cause),
+             static_cast<int>(wakeup_cause));
 
     esp_err_t err = EnablePowerHold();
     if (err != ESP_OK) {
         ESP_LOGE(kTag, "Power hold init failed: %s", esp_err_to_name(err));
         return err;
     }
-
-    err = sticky_board::ConfigureChargerPins();
-    if (err == ESP_OK) {
-        s_charge_pins_ready = true;
-        err = sticky_board::SetChargerEnabled(true);
-        if (err == ESP_OK) {
-            s_charger_enabled = true;
-        } else {
-            ESP_LOGW(kTag, "Failed to enable charger: %s", esp_err_to_name(err));
-        }
-    } else {
-        ESP_LOGW(kTag, "Charger pin init failed: %s", esp_err_to_name(err));
-    }
-
-    err = sticky_board::InitPowerInputSense();
-    if (err == ESP_OK) {
-        s_power_input_ready = true;
-    } else {
-        ESP_LOGW(kTag, "Power-input sense init failed: %s", esp_err_to_name(err));
-    }
+    // The AXP2101 rail bring-up in the board layer leaves the charger enabled.
+    s_charger_enabled = true;
 
     err = sticky_board::EnsureSensorI2cBus(&s_sensor_bus);
     if (err == ESP_OK) {
         err = EnsureRtc();
         if (err != ESP_OK) {
-            ESP_LOGW(kTag, "PCF8563 init failed: %s", esp_err_to_name(err));
-        }
-
-        err = EnsureBatteryGauge();
-        if (err != ESP_OK) {
-            ESP_LOGW(kTag, "BQ27220 init failed: %s", esp_err_to_name(err));
-        } else {
-            err = sticky_board::ConfigureBq27220InterruptPin();
-            if (err != ESP_OK) {
-                ESP_LOGW(kTag, "BQ27220 interrupt pin init failed: %s",
-                         esp_err_to_name(err));
-            }
+            ESP_LOGW(kTag, "PCF85063 init failed: %s", esp_err_to_name(err));
         }
     } else {
         s_sensor_bus = nullptr;
@@ -496,33 +341,16 @@ esp_err_t ReadStatus(Status* out_status)
     status.initialized = s_initialized;
     status.charger_enabled = s_charger_enabled;
 
-    if (s_charge_pins_ready) {
-        bool charging = false;
-        if (sticky_board::ReadChargeState(&charging) == ESP_OK) {
-            status.charge_state =
-                charging ? ChargeState::kCharging : ChargeState::kNotCharging;
-        }
-    }
-
-    if (s_power_input_ready) {
-        sticky_board::PowerInputSample sample = {};
-        if (sticky_board::ReadPowerInputSample(&sample) == ESP_OK) {
-            status.power_input_valid = true;
-            status.power_input_sense_mv = sample.calibrated_mv;
-            status.power_input_raw_average = sample.raw_average;
-            status.power_input_raw_min = sample.raw_min;
-            status.power_input_raw_max = sample.raw_max;
-            status.power_input_sample_count = sample.sample_count;
-            status.usb_detected = sample.calibrated_mv >= kUsbSenseConnectedThresholdMv;
-        }
-    }
-
-    // Battery/RTC come from the background poll cache so this call (on the UI
-    // refresh path) never blocks on sensor I2C.
+    // Battery/RTC/power come from the background poll cache so this call (on the
+    // UI refresh path) never blocks on sensor I2C.
     {
         std::lock_guard<std::mutex> lock(s_snapshot_mutex);
         status.battery = s_cached_battery;
         status.rtc = s_cached_rtc;
+        status.charge_state = s_cached_power.charge_state;
+        status.power_input_valid = s_cached_power.vbus_valid;
+        status.usb_detected = s_cached_power.usb_detected;
+        status.power_input_sense_mv = s_cached_power.vbus_mv;
     }
 
     *out_status = status;
@@ -540,14 +368,10 @@ void LogDebugStatus()
 
     ESP_LOGI(kTag,
              "status: initialized=%d charger_enabled=%d charge_state=%s "
-             "power_input_valid=%d power_input_sense_mv=%d "
-             "power_input_samples=%d raw_avg=%d raw_min=%d raw_max=%d "
-             "usb_detected=%d",
+             "power_input_valid=%d vbus_mv=%d usb_detected=%d",
              status.initialized ? 1 : 0, status.charger_enabled ? 1 : 0,
              ChargeStateName(status.charge_state),
              status.power_input_valid ? 1 : 0, status.power_input_sense_mv,
-             status.power_input_sample_count, status.power_input_raw_average,
-             status.power_input_raw_min, status.power_input_raw_max,
              status.usb_detected ? 1 : 0);
 
     if (status.rtc.available) {
@@ -568,61 +392,21 @@ void LogDebugStatus()
     }
 
     ESP_LOGI(kTag,
-             "battery: soc=%u%% soh=%u%% voltage=%umV current=%dmA "
-             "avg_current=%dmA remaining=%umAh full=%umAh temp=%.2fC "
-             "cycles=%u full_charge=%d low_battery_10=%d status=0x%04X",
-             status.battery.state_of_charge_percent,
-             status.battery.state_of_health_percent, status.battery.voltage_mv,
-             status.battery.current_ma, status.battery.average_current_ma,
-             status.battery.remaining_capacity_mah,
-             status.battery.full_charge_capacity_mah,
+             "battery: soc=%u%% voltage=%umV temp=%.2fC full_charge=%d "
+             "low_battery_10=%d",
+             status.battery.state_of_charge_percent, status.battery.voltage_mv,
              static_cast<double>(status.battery.temperature_c),
-             status.battery.cycle_count,
              status.battery.full_charge_detected ? 1 : 0,
-             status.battery.low_battery_10_percent ? 1 : 0,
-             status.battery.status_bits);
-
-    if (status.battery.operation_status_available) {
-        ESP_LOGI(kTag,
-                 "battery operation: raw=0x%04X sec=%u cfgupdate=%d btpint=%d",
-                 status.battery.operation_status_bits,
-                 static_cast<unsigned>(status.battery.operation_security_state),
-                 status.battery.operation_config_update ? 1 : 0,
-                 status.battery.operation_btp_interrupt ? 1 : 0);
-    } else {
-        ESP_LOGW(kTag, "battery operation: unavailable");
-    }
-
-    if (status.battery.btp_thresholds_available) {
-        ESP_LOGI(kTag,
-                 "battery BTP thresholds: discharge_set=%u charge_set=%u",
-                 status.battery.btp_discharge_set,
-                 status.battery.btp_charge_set);
-    } else {
-        ESP_LOGW(kTag, "battery BTP thresholds: unavailable");
-    }
-
-    if (status.battery.interrupt_level_available) {
-        ESP_LOGI(kTag,
-                 "battery interrupt: BFG_INT level=%d on shared GPIO7 "
-                 "(also used by future IMU interrupt path)",
-                 status.battery.interrupt_level);
-    } else {
-        ESP_LOGW(kTag, "battery interrupt: level unavailable");
-    }
+             status.battery.low_battery_10_percent ? 1 : 0);
 }
 
 esp_err_t SetChargerEnabled(bool enabled)
 {
-    if (!s_charge_pins_ready) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    esp_err_t err = sticky_board::SetChargerEnabled(enabled);
-    if (err == ESP_OK) {
-        s_charger_enabled = enabled;
-    }
-    return err;
+    // The AXP2101 charger is configured during rail bring-up and stays enabled;
+    // there is no separate charge-enable GPIO on this board. Track the requested
+    // state so callers still see a consistent flag.
+    s_charger_enabled = enabled;
+    return ESP_OK;
 }
 
 esp_err_t ReadRtcTime(std::tm* out_time)
@@ -641,7 +425,7 @@ esp_err_t ReadRtcTime(std::tm* out_time)
     }
 
     std::tm timeinfo = {};
-    if (!pcf8563::GetTime(s_rtc_device, timeinfo)) {
+    if (!pcf85063::GetTime(s_rtc_device, timeinfo)) {
         return ESP_FAIL;
     }
 
@@ -660,7 +444,7 @@ esp_err_t WriteRtcTime(const std::tm& time)
         return err;
     }
 
-    return pcf8563::SetTime(s_rtc_device, time) ? ESP_OK : ESP_FAIL;
+    return pcf85063::SetTime(s_rtc_device, time) ? ESP_OK : ESP_FAIL;
 }
 
 esp_err_t RequestShutdown()
@@ -671,30 +455,23 @@ esp_err_t RequestShutdown()
         ESP_LOGW(kTag, "Continuing shutdown after RTC clear failure");
     }
 
-    // On USB the system rail is fed through the charger path, so releasing the latch can
-    // never cut power. Go straight to soft-off (deep sleep, wake on POWER_OK) instead.
-    if (IsUsbConnected()) {
-        ESP_LOGW(kTag,
-                 "USB connected: cannot cut the rail; entering soft-off (unplug to fully "
-                 "power off)");
-        s_power_hold_enabled = false;
-        return EnterSoftOffSleep();
+    Axp2101* pmic = sticky_board::GetPmic();
+    if (pmic == nullptr) {
+        ESP_LOGE(kTag, "PMIC unavailable; cannot power off");
+        return ESP_ERR_INVALID_STATE;
     }
 
-    // On battery: release the self-hold latch to actually cut system power. The rail
-    // collapses inside ReleasePowerHold() and execution never returns here.
-    esp_err_t err = sticky_board::ReleasePowerHold();
-    if (err != ESP_OK) {
-        ESP_LOGW(kTag, "Power hold release failed: %s", esp_err_to_name(err));
-        sticky_board::RestorePowerHold();
-        return err;
-    }
-
-    // Latch released but still running: the rail did not drop (unexpected on battery).
-    // Fall back to soft-off so the device at least appears off and can be woken.
+    // The AXP2101 cuts every rail on shutdown(). On battery the board goes dark
+    // here and never returns; while VBUS is present the PMIC keeps the rail fed
+    // and the call returns, leaving the device running (as intended — you cannot
+    // fully power off a USB-powered board).
     s_power_hold_enabled = false;
-    ESP_LOGW(kTag, "Latch released but board still running; falling back to soft-off");
-    return EnterSoftOffSleep();
+    ESP_LOGW(kTag, "Powering off via AXP2101 (unplug USB to fully power down)");
+    vTaskDelay(kShutdownSettleDelay);
+    pmic->PowerOff();
+
+    ESP_LOGW(kTag, "AXP2101 power-off returned; board still powered (VBUS present)");
+    return ESP_OK;
 }
 
 }  // namespace power_service

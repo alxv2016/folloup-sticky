@@ -59,9 +59,9 @@ Snapshot GetSnapshot();
 bool GetStorageStats(StorageStats* stats);
 esp_err_t RunWithMountedFilesystem(MountedFilesystemHandler handler, void* context);
 
-// Re-initialize the SD card after light sleep. The SDSPI card and shared SPI
-// host lose their state across a light-sleep cycle, so the cached mount handle
-// is stale on wake and the first read times out (sdmmc 0x107). This forces a
+// Re-initialize the SD card after light sleep. The SDMMC card loses its state
+// across a light-sleep cycle, so the cached mount handle is stale on wake and
+// the first read times out (sdmmc 0x107). This forces a
 // clean unmount + remount so the next SD access lands on a freshly initialized
 // card. Safe to call when no card is present or storage is uninitialized.
 esp_err_t RecoverAfterLightSleep();

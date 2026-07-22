@@ -31,7 +31,8 @@ ActivateResult HandlePrimaryActivate(DetailsPageCoordinator& coordinator)
     }
 
     if (coordinator.IsRoleFocused(NavigationItemRole::kDetailsPageTranscribeButton)) {
-        result.intent = ActivateIntent::kTranscribe;
+        result.intent = coordinator.has_transcript() ? ActivateIntent::kPlayRecording
+                                                     : ActivateIntent::kTranscribe;
         result.handled = true;
         result.play_activate_cue = true;
         return result;
@@ -85,6 +86,11 @@ void ApplyPrimaryActivateResult(const ActivateResult& result, const ActivateCall
         case ActivateIntent::kTranscribe:
             if (callbacks.transcribe) {
                 callbacks.transcribe();
+            }
+            break;
+        case ActivateIntent::kPlayRecording:
+            if (callbacks.play) {
+                callbacks.play();
             }
             break;
         case ActivateIntent::kNone:

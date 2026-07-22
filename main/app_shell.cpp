@@ -12,7 +12,6 @@
 #include "device_sleep_service.h"
 #include "device_sleep_runtime.h"
 #include "display_service.h"
-#include "environment_service.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
@@ -1745,14 +1744,6 @@ void InitFooterRuntime()
     }
 }
 
-void InitTouchService()
-{
-    const esp_err_t err = input_runtime_setup::InitTouchInput();
-    if (err != ESP_OK) {
-        ESP_LOGW(kTag, "Touch input init failed: %s", esp_err_to_name(err));
-    }
-}
-
 void InitImuService()
 {
     const esp_err_t err = imu_service::Init();
@@ -1761,16 +1752,6 @@ void InitImuService()
         return;
     }
     imu_service::LogDebugStatus();
-}
-
-void InitEnvironmentService()
-{
-    const esp_err_t err = environment_service::Init();
-    if (err != ESP_OK) {
-        ESP_LOGW(kTag, "Environment service init failed: %s", esp_err_to_name(err));
-        return;
-    }
-    environment_service::LogDebugStatus();
 }
 
 void InitDeviceSleepRuntime()
@@ -1821,9 +1802,7 @@ void Run()
         .touch_handler_context = nullptr,
     });
     PlayFeedback(feedback_service::FeedbackEvent::kStartup);
-    InitTouchService();
     InitImuService();
-    InitEnvironmentService();
     InitDeviceSleepRuntime();
     InitTimezoneService();
     InitRecordingArchiveService();

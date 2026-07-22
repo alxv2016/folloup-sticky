@@ -1,73 +1,42 @@
 #include "feedback_service.h"
 
-#include "buzzer_service.h"
 #include "esp_log.h"
+#include "sticky_board.h"
+#include "system_sound_service.h"
 
 namespace feedback_service {
 namespace {
 
 constexpr const char* kTag = "FeedbackService";
-constexpr bool kBuzzerFeedbackEnabled = true;
 
-buzzer_service::Pattern PatternForEvent(FeedbackEvent event)
+// Maps a feedback event onto the closest system-sound cue (played through the
+// ES8311 codec). There is no dedicated buzzer on this board.
+SoundCue CueForEvent(FeedbackEvent event)
 {
     switch (event) {
         case FeedbackEvent::kStartup:
-            return buzzer_service::Pattern::kStartup;
+            return SoundCue::kStartup;
         case FeedbackEvent::kGeminiConnected:
-            return buzzer_service::Pattern::kGeminiConnected;
+            return SoundCue::kOnline;
         case FeedbackEvent::kLock:
-            return buzzer_service::Pattern::kLock;
+            return SoundCue::kLock;
         case FeedbackEvent::kUnlock:
-            return buzzer_service::Pattern::kUnlock;
+            return SoundCue::kUnlock;
         case FeedbackEvent::kRecordingStart:
-            return buzzer_service::Pattern::kRecordingStart;
+            return SoundCue::kButtonActivate;
         case FeedbackEvent::kModalOpen:
-            return buzzer_service::Pattern::kModalOpen;
+            return SoundCue::kModalNotification;
         case FeedbackEvent::kButtonClick:
-        case FeedbackEvent::kTouchContact:
-            return buzzer_service::Pattern::kClick;
         case FeedbackEvent::kButtonDoubleClick:
-            return buzzer_service::Pattern::kDoubleClick;
         case FeedbackEvent::kButtonLongPress:
-            return buzzer_service::Pattern::kLongClick;
+            return SoundCue::kButtonActivate;
+        case FeedbackEvent::kTouchContact:
+            return SoundCue::kNavigationMove;
         case FeedbackEvent::kShutdown:
-            return buzzer_service::Pattern::kShutdown;
+            return SoundCue::kModalNotification;
         case FeedbackEvent::kError:
         default:
-            return buzzer_service::Pattern::kError;
-    }
-}
-
-const char* FeedbackEventName(FeedbackEvent event)
-{
-    switch (event) {
-        case FeedbackEvent::kStartup:
-            return "startup";
-        case FeedbackEvent::kGeminiConnected:
-            return "gemini_connected";
-        case FeedbackEvent::kLock:
-            return "lock";
-        case FeedbackEvent::kUnlock:
-            return "unlock";
-        case FeedbackEvent::kRecordingStart:
-            return "recording_start";
-        case FeedbackEvent::kModalOpen:
-            return "modal_open";
-        case FeedbackEvent::kButtonClick:
-            return "button_click";
-        case FeedbackEvent::kButtonDoubleClick:
-            return "button_double_click";
-        case FeedbackEvent::kButtonLongPress:
-            return "button_long_press";
-        case FeedbackEvent::kTouchContact:
-            return "touch_contact";
-        case FeedbackEvent::kShutdown:
-            return "shutdown";
-        case FeedbackEvent::kError:
-            return "error";
-        default:
-            return "unknown";
+            return SoundCue::kInterrupt;
     }
 }
 
@@ -75,33 +44,22 @@ const char* FeedbackEventName(FeedbackEvent event)
 
 esp_err_t Init()
 {
-    if (!kBuzzerFeedbackEnabled) {
-        ESP_LOGI(kTag, "Feedback service initialized with buzzer disabled");
-        return ESP_OK;
+    AudioCodec* codec = sticky_board::GetAudioCodec();
+    if (codec == nullptr) {
+        ESP_LOGW(kTag, "Audio codec unavailable; feedback cues disabled");
+        return ESP_ERR_NOT_FOUND;
     }
 
-    const esp_err_t err = buzzer_service::Init();
-    if (err != ESP_OK) {
-        ESP_LOGW(kTag, "Buzzer service init failed: %s", esp_err_to_name(err));
-        return err;
-    }
-
-    ESP_LOGI(kTag, "Feedback service initialized");
+    // Starts the sound-service playback task and warms (decodes) the cue cache.
+    SystemSoundService::GetInstance().Initialize(codec);
+    ESP_LOGI(kTag, "Feedback service initialized (audio cues via ES8311)");
     return ESP_OK;
 }
 
 esp_err_t Play(FeedbackEvent event)
 {
-    if (!kBuzzerFeedbackEnabled) {
-        return ESP_OK;
-    }
-
-    const esp_err_t err = buzzer_service::PlayPattern(PatternForEvent(event));
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        ESP_LOGW(kTag, "Feedback event %s failed: %s",
-                 FeedbackEventName(event), esp_err_to_name(err));
-    }
-    return err;
+    SystemSoundService::GetInstance().PlayCue(CueForEvent(event));
+    return ESP_OK;
 }
 
 }  // namespace feedback_service

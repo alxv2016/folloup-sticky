@@ -83,11 +83,6 @@ bool IsTodoRecordingTag(RecordingTag tag)
     return tag == RecordingTag::kTask;
 }
 
-bool IsNotesRecordingTag(RecordingTag tag)
-{
-    return !IsTodoRecordingTag(tag);
-}
-
 const char* ArchiveSubdirectory(RecordingTag tag)
 {
     return IsTodoRecordingTag(tag) ? "todos" : "recordings";

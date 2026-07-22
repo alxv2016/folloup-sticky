@@ -12,6 +12,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "page_navigation/page_focus_projection.h"
+#include "playback_service.h"
 #include "recording_archive_service.h"
 #include "recording_session_service.h"
 #include "ui_refresh_runtime.h"
@@ -39,6 +40,31 @@ void TranscribeWorker(void* arg)
         (void)recording_session_service::BeginArchivedTranscription(*recording_id);
     }
     s_transcribe_worker_active.store(false, std::memory_order_release);
+    vTaskDelete(nullptr);
+}
+
+// Playback streams the recording's WAV to the codec; like transcription it runs on
+// a short-lived worker (off the input task) and is serialized to one at a time.
+constexpr uint32_t kPlaybackWorkerStackWords = 4096;
+std::atomic<bool> s_playback_worker_active{false};
+
+void PlaybackWorker(void* arg)
+{
+    std::unique_ptr<std::string> recording_id(static_cast<std::string*>(arg));
+    if (recording_id != nullptr) {
+        // Resolve the WAV path off the input task (listing the archive touches SD).
+        const std::vector<recording_archive_service::RecordingEntry> recordings =
+            recording_archive_service::ListRecordings();
+        for (const recording_archive_service::RecordingEntry& entry : recordings) {
+            if (entry.recording_id == *recording_id) {
+                if (!entry.recording_path.empty()) {
+                    (void)playback_service::PlayFile(entry.recording_path.c_str());
+                }
+                break;
+            }
+        }
+    }
+    s_playback_worker_active.store(false, std::memory_order_release);
     vTaskDelete(nullptr);
 }
 
@@ -385,6 +411,33 @@ void RequestTranscribe()
     if (created != pdPASS) {
         delete recording_id_arg;
         s_transcribe_worker_active.store(false, std::memory_order_release);
+    }
+}
+
+void RequestPlay()
+{
+    std::string recording_id;
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        recording_id = s_coordinator.recording_id();
+    }
+    if (recording_id.empty()) {
+        return;
+    }
+    // Serialize to one clip at a time; stream it on a dedicated worker (never on the
+    // input task that dispatched the tap).
+    bool expected = false;
+    if (!s_playback_worker_active.compare_exchange_strong(expected, true,
+                                                          std::memory_order_acq_rel)) {
+        return;
+    }
+    auto* recording_id_arg = new std::string(std::move(recording_id));
+    const BaseType_t created = xTaskCreatePinnedToCore(
+        PlaybackWorker, "det_play", kPlaybackWorkerStackWords, recording_id_arg,
+        followup_task_config::kPriorityRecordCapture, nullptr, followup_task_config::kAppCore);
+    if (created != pdPASS) {
+        delete recording_id_arg;
+        s_playback_worker_active.store(false, std::memory_order_release);
     }
 }
 

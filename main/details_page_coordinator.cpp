@@ -143,16 +143,16 @@ void DetailsPageCoordinator::RefreshFromArchive(const std::vector<RecordingEntry
 
 void DetailsPageCoordinator::UpdateNavigationModel()
 {
-    const bool want_transcribe = !has_transcript_;
-    const bool have_transcribe =
+    // The primary action button is always present for a recording (Play once a
+    // transcript exists, Transcribe otherwise), so it occupies the same control
+    // slot in both states — only its label/intent change.
+    const bool want_primary = true;
+    const bool have_primary =
         navigation_model_.IndexOfRole(NavigationItemRole::kDetailsPageTranscribeButton) >= 0;
-    if (want_transcribe == have_transcribe) {
+    if (want_primary == have_primary) {
         return;
     }
-    // The Transcribe button appeared or disappeared (e.g. transcription finished while viewing).
-    // Rebuild the model and re-home focus on the scroll container so focus can't land on a control
-    // that no longer exists.
-    navigation_model_ = page_navigation::BuildDetailsPageNavigationModel(want_transcribe);
+    navigation_model_ = page_navigation::BuildDetailsPageNavigationModel(want_primary);
     focus_.Configure(navigation_model_.item_count,
                      navigation_model_.IndexOfRole(NavigationItemRole::kDetailsPageScrollContainer));
 }
@@ -217,9 +217,11 @@ epaper_ui::DetailsPageState DetailsPageCoordinator::BuildState() const
     state.scroll_container.scroll_position_percent = scroll_position_percent_;
     state.back_button.label_text = "Back";
     state.back_button.selected = IsRoleFocused(NavigationItemRole::kDetailsPageBackButton);
-    // Audio-only recordings (no transcript) offer a primary Transcribe button beside Back.
-    state.show_transcribe_button = !has_transcript_;
-    state.transcribe_button.label_text = "Transcribe";
+    // The primary action button sits beside Back: it plays the recording once a
+    // transcript exists, and otherwise transcribes it. (The reused button/role is
+    // still named "transcribe" in the layout; only the label and intent vary.)
+    state.show_transcribe_button = true;
+    state.transcribe_button.label_text = has_transcript_ ? "Play" : "Transcribe";
     state.transcribe_button.selected =
         IsRoleFocused(NavigationItemRole::kDetailsPageTranscribeButton);
     return state;

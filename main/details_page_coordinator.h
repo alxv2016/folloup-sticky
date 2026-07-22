@@ -40,6 +40,9 @@ public:
     bool scroll_container_active() const { return scroll_container_active_; }
     DetailsPageSource source_page() const { return source_page_; }
     const std::string& recording_id() const { return recording_id_; }
+    // The primary action button plays the audio once a transcript exists, and
+    // otherwise offers to transcribe it.
+    bool has_transcript() const { return has_transcript_; }
 
     const page_navigation::NavigationModel& navigation_model() const { return navigation_model_; }
     const page_navigation::RovingFocus& focus() const { return focus_; }

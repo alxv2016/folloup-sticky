@@ -18,7 +18,6 @@
 #include "power_service.h"
 #include "shared_bus_service.h"
 #include "sd_card.h"
-#include "sticky_board.h"
 #include "sticky_board_config.h"
 #include "esp_timer.h"
 
@@ -103,16 +102,18 @@ private:
 SdCardPins BuildPins()
 {
     SdCardPins pins = {};
-    pins.host_id = STICKY_SHARED_SPI_HOST;
-    pins.clk = STICKY_SHARED_SPI_CLK_PIN;
-    pins.mosi = STICKY_SHARED_SPI_MOSI_PIN;
-    pins.miso = STICKY_SHARED_SPI_MISO_PIN;
-    pins.cs = STICKY_SD_CS_PIN;
-    pins.external_spi_bus = true;
-    pins.power_enable = STICKY_SD_POWER_EN_PIN;
-    pins.power_active_level = 1;
-    pins.card_detect = STICKY_SD_DETECT_PIN;
-    pins.card_detect_active_level = 0;
+    pins.slot = SDMMC_HOST_SLOT_1;
+    pins.bus_width = 4;
+    pins.clk = STICKY_SD_CLK_PIN;
+    pins.cmd = STICKY_SD_CMD_PIN;
+    pins.d0 = STICKY_SD_D0_PIN;
+    pins.d1 = STICKY_SD_D1_PIN;
+    pins.d2 = STICKY_SD_D2_PIN;
+    pins.d3 = STICKY_SD_D3_PIN;
+    pins.internal_pullup = true;
+    // Waveshare has no card-detect or power-enable line for the SD slot.
+    pins.power_enable = GPIO_NUM_NC;
+    pins.card_detect = GPIO_NUM_NC;
     return pins;
 }
 
@@ -284,12 +285,6 @@ esp_err_t MountCardLocked(SdCard& card)
     if (!inserted) {
         s_mount_result = ESP_ERR_NOT_FOUND;
         return ESP_ERR_NOT_FOUND;
-    }
-
-    s_mount_result = sticky_board::EnsureSharedSpiBus();
-    if (s_mount_result != ESP_OK) {
-        ESP_LOGW(kTag, "Shared SPI bus init failed: %s", esp_err_to_name(s_mount_result));
-        return s_mount_result;
     }
 
     s_mount_result = card.Mount(false, kAllocationUnitSize, kMaxFiles, true);
@@ -741,11 +736,11 @@ esp_err_t RecoverAfterLightSleep()
 
     esp_err_t err = ESP_OK;
     {
-        // The SDSPI card and shared SPI host lose their state across light sleep,
-        // so the cached mount handle is stale on wake and the first read times out
-        // (sdmmc 0x107). Force a clean unmount + remount to re-run the card's SPI
-        // init sequence. Acquire the bus BEFORE s_card_mutex to match the lock
-        // order used by RunWithMountedFilesystem and the format path.
+        // The SDMMC card loses its state across light sleep, so the cached mount
+        // handle is stale on wake and the first read times out (sdmmc 0x107).
+        // Force a clean unmount + remount to re-run the card's init sequence.
+        // Acquire the bus BEFORE s_card_mutex to match the lock order used by
+        // RunWithMountedFilesystem and the format path.
         StorageBusGuard bus_guard;
         err = bus_guard.Acquire();
         if (err != ESP_OK) {

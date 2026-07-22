@@ -47,6 +47,10 @@ bool ConsumePendingBack();
 // on a dedicated worker). Safe to call from the input/touch task.
 void RequestTranscribe();
 
+// Play the current recording's audio out through the codec (reuses the board's
+// AudioCodec on a dedicated worker). Safe to call from the input/touch task.
+void RequestPlay();
+
 // Leave the entered scroll container (DOWN double-click). Returns true if it was active.
 bool ExitActiveControl();
 
