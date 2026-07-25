@@ -9,16 +9,9 @@
 
 // Waveshare has four momentary buttons (active-low to GND): BOOT (GPIO0, left as
 // the flash/boot strap), UP (GPIO4), FN (GPIO5, the OK/action button), and DOWN
-// (GPIO6). The app's three logical buttons map onto UP / FN / DOWN.
-//
-// STICKY_POWER_HOLD/LOCK (GPIO45/46) are only referenced by the light-sleep path
-// (device_sleep_runtime); they are Sticky's self-hold latch, which the Waveshare
-// board doesn't have (power is the AXP2101). Left in place until the sleep path is
-// reworked; note GPIO45/46 are RTC_INT/EPD_RST on this board.
+// (GPIO6). The app's three logical buttons map onto UP / FN / DOWN. FN doubles as
+// the light-sleep wake button (alongside the AXP2101 power-key IRQ).
 #define STICKY_POWER_BUTTON_PIN       GPIO_NUM_5
-#define STICKY_POWER_HOLD_PIN         GPIO_NUM_45
-#define STICKY_POWER_LOCK_PIN         GPIO_NUM_46
-
 #define STICKY_BUTTON_UP_PIN          GPIO_NUM_4
 #define STICKY_BUTTON_DOWN_PIN        GPIO_NUM_6
 

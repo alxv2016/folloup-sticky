@@ -9,7 +9,6 @@
 #include "device_sleep_service.h"
 #include "display_service.h"
 #include "driver/gpio.h"
-#include "driver/rtc_io.h"
 #include "esp_check.h"
 #include "esp_err.h"
 #include "esp_log.h"
@@ -44,7 +43,6 @@ constexpr size_t kAutoSleepEventQueueDepth = 8;
 constexpr TickType_t kPowerButtonReleasePollDelay = pdMS_TO_TICKS(20);
 constexpr uint32_t kPowerButtonReleaseStableSamples = 10;
 constexpr uint32_t kPowerButtonReleaseMaxSamples = 250;
-constexpr uint64_t kPowerButtonWakeMask = 1ULL << STICKY_POWER_BUTTON_PIN;
 
 enum class MotionState {
     kUnknown,
@@ -174,15 +172,12 @@ void HandleAutoSleepEvent(const device_sleep_service::Event& event, void*)
 void LogLightSleepPins(const char* phase)
 {
     ESP_LOGI(kTag,
-             "Light-sleep %s pins: POWER_OK(GPIO%d)=%d PWR_HOLD(GPIO%d)=%d "
-             "PWR_LOCK(GPIO%d)=%d",
+             "Light-sleep %s pins: FN(GPIO%d)=%d PMIC_IRQ(GPIO%d)=%d",
              phase,
              STICKY_POWER_BUTTON_PIN,
              gpio_get_level(STICKY_POWER_BUTTON_PIN),
-             STICKY_POWER_HOLD_PIN,
-             gpio_get_level(STICKY_POWER_HOLD_PIN),
-             STICKY_POWER_LOCK_PIN,
-             gpio_get_level(STICKY_POWER_LOCK_PIN));
+             STICKY_PMIC_IRQ_PIN,
+             gpio_get_level(STICKY_PMIC_IRQ_PIN));
 }
 
 esp_err_t ConfigurePowerButtonWakeInput(const char* context)
@@ -205,59 +200,30 @@ esp_err_t ConfigurePowerButtonWakeInput(const char* context)
     return err;
 }
 
-esp_err_t ConfigureSleepOutputHigh(gpio_num_t pin, const char* label)
+// Waveshare has no self-hold latch to preserve during sleep (the AXP2101 keeps the
+// rails up), so light sleep just arms GPIO wake sources: a press of the FN button
+// or an AXP2101 power-key IRQ, both active-low. Uses the light-sleep GPIO-wake path
+// (the digital domain stays powered), not RTC ext1.
+esp_err_t ArmLightSleepGpioWake()
 {
-    ESP_LOGI(kTag, "Light-sleep latch config begin: %s GPIO%d output high",
-             label, pin);
-
-    esp_err_t err = gpio_set_level(pin, 1);
-    if (err != ESP_OK) {
-        ESP_LOGW(kTag, "Set %s GPIO%d high before light sleep failed: %s",
-                 label, pin, esp_err_to_name(err));
-        return err;
-    }
-
-    err = gpio_sleep_set_direction(pin, GPIO_MODE_OUTPUT);
-    if (err != ESP_OK) {
-        ESP_LOGW(kTag, "Set %s GPIO%d sleep output mode failed: %s",
-                 label, pin, esp_err_to_name(err));
-        return err;
-    }
-
-    err = gpio_sleep_set_pull_mode(pin, GPIO_FLOATING);
-    if (err != ESP_OK) {
-        ESP_LOGW(kTag, "Set %s GPIO%d sleep pull mode failed: %s",
-                 label, pin, esp_err_to_name(err));
-        return err;
-    }
-
-    err = gpio_sleep_sel_en(pin);
-    if (err != ESP_OK) {
-        ESP_LOGW(kTag, "Enable %s GPIO%d sleep config failed: %s",
-                 label, pin, esp_err_to_name(err));
-        return err;
-    }
-
-    ESP_LOGI(kTag, "Light-sleep latch config done: %s GPIO%d level=%d",
-             label, pin, gpio_get_level(pin));
+    ESP_RETURN_ON_ERROR(
+        gpio_wakeup_enable(STICKY_POWER_BUTTON_PIN, GPIO_INTR_LOW_LEVEL), kTag,
+        "enable FN light-sleep wake failed");
+    ESP_RETURN_ON_ERROR(
+        gpio_wakeup_enable(STICKY_PMIC_IRQ_PIN, GPIO_INTR_LOW_LEVEL), kTag,
+        "enable PMIC-IRQ light-sleep wake failed");
+    ESP_RETURN_ON_ERROR(esp_sleep_enable_gpio_wakeup(), kTag,
+                        "enable GPIO light-sleep wake source failed");
+    ESP_LOGI(kTag, "Light-sleep GPIO wake armed: FN(GPIO%d) + PMIC_IRQ(GPIO%d), any-low",
+             STICKY_POWER_BUTTON_PIN, STICKY_PMIC_IRQ_PIN);
     return ESP_OK;
 }
 
-esp_err_t PreservePowerLatchDuringLightSleep()
+void DisarmLightSleepGpioWake()
 {
-    LogLightSleepPins("before latch sleep config");
-    ESP_RETURN_ON_ERROR(ConfigureSleepOutputHigh(STICKY_POWER_HOLD_PIN, "PWR_HOLD"),
-                        kTag,
-                        "preserve PWR_HOLD during light sleep failed");
-    ESP_RETURN_ON_ERROR(ConfigureSleepOutputHigh(STICKY_POWER_LOCK_PIN, "PWR_LOCK"),
-                        kTag,
-                        "preserve PWR_LOCK during light sleep failed");
-
-    ESP_LOGI(kTag, "Power latch sleep hold armed: PWR_HOLD(GPIO%d)=1 PWR_LOCK(GPIO%d)=1",
-             STICKY_POWER_HOLD_PIN,
-             STICKY_POWER_LOCK_PIN);
-    LogLightSleepPins("after latch sleep config");
-    return ESP_OK;
+    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_GPIO);
+    gpio_wakeup_disable(STICKY_POWER_BUTTON_PIN);
+    gpio_wakeup_disable(STICKY_PMIC_IRQ_PIN);
 }
 
 esp_err_t WaitForPowerButtonReleased()
@@ -322,7 +288,7 @@ esp_err_t AbortLightSleepEntry(esp_err_t err, const char* reason)
 {
     ESP_LOGW(kTag, "Aborting light sleep entry: %s: %s",
              reason, esp_err_to_name(err));
-    esp_sleep_disable_ext1_wakeup_io(kPowerButtonWakeMask);
+    DisarmLightSleepGpioWake();
     s_power_button_wake_only_active.store(false, std::memory_order_relaxed);
     status_bar_runtime::SetSleepIndicatorVisible(false);
     const esp_err_t status_bar_err = status_bar_runtime::UpdateDisplayState();
@@ -350,29 +316,20 @@ esp_err_t EnterLightSleep()
     ESP_LOGI(kTag, "Light-sleep entry begin");
     LogLightSleepPins("entry");
 
-    esp_err_t err = PreservePowerLatchDuringLightSleep();
+    esp_err_t err = ConfigurePowerButtonWakeInput("light-sleep wake");
     if (err != ESP_OK) {
-        return AbortLightSleepEntry(err, "preserve power latch sleep state failed");
-    }
-
-    err = ConfigurePowerButtonWakeInput("light-sleep wake");
-    if (err != ESP_OK) {
-        return AbortLightSleepEntry(err, "configure POWER_OK wake input failed");
+        return AbortLightSleepEntry(err, "configure FN wake input failed");
     }
 
     err = WaitForPowerButtonReleased();
     if (err != ESP_OK) {
-        return AbortLightSleepEntry(err, "POWER_OK release wait failed");
+        return AbortLightSleepEntry(err, "FN release wait failed");
     }
 
-    err = esp_sleep_enable_ext1_wakeup_io(kPowerButtonWakeMask,
-                                          ESP_EXT1_WAKEUP_ANY_LOW);
+    err = ArmLightSleepGpioWake();
     if (err != ESP_OK) {
-        return AbortLightSleepEntry(err, "enable POWER_OK EXT1 wake failed");
+        return AbortLightSleepEntry(err, "arm GPIO light-sleep wake failed");
     }
-    ESP_LOGI(kTag,
-             "Light-sleep EXT1 wake armed: mask=0x%llX mode=ANY_LOW",
-             static_cast<unsigned long long>(kPowerButtonWakeMask));
 
     ESP_LOGI(kTag, "Light-sleep display preparation begin");
     status_bar_runtime::SetSleepIndicatorVisible(true);
@@ -399,29 +356,21 @@ esp_err_t EnterLightSleep()
              esp_err_to_name(sleep_err));
 
     const esp_sleep_wakeup_cause_t wakeup_cause = esp_sleep_get_wakeup_cause();
-    const uint64_t ext1_status = esp_sleep_get_ext1_wakeup_status();
-    const bool power_button_wake =
-        (wakeup_cause == ESP_SLEEP_WAKEUP_EXT1 &&
-         (ext1_status & kPowerButtonWakeMask) != 0) ||
-        gpio_get_level(STICKY_POWER_BUTTON_PIN) == 0;
+    // FN and the AXP2101 IRQ are the GPIO wake sources; a low FN level on wake means
+    // the button woke us, so its press/release is suppressed downstream.
+    const bool power_button_wake = gpio_get_level(STICKY_POWER_BUTTON_PIN) == 0;
 
-    esp_sleep_disable_ext1_wakeup_io(kPowerButtonWakeMask);
-    ESP_LOGI(kTag, "Light-sleep EXT1 wake disabled");
+    DisarmLightSleepGpioWake();
+    ESP_LOGI(kTag, "Light-sleep GPIO wake disarmed");
 
-    const esp_err_t rtc_deinit_err = rtc_gpio_deinit(STICKY_POWER_BUTTON_PIN);
-    if (rtc_deinit_err != ESP_OK) {
-        ESP_LOGW(kTag, "POWER_OK RTC GPIO deinit after light sleep failed: %s",
-                 esp_err_to_name(rtc_deinit_err));
-    }
     const esp_err_t reconfig_err = ConfigurePowerButtonWakeInput("post-light-sleep");
     if (reconfig_err != ESP_OK) {
-        ESP_LOGW(kTag, "POWER_OK digital input restore after light sleep failed: %s",
+        ESP_LOGW(kTag, "FN digital input restore after light sleep failed: %s",
                  esp_err_to_name(reconfig_err));
     }
 
-    ESP_LOGI(kTag, "Exited light sleep: cause=%s ext1_status=0x%llX power_button=%d err=%s",
+    ESP_LOGI(kTag, "Exited light sleep: cause=%s power_button=%d err=%s",
              WakeupCauseName(wakeup_cause),
-             static_cast<unsigned long long>(ext1_status),
              power_button_wake ? 1 : 0,
              esp_err_to_name(sleep_err));
     LogLightSleepPins("after wake source cleanup");
