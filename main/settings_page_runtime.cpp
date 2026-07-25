@@ -69,23 +69,6 @@ page_navigation::NavigationItemRole FooterRoleForFooterItem(footer_runtime::Foot
     }
 }
 
-page_navigation::NavigationItemRole RoleForUiItem(epaper_ui::SettingsPageItemId item)
-{
-    switch (item) {
-        case epaper_ui::SettingsPageItemId::kWifiToggle:
-            return page_navigation::NavigationItemRole::kSettingsWifiToggle;
-        case epaper_ui::SettingsPageItemId::kAccessPointToggle:
-            return page_navigation::NavigationItemRole::kSettingsEnableApToggle;
-        case epaper_ui::SettingsPageItemId::kFormatSdButton:
-            return page_navigation::NavigationItemRole::kSettingsFormatSdButton;
-        case epaper_ui::SettingsPageItemId::kManualOnboardingButton:
-            return page_navigation::NavigationItemRole::kSettingsManualOnboardingButton;
-        case epaper_ui::SettingsPageItemId::kNone:
-        default:
-            return page_navigation::NavigationItemRole::kUnknown;
-    }
-}
-
 footer_runtime::ProjectionState BuildFooterProjectionStateLocked()
 {
     const page_navigation::PageFocusProjection projection =
@@ -120,110 +103,6 @@ bool FooterProjectionChangedForFocusIndexes(int old_focus_index, int new_focus_i
 epaper_ui::SettingsPageState BuildStateLocked()
 {
     return s_coordinator.BuildState(wifi_service::GetUiState(), storage_service::GetSnapshot());
-}
-
-bool ResolveTouchTargetImpl(int x, int y, app_interaction::InteractiveTarget* target)
-{
-    if (target != nullptr) {
-        *target = {};
-    }
-
-    const epaper_ui::SettingsPageState state = [&]() {
-        std::lock_guard<std::mutex> lock(s_mutex);
-        return BuildStateLocked();
-    }();
-
-    epaper_ui::SettingsPageItemId item = epaper_ui::SettingsPageItemId::kNone;
-    if (!epaper_ui::HitTestSettingsPageItem(display_service::PortraitWidth(),
-                                            display_service::PortraitHeight(),
-                                            state,
-                                            x,
-                                            y,
-                                            &item)) {
-        return false;
-    }
-
-    const page_navigation::NavigationItemRole role = RoleForUiItem(item);
-    const int focus_index = s_coordinator.navigation_model().IndexOfRole(role);
-    if (role == page_navigation::NavigationItemRole::kUnknown || focus_index < 0) {
-        return false;
-    }
-
-    if (target != nullptr) {
-        *target = {
-            .owner = app_interaction::Owner::kPage,
-            .kind = app_interaction::Kind::kPageAction,
-            .primary_index = focus_index,
-            .secondary_index = s_interaction_generation,
-        };
-    }
-    return true;
-}
-
-page_actions::FocusUpdateOutcome FocusTouchTargetImpl(
-    const app_interaction::InteractiveTarget& target)
-{
-    page_actions::FocusUpdateOutcome result = {};
-    if (target.owner != app_interaction::Owner::kPage ||
-        target.kind != app_interaction::Kind::kPageAction) {
-        return result;
-    }
-
-    bool changed = false;
-    int old_focus_index = -1;
-    int new_focus_index = -1;
-    epaper_ui::SettingsPageState old_state = {};
-    epaper_ui::SettingsPageState new_state = {};
-    {
-        std::lock_guard<std::mutex> lock(s_mutex);
-        if (target.secondary_index != s_interaction_generation) {
-            ESP_LOGW(kTag,
-                     "Ignoring stale settings focus target: primary=%ld target_gen=%ld current_gen=%ld",
-                     static_cast<long>(target.primary_index),
-                     static_cast<long>(target.secondary_index),
-                     static_cast<long>(s_interaction_generation));
-            return result;
-        }
-        old_focus_index = s_coordinator.focus().index();
-        old_state = BuildStateLocked();
-        changed = s_coordinator.SetFocusIndex(target.primary_index);
-        new_focus_index = s_coordinator.focus().index();
-        new_state = BuildStateLocked();
-    }
-
-    if (!changed) {
-        return result;
-    }
-
-    result.handled = true;
-    result.apply_page_state = true;
-    result.sync_footer_projection =
-        FooterProjectionChangedForFocusIndexes(old_focus_index, new_focus_index);    return result;
-}
-
-settings_page_interactions::ActivateResult ActivateTouchTargetImpl(
-    const app_interaction::InteractiveTarget& target)
-{
-    settings_page_interactions::ActivateResult result = {};
-    if (target.owner != app_interaction::Owner::kPage ||
-        target.kind != app_interaction::Kind::kPageAction) {
-        return result;
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(s_mutex);
-        if (target.secondary_index != s_interaction_generation) {
-            ESP_LOGW(kTag,
-                     "Ignoring stale settings activate target: primary=%ld target_gen=%ld current_gen=%ld",
-                     static_cast<long>(target.primary_index),
-                     static_cast<long>(target.secondary_index),
-                     static_cast<long>(s_interaction_generation));
-            return result;
-        }
-        (void)s_coordinator.SetFocusIndex(target.primary_index);
-        result = settings_page_interactions::HandlePrimaryActivate(s_coordinator);
-    }
-    return result;
 }
 
 }  // namespace
@@ -327,23 +206,6 @@ void ResetFocus()
         projection = BuildFooterProjectionStateLocked();
     }
     footer_runtime::SetProjectionState(projection);
-}
-
-bool ResolveTouchTarget(int x, int y, app_interaction::InteractiveTarget* target)
-{
-    return ResolveTouchTargetImpl(x, y, target);
-}
-
-page_actions::FocusUpdateOutcome FocusTouchTarget(
-    const app_interaction::InteractiveTarget& target)
-{
-    return FocusTouchTargetImpl(target);
-}
-
-settings_page_interactions::ActivateResult ActivateTouchTarget(
-    const app_interaction::InteractiveTarget& target)
-{
-    return ActivateTouchTargetImpl(target);
 }
 
 }  // namespace settings_page_runtime

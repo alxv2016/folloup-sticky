@@ -71,25 +71,6 @@ page_navigation::NavigationItemRole FooterRoleForFooterItem(footer_runtime::Foot
     }
 }
 
-page_navigation::NavigationItemRole RoleForUiItem(epaper_ui::WifiPageItemId item)
-{
-    switch (item) {
-        case epaper_ui::WifiPageItemId::kNetworkList:
-            return page_navigation::NavigationItemRole::kWifiPageNetworkList;
-        case epaper_ui::WifiPageItemId::kPasswordInput:
-            return page_navigation::NavigationItemRole::kWifiPagePasswordInput;
-        case epaper_ui::WifiPageItemId::kPasswordVisibilityButton:
-            return page_navigation::NavigationItemRole::kWifiPagePasswordVisibilityButton;
-        case epaper_ui::WifiPageItemId::kScanButton:
-            return page_navigation::NavigationItemRole::kWifiPageScanButton;
-        case epaper_ui::WifiPageItemId::kConnectButton:
-            return page_navigation::NavigationItemRole::kWifiPageConnectButton;
-        case epaper_ui::WifiPageItemId::kNone:
-        default:
-            return page_navigation::NavigationItemRole::kUnknown;
-    }
-}
-
 footer_runtime::ProjectionState BuildFooterProjectionStateLocked()
 {
     const page_navigation::PageFocusProjection projection =
@@ -195,142 +176,6 @@ esp_err_t ShowPasswordKeyboardImpl()
         s_coordinator.password_input_state().active = true;
     }
     return overlay_runtime::ShowKeyboard(keyboard_state, &KeyboardStateChanged, nullptr);
-}
-
-bool ResolveTouchTargetImpl(int x, int y, app_interaction::InteractiveTarget* target)
-{
-    if (target != nullptr) {
-        *target = {};
-    }
-
-    const epaper_ui::WifiPageState state = [&]() {
-        std::lock_guard<std::mutex> lock(s_mutex);
-        return BuildStateLocked();
-    }();
-
-    int row_index = epaper_ui::kNetworkListNoSelection;
-    if (epaper_ui::HitTestWifiPageNetworkRow(display_service::PortraitWidth(),
-                                             display_service::PortraitHeight(),
-                                             state,
-                                             x,
-                                             y,
-                                             &row_index)) {
-        if (target != nullptr) {
-            *target = {
-                .owner = app_interaction::Owner::kPage,
-                .kind = app_interaction::Kind::kPageListRow,
-                .primary_index = row_index,
-                .secondary_index = s_interaction_generation,
-            };
-        }
-        return true;
-    }
-
-    epaper_ui::WifiPageItemId item = epaper_ui::WifiPageItemId::kNone;
-    if (!epaper_ui::HitTestWifiPageItem(display_service::PortraitWidth(),
-                                        display_service::PortraitHeight(),
-                                        state,
-                                        x,
-                                        y,
-                                        &item)) {
-        return false;
-    }
-
-    const page_navigation::NavigationItemRole role = RoleForUiItem(item);
-    const int focus_index = s_coordinator.navigation_model().IndexOfRole(role);
-    if (role == page_navigation::NavigationItemRole::kUnknown || focus_index < 0) {
-        return false;
-    }
-
-    if (target != nullptr) {
-        *target = {
-            .owner = app_interaction::Owner::kPage,
-            .kind = app_interaction::Kind::kPageAction,
-            .primary_index = focus_index,
-            .secondary_index = s_interaction_generation,
-        };
-    }
-    return true;
-}
-
-page_actions::FocusUpdateOutcome FocusTouchTargetImpl(
-    const app_interaction::InteractiveTarget& target)
-{
-    page_actions::FocusUpdateOutcome result = {};
-    if (target.owner != app_interaction::Owner::kPage) {
-        return result;
-    }
-
-    bool changed = false;
-    int old_focus_index = -1;
-    int new_focus_index = -1;
-    epaper_ui::WifiPageState old_state = {};
-    epaper_ui::WifiPageState new_state = {};
-    {
-        std::lock_guard<std::mutex> lock(s_mutex);
-        if (target.secondary_index != s_interaction_generation) {
-            return result;
-        }
-        old_focus_index = s_coordinator.focus().index();
-        old_state = BuildStateLocked();
-
-        if (target.kind == app_interaction::Kind::kPageListRow) {
-            changed = s_coordinator.FocusNetworkRow(target.primary_index);
-        } else if (target.kind == app_interaction::Kind::kPageAction) {
-            changed = s_coordinator.SetFocusIndex(target.primary_index);
-            const page_navigation::NavigationItemDescriptor* item =
-                s_coordinator.navigation_model().ItemAt(target.primary_index);
-            if (item != nullptr &&
-                item->role != page_navigation::NavigationItemRole::kWifiPageNetworkList) {
-                (void)s_coordinator.ExitNetworkList();
-            }
-        } else {
-            return result;
-        }
-        new_focus_index = s_coordinator.focus().index();
-        new_state = BuildStateLocked();
-    }
-
-    if (!changed) {
-        return result;
-    }
-
-    result.handled = true;
-    result.apply_page_state = true;
-    result.sync_footer_projection =
-        FooterProjectionChangedForFocusIndexes(old_focus_index, new_focus_index);    return result;
-}
-
-wifi_page_interactions::ActivateResult ActivateTouchTargetImpl(
-    const app_interaction::InteractiveTarget& target)
-{
-    wifi_page_interactions::ActivateResult result = {};
-    if (target.owner != app_interaction::Owner::kPage) {
-        return result;
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(s_mutex);
-        if (target.secondary_index != s_interaction_generation) {
-            return result;
-        }
-
-        if (target.kind == app_interaction::Kind::kPageListRow) {
-            result = wifi_page_interactions::HandleNetworkRowActivate(s_coordinator,
-                                                                      target.primary_index);
-        } else if (target.kind == app_interaction::Kind::kPageAction) {
-            const page_navigation::NavigationItemDescriptor* item =
-                s_coordinator.navigation_model().ItemAt(target.primary_index);
-            if (item == nullptr) {
-                return result;
-            }
-            (void)s_coordinator.SetFocusIndex(target.primary_index);
-            result = wifi_page_interactions::HandlePrimaryActivate(s_coordinator);
-        } else {
-            return result;
-        }
-    }
-    return result;
 }
 
 }  // namespace
@@ -506,23 +351,6 @@ esp_err_t SyncFromService(bool request_refresh_if_active)
 esp_err_t ShowPasswordKeyboard()
 {
     return ShowPasswordKeyboardImpl();
-}
-
-bool ResolveTouchTarget(int x, int y, app_interaction::InteractiveTarget* target)
-{
-    return ResolveTouchTargetImpl(x, y, target);
-}
-
-page_actions::FocusUpdateOutcome FocusTouchTarget(
-    const app_interaction::InteractiveTarget& target)
-{
-    return FocusTouchTargetImpl(target);
-}
-
-wifi_page_interactions::ActivateResult ActivateTouchTarget(
-    const app_interaction::InteractiveTarget& target)
-{
-    return ActivateTouchTargetImpl(target);
 }
 
 }  // namespace wifi_page_runtime

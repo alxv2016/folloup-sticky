@@ -52,9 +52,7 @@ esp_err_t ShowKeyboard(const epaper_ui::KeyboardState& state,
 esp_err_t UpdateKeyboardState(const epaper_ui::KeyboardState& state);
 esp_err_t DismissKeyboard();
 bool MoveFocus(int delta);
-bool ResolveTouchTarget(int x, int y, app_interaction::InteractiveTarget* target);
-bool FocusTouchTarget(const app_interaction::InteractiveTarget& target);
-app_interaction::InputResult ActivateTouchTarget(const app_interaction::InteractiveTarget& target);
+
 void SetShutdownRequestInProgress(bool in_progress);
 bool TakePendingFeedback(app_interaction::FeedbackCue* cue);
 

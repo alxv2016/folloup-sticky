@@ -13,7 +13,6 @@
 #include "overlay_runtime.h"
 #include "todos_page_interactions.h"
 #include "todos_page_runtime.h"
-#include "page_interaction_runtime.h"
 #include "settings_page_interactions.h"
 #include "settings_page_runtime.h"
 #include "storage_service.h"
@@ -30,22 +29,6 @@
 
 namespace page_input_runtime {
 namespace {
-
-footer_runtime::FooterFocusItem FooterItemFromTargetIndex(int32_t index)
-{
-    switch (static_cast<footer_runtime::FooterFocusItem>(index)) {
-        case footer_runtime::FooterFocusItem::kHome:
-        case footer_runtime::FooterFocusItem::kSettings:
-        case footer_runtime::FooterFocusItem::kWifi:
-        case footer_runtime::FooterFocusItem::kTime:
-            return static_cast<footer_runtime::FooterFocusItem>(index);
-        case footer_runtime::FooterFocusItem::kFolder:
-        case footer_runtime::FooterFocusItem::kMic:
-        case footer_runtime::FooterFocusItem::kNone:
-        default:
-            return footer_runtime::FooterFocusItem::kNone;
-    }
-}
 
 app_interaction::InputResult MakeConsumedResult(bool play_click_feedback)
 {
@@ -548,120 +531,6 @@ FocusMoveResult ApplyDashboardMoveResult(const page_actions::FocusMoveOutcome& o
     return result;
 }
 
-bool ResolveSettingsTouchTarget(int x, int y, app_interaction::InteractiveTarget* target, void*)
-{
-    return settings_page_runtime::ResolveTouchTarget(x, y, target);
-}
-
-bool FocusSettingsTouchTarget(const app_interaction::InteractiveTarget& target, void*)
-{
-    const page_actions::FocusUpdateOutcome outcome =
-        settings_page_runtime::FocusTouchTarget(target);
-    ApplySettingsFocusUpdate(outcome);
-    return outcome.handled;
-}
-
-app_interaction::InputResult ActivateSettingsTouchTarget(
-    const app_interaction::InteractiveTarget& target, void*)
-{
-    const ButtonResult result =
-        ApplySettingsActivateResult(settings_page_runtime::ActivateTouchTarget(target));
-    return result.interaction_result;
-}
-
-bool ResolveWifiTouchTarget(int x, int y, app_interaction::InteractiveTarget* target, void*)
-{
-    return wifi_page_runtime::ResolveTouchTarget(x, y, target);
-}
-
-bool FocusSettingsFooterTarget(const app_interaction::InteractiveTarget& target)
-{
-    const page_actions::FocusUpdateOutcome outcome =
-        settings_page_runtime::FocusFooterItem(FooterItemFromTargetIndex(target.primary_index));
-    ApplySettingsFocusUpdate(outcome);
-    return outcome.handled;
-}
-
-bool FocusWifiTouchTarget(const app_interaction::InteractiveTarget& target, void*)
-{
-    const page_actions::FocusUpdateOutcome outcome = wifi_page_runtime::FocusTouchTarget(target);
-    ApplyWifiFocusUpdate(outcome);
-    return outcome.handled;
-}
-
-bool FocusWifiFooterTarget(const app_interaction::InteractiveTarget& target)
-{
-    const page_actions::FocusUpdateOutcome outcome =
-        wifi_page_runtime::FocusFooterItem(FooterItemFromTargetIndex(target.primary_index));
-    ApplyWifiFocusUpdate(outcome);
-    return outcome.handled;
-}
-
-app_interaction::InputResult ActivateWifiTouchTarget(
-    const app_interaction::InteractiveTarget& target, void*)
-{
-    const ButtonResult result =
-        ApplyWifiActivateResult(wifi_page_runtime::ActivateTouchTarget(target));
-    return result.interaction_result;
-}
-
-bool ResolveTimeTouchTarget(int x, int y, app_interaction::InteractiveTarget* target, void*)
-{
-    return time_page_runtime::ResolveTouchTarget(x, y, target);
-}
-
-bool FocusTimeTouchTarget(const app_interaction::InteractiveTarget& target, void*)
-{
-    const page_actions::FocusUpdateOutcome outcome = time_page_runtime::FocusTouchTarget(target);
-    ApplyTimeFocusUpdate(outcome);
-    return outcome.handled;
-}
-
-bool FocusTimeFooterTarget(const app_interaction::InteractiveTarget& target)
-{
-    const page_actions::FocusUpdateOutcome outcome =
-        time_page_runtime::FocusFooterItem(FooterItemFromTargetIndex(target.primary_index));
-    ApplyTimeFocusUpdate(outcome);
-    return outcome.handled;
-}
-
-app_interaction::InputResult ActivateTimeTouchTarget(
-    const app_interaction::InteractiveTarget& target, void*)
-{
-    const ButtonResult result =
-        ApplyTimeActivateResult(time_page_runtime::ActivateTouchTarget(target));
-    return result.interaction_result;
-}
-
-bool ResolveDashboardTouchTarget(int x, int y, app_interaction::InteractiveTarget* target, void*)
-{
-    return dashboard_page_runtime::ResolveTouchTarget(x, y, target);
-}
-
-bool FocusDashboardTouchTarget(const app_interaction::InteractiveTarget& target, void*)
-{
-    const page_actions::FocusUpdateOutcome outcome =
-        dashboard_page_runtime::FocusTouchTarget(target);
-    ApplyDashboardFocusUpdate(outcome);
-    return outcome.handled;
-}
-
-bool FocusDashboardFooterTarget(const app_interaction::InteractiveTarget& target)
-{
-    const page_actions::FocusUpdateOutcome outcome =
-        dashboard_page_runtime::FocusFooterItem(FooterItemFromTargetIndex(target.primary_index));
-    ApplyDashboardFocusUpdate(outcome);
-    return outcome.handled;
-}
-
-app_interaction::InputResult ActivateDashboardTouchTarget(
-    const app_interaction::InteractiveTarget& target, void*)
-{
-    const ButtonResult result =
-        ApplyDashboardActivateResult(dashboard_page_runtime::ActivateTouchTarget(target));
-    return result.interaction_result;
-}
-
 esp_err_t ApplyVibeCheckPageAndFooterDisplayState()
 {
     const esp_err_t page_err = vibe_check_page_runtime::UpdateDisplayState();
@@ -754,35 +623,6 @@ FocusMoveResult ApplyVibeCheckMoveResult(const page_actions::FocusMoveOutcome& o
         .sync_footer_projection = outcome.sync_footer_projection,
     });
     return result;
-}
-
-bool ResolveVibeCheckTouchTarget(int x, int y, app_interaction::InteractiveTarget* target, void*)
-{
-    return vibe_check_page_runtime::ResolveTouchTarget(x, y, target);
-}
-
-bool FocusVibeCheckTouchTarget(const app_interaction::InteractiveTarget& target, void*)
-{
-    const page_actions::FocusUpdateOutcome outcome =
-        vibe_check_page_runtime::FocusTouchTarget(target);
-    ApplyVibeCheckFocusUpdate(outcome);
-    return outcome.handled;
-}
-
-bool FocusVibeCheckFooterTarget(const app_interaction::InteractiveTarget& target)
-{
-    const page_actions::FocusUpdateOutcome outcome =
-        vibe_check_page_runtime::FocusFooterItem(FooterItemFromTargetIndex(target.primary_index));
-    ApplyVibeCheckFocusUpdate(outcome);
-    return outcome.handled;
-}
-
-app_interaction::InputResult ActivateVibeCheckTouchTarget(
-    const app_interaction::InteractiveTarget& target, void*)
-{
-    const ButtonResult result =
-        ApplyVibeCheckActivateResult(vibe_check_page_runtime::ActivateTouchTarget(target));
-    return result.interaction_result;
 }
 
 ButtonResult HandleVibeCheckButtonEvent(const button_service::ButtonEventInfo& event)
@@ -911,35 +751,6 @@ FocusMoveResult ApplySummarizeMoveResult(const page_actions::FocusMoveOutcome& o
         .sync_footer_projection = outcome.sync_footer_projection,
     });
     return result;
-}
-
-bool ResolveSummarizeTouchTarget(int x, int y, app_interaction::InteractiveTarget* target, void*)
-{
-    return summarize_page_runtime::ResolveTouchTarget(x, y, target);
-}
-
-bool FocusSummarizeTouchTarget(const app_interaction::InteractiveTarget& target, void*)
-{
-    const page_actions::FocusUpdateOutcome outcome =
-        summarize_page_runtime::FocusTouchTarget(target);
-    ApplySummarizeFocusUpdate(outcome);
-    return outcome.handled;
-}
-
-bool FocusSummarizeFooterTarget(const app_interaction::InteractiveTarget& target)
-{
-    const page_actions::FocusUpdateOutcome outcome =
-        summarize_page_runtime::FocusFooterItem(FooterItemFromTargetIndex(target.primary_index));
-    ApplySummarizeFocusUpdate(outcome);
-    return outcome.handled;
-}
-
-app_interaction::InputResult ActivateSummarizeTouchTarget(
-    const app_interaction::InteractiveTarget& target, void*)
-{
-    const ButtonResult result =
-        ApplySummarizeActivateResult(summarize_page_runtime::ActivateTouchTarget(target));
-    return result.interaction_result;
 }
 
 ButtonResult HandleSummarizeButtonEvent(const button_service::ButtonEventInfo& event)
@@ -1075,34 +886,6 @@ FocusMoveResult ApplyNotesMoveResult(const page_actions::FocusMoveOutcome& outco
     return result;
 }
 
-bool ResolveNotesTouchTarget(int x, int y, app_interaction::InteractiveTarget* target, void*)
-{
-    return notes_page_runtime::ResolveTouchTarget(x, y, target);
-}
-
-bool FocusNotesTouchTarget(const app_interaction::InteractiveTarget& target, void*)
-{
-    const page_actions::FocusUpdateOutcome outcome = notes_page_runtime::FocusTouchTarget(target);
-    ApplyNotesFocusUpdate(outcome);
-    return outcome.handled;
-}
-
-bool FocusNotesFooterTarget(const app_interaction::InteractiveTarget& target)
-{
-    const page_actions::FocusUpdateOutcome outcome =
-        notes_page_runtime::FocusFooterItem(FooterItemFromTargetIndex(target.primary_index));
-    ApplyNotesFocusUpdate(outcome);
-    return outcome.handled;
-}
-
-app_interaction::InputResult ActivateNotesTouchTarget(
-    const app_interaction::InteractiveTarget& target, void*)
-{
-    const ButtonResult result =
-        ApplyNotesActivateResult(notes_page_runtime::ActivateTouchTarget(target));
-    return result.interaction_result;
-}
-
 ButtonResult HandleNotesButtonEvent(const button_service::ButtonEventInfo& event)
 {
     ButtonResult result = {};
@@ -1233,34 +1016,6 @@ FocusMoveResult ApplyTodosMoveResult(const page_actions::FocusMoveOutcome& outco
         .sync_footer_projection = outcome.sync_footer_projection,
     });
     return result;
-}
-
-bool ResolveTodosTouchTarget(int x, int y, app_interaction::InteractiveTarget* target, void*)
-{
-    return todos_page_runtime::ResolveTouchTarget(x, y, target);
-}
-
-bool FocusTodosTouchTarget(const app_interaction::InteractiveTarget& target, void*)
-{
-    const page_actions::FocusUpdateOutcome outcome = todos_page_runtime::FocusTouchTarget(target);
-    ApplyTodosFocusUpdate(outcome);
-    return outcome.handled;
-}
-
-bool FocusTodosFooterTarget(const app_interaction::InteractiveTarget& target)
-{
-    const page_actions::FocusUpdateOutcome outcome =
-        todos_page_runtime::FocusFooterItem(FooterItemFromTargetIndex(target.primary_index));
-    ApplyTodosFocusUpdate(outcome);
-    return outcome.handled;
-}
-
-app_interaction::InputResult ActivateTodosTouchTarget(
-    const app_interaction::InteractiveTarget& target, void*)
-{
-    const ButtonResult result =
-        ApplyTodosActivateResult(todos_page_runtime::ActivateTouchTarget(target));
-    return result.interaction_result;
 }
 
 ButtonResult HandleTodosButtonEvent(const button_service::ButtonEventInfo& event)
@@ -1396,35 +1151,6 @@ FocusMoveResult ApplyFollowUpMoveResult(const page_actions::FocusMoveOutcome& ou
     return result;
 }
 
-bool ResolveFollowUpTouchTarget(int x, int y, app_interaction::InteractiveTarget* target, void*)
-{
-    return follow_up_page_runtime::ResolveTouchTarget(x, y, target);
-}
-
-bool FocusFollowUpTouchTarget(const app_interaction::InteractiveTarget& target, void*)
-{
-    const page_actions::FocusUpdateOutcome outcome =
-        follow_up_page_runtime::FocusTouchTarget(target);
-    ApplyFollowUpFocusUpdate(outcome);
-    return outcome.handled;
-}
-
-bool FocusFollowUpFooterTarget(const app_interaction::InteractiveTarget& target)
-{
-    const page_actions::FocusUpdateOutcome outcome =
-        follow_up_page_runtime::FocusFooterItem(FooterItemFromTargetIndex(target.primary_index));
-    ApplyFollowUpFocusUpdate(outcome);
-    return outcome.handled;
-}
-
-app_interaction::InputResult ActivateFollowUpTouchTarget(
-    const app_interaction::InteractiveTarget& target, void*)
-{
-    const ButtonResult result =
-        ApplyFollowUpActivateResult(follow_up_page_runtime::ActivateTouchTarget(target));
-    return result.interaction_result;
-}
-
 ButtonResult HandleFollowUpButtonEvent(const button_service::ButtonEventInfo& event)
 {
     ButtonResult result = {};
@@ -1462,14 +1188,6 @@ ButtonResult HandleFollowUpButtonEvent(const button_service::ButtonEventInfo& ev
 
 // --- Onboarding page -------------------------------------------------------
 
-void ApplyOnboardingFocusUpdate(const page_actions::FocusUpdateOutcome& outcome)
-{
-    if (outcome.handled && outcome.apply_page_state) {
-        (void)onboarding_page_runtime::UpdateDisplayStateAndRequestRefresh(
-            display_service::RefreshMode::kPartial);
-    }
-}
-
 ButtonResult ApplyOnboardingActivateResult(
     const onboarding_page_interactions::ActivateResult& activation)
 {
@@ -1506,27 +1224,6 @@ FocusMoveResult ApplyOnboardingMoveResult(const page_actions::FocusMoveOutcome& 
             display_service::RefreshMode::kPartial);
     }
     return result;
-}
-
-bool ResolveOnboardingTouchTarget(int x, int y, app_interaction::InteractiveTarget* target, void*)
-{
-    return onboarding_page_runtime::ResolveTouchTarget(x, y, target);
-}
-
-bool FocusOnboardingTouchTarget(const app_interaction::InteractiveTarget& target, void*)
-{
-    const page_actions::FocusUpdateOutcome outcome =
-        onboarding_page_runtime::FocusTouchTarget(target);
-    ApplyOnboardingFocusUpdate(outcome);
-    return outcome.handled;
-}
-
-app_interaction::InputResult ActivateOnboardingTouchTarget(
-    const app_interaction::InteractiveTarget& target, void*)
-{
-    const ButtonResult result =
-        ApplyOnboardingActivateResult(onboarding_page_runtime::ActivateTouchTarget(target));
-    return result.interaction_result;
 }
 
 ButtonResult HandleOnboardingButtonEvent(const button_service::ButtonEventInfo& event)
@@ -1657,34 +1354,6 @@ FocusMoveResult ApplyDetailsMoveResult(const page_actions::FocusMoveOutcome& out
     return result;
 }
 
-bool ResolveDetailsTouchTarget(int x, int y, app_interaction::InteractiveTarget* target, void*)
-{
-    return details_page_runtime::ResolveTouchTarget(x, y, target);
-}
-
-bool FocusDetailsTouchTarget(const app_interaction::InteractiveTarget& target, void*)
-{
-    const page_actions::FocusUpdateOutcome outcome = details_page_runtime::FocusTouchTarget(target);
-    ApplyDetailsFocusUpdate(outcome);
-    return outcome.handled;
-}
-
-bool FocusDetailsFooterTarget(const app_interaction::InteractiveTarget& target)
-{
-    const page_actions::FocusUpdateOutcome outcome =
-        details_page_runtime::FocusFooterItem(FooterItemFromTargetIndex(target.primary_index));
-    ApplyDetailsFocusUpdate(outcome);
-    return outcome.handled;
-}
-
-app_interaction::InputResult ActivateDetailsTouchTarget(
-    const app_interaction::InteractiveTarget& target, void*)
-{
-    const ButtonResult result =
-        ApplyDetailsActivateResult(details_page_runtime::ActivateTouchTarget(target));
-    return result.interaction_result;
-}
-
 ButtonResult HandleDetailsButtonEvent(const button_service::ButtonEventInfo& event)
 {
     ButtonResult result = {};
@@ -1717,92 +1386,6 @@ ButtonResult HandleDetailsButtonEvent(const button_service::ButtonEventInfo& eve
         case button_service::ButtonEvent::kDoubleClick:
         default:
             return result;
-    }
-}
-
-page_interaction_runtime::TouchProvider TouchProviderForScreen(display_service::ScreenId screen)
-{
-    switch (screen) {
-        case display_service::ScreenId::kSettings:
-            return {
-                .resolve_touch_target = &ResolveSettingsTouchTarget,
-                .focus_touch_target = &FocusSettingsTouchTarget,
-                .activate_touch_target = &ActivateSettingsTouchTarget,
-                .context = nullptr,
-            };
-        case display_service::ScreenId::kWifi:
-            return {
-                .resolve_touch_target = &ResolveWifiTouchTarget,
-                .focus_touch_target = &FocusWifiTouchTarget,
-                .activate_touch_target = &ActivateWifiTouchTarget,
-                .context = nullptr,
-            };
-        case display_service::ScreenId::kTime:
-            return {
-                .resolve_touch_target = &ResolveTimeTouchTarget,
-                .focus_touch_target = &FocusTimeTouchTarget,
-                .activate_touch_target = &ActivateTimeTouchTarget,
-                .context = nullptr,
-            };
-        case display_service::ScreenId::kHome:
-            return {
-                .resolve_touch_target = &ResolveDashboardTouchTarget,
-                .focus_touch_target = &FocusDashboardTouchTarget,
-                .activate_touch_target = &ActivateDashboardTouchTarget,
-                .context = nullptr,
-            };
-        case display_service::ScreenId::kVibeCheck:
-            return {
-                .resolve_touch_target = &ResolveVibeCheckTouchTarget,
-                .focus_touch_target = &FocusVibeCheckTouchTarget,
-                .activate_touch_target = &ActivateVibeCheckTouchTarget,
-                .context = nullptr,
-            };
-        case display_service::ScreenId::kSummarize:
-            return {
-                .resolve_touch_target = &ResolveSummarizeTouchTarget,
-                .focus_touch_target = &FocusSummarizeTouchTarget,
-                .activate_touch_target = &ActivateSummarizeTouchTarget,
-                .context = nullptr,
-            };
-        case display_service::ScreenId::kNotes:
-            return {
-                .resolve_touch_target = &ResolveNotesTouchTarget,
-                .focus_touch_target = &FocusNotesTouchTarget,
-                .activate_touch_target = &ActivateNotesTouchTarget,
-                .context = nullptr,
-            };
-        case display_service::ScreenId::kTodos:
-            return {
-                .resolve_touch_target = &ResolveTodosTouchTarget,
-                .focus_touch_target = &FocusTodosTouchTarget,
-                .activate_touch_target = &ActivateTodosTouchTarget,
-                .context = nullptr,
-            };
-        case display_service::ScreenId::kFollowUp:
-            return {
-                .resolve_touch_target = &ResolveFollowUpTouchTarget,
-                .focus_touch_target = &FocusFollowUpTouchTarget,
-                .activate_touch_target = &ActivateFollowUpTouchTarget,
-                .context = nullptr,
-            };
-        case display_service::ScreenId::kDetails:
-            return {
-                .resolve_touch_target = &ResolveDetailsTouchTarget,
-                .focus_touch_target = &FocusDetailsTouchTarget,
-                .activate_touch_target = &ActivateDetailsTouchTarget,
-                .context = nullptr,
-            };
-        case display_service::ScreenId::kOnboarding:
-            return {
-                .resolve_touch_target = &ResolveOnboardingTouchTarget,
-                .focus_touch_target = &FocusOnboardingTouchTarget,
-                .activate_touch_target = &ActivateOnboardingTouchTarget,
-                .context = nullptr,
-            };
-        case display_service::ScreenId::kLockScreen:
-        default:
-            return {};
     }
 }
 
@@ -1918,17 +1501,6 @@ ButtonResult HandleDashboardButtonEvent(const button_service::ButtonEventInfo& e
 
 }  // namespace
 
-void ConfigureTouchProviderForScreen(display_service::ScreenId screen)
-{
-    const page_interaction_runtime::TouchProvider provider = TouchProviderForScreen(screen);
-    if (provider.resolve_touch_target == nullptr) {
-        page_interaction_runtime::ClearTouchProvider();
-        return;
-    }
-
-    page_interaction_runtime::RegisterTouchProvider(provider);
-}
-
 footer_runtime::ProjectionState BuildFooterProjectionForScreen(display_service::ScreenId screen)
 {
     switch (screen) {
@@ -1997,40 +1569,6 @@ void ResetFocusForScreen(display_service::ScreenId screen)
         case display_service::ScreenId::kLockScreen:
         default:
             return;
-    }
-}
-
-bool FocusFooterTouchTargetForCurrentScreen(const app_interaction::InteractiveTarget& target)
-{
-    if (target.owner != app_interaction::Owner::kFooter ||
-        target.kind != app_interaction::Kind::kFooterItem) {
-        return false;
-    }
-
-    switch (display_service::GetCurrentScreen()) {
-        case display_service::ScreenId::kSettings:
-            return FocusSettingsFooterTarget(target);
-        case display_service::ScreenId::kWifi:
-            return FocusWifiFooterTarget(target);
-        case display_service::ScreenId::kTime:
-            return FocusTimeFooterTarget(target);
-        case display_service::ScreenId::kHome:
-            return FocusDashboardFooterTarget(target);
-        case display_service::ScreenId::kVibeCheck:
-            return FocusVibeCheckFooterTarget(target);
-        case display_service::ScreenId::kSummarize:
-            return FocusSummarizeFooterTarget(target);
-        case display_service::ScreenId::kNotes:
-            return FocusNotesFooterTarget(target);
-        case display_service::ScreenId::kTodos:
-            return FocusTodosFooterTarget(target);
-        case display_service::ScreenId::kFollowUp:
-            return FocusFollowUpFooterTarget(target);
-        case display_service::ScreenId::kDetails:
-            return FocusDetailsFooterTarget(target);
-        case display_service::ScreenId::kLockScreen:
-        default:
-            return false;
     }
 }
 

@@ -111,31 +111,6 @@ page_navigation::NavigationItemRole FooterRoleForFooterItem(footer_runtime::Foot
     }
 }
 
-page_navigation::NavigationItemRole RoleForUiItem(epaper_ui::TimePageItemId item)
-{
-    switch (item) {
-        case epaper_ui::TimePageItemId::kTimezone:
-            return page_navigation::NavigationItemRole::kTimePageTimezone;
-        case epaper_ui::TimePageItemId::kHour:
-            return page_navigation::NavigationItemRole::kTimePageHour;
-        case epaper_ui::TimePageItemId::kMinute:
-            return page_navigation::NavigationItemRole::kTimePageMinute;
-        case epaper_ui::TimePageItemId::kMeridiem:
-            return page_navigation::NavigationItemRole::kTimePageMeridiem;
-        case epaper_ui::TimePageItemId::kMonth:
-            return page_navigation::NavigationItemRole::kTimePageMonth;
-        case epaper_ui::TimePageItemId::kDay:
-            return page_navigation::NavigationItemRole::kTimePageDay;
-        case epaper_ui::TimePageItemId::kYear:
-            return page_navigation::NavigationItemRole::kTimePageYear;
-        case epaper_ui::TimePageItemId::kSave:
-            return page_navigation::NavigationItemRole::kTimePageSave;
-        case epaper_ui::TimePageItemId::kNone:
-        default:
-            return page_navigation::NavigationItemRole::kUnknown;
-    }
-}
-
 epaper_ui::TimePageState BuildStateLocked()
 {
     return s_coordinator.BuildState();
@@ -212,85 +187,6 @@ page_actions::FocusMoveOutcome MoveFocus(int delta)
 time_page_interactions::ActivateResult ActivateFocusedItem()
 {
     std::lock_guard<std::mutex> lock(s_mutex);
-    return time_page_interactions::HandlePrimaryActivate(s_coordinator);
-}
-
-bool ResolveTouchTarget(int x, int y, app_interaction::InteractiveTarget* target)
-{
-    if (target != nullptr) {
-        *target = {};
-    }
-    const epaper_ui::TimePageState state = [&]() {
-        std::lock_guard<std::mutex> lock(s_mutex);
-        return BuildStateLocked();
-    }();
-
-    epaper_ui::TimePageItemId item = epaper_ui::TimePageItemId::kNone;
-    if (!epaper_ui::HitTestTimePageItem(display_service::PortraitWidth(),
-                                        display_service::PortraitHeight(), state, x, y, &item)) {
-        return false;
-    }
-
-    const page_navigation::NavigationItemRole role = RoleForUiItem(item);
-    const int focus_index = s_coordinator.navigation_model().IndexOfRole(role);
-    if (role == page_navigation::NavigationItemRole::kUnknown || focus_index < 0) {
-        return false;
-    }
-    if (target != nullptr) {
-        *target = {
-            .owner = app_interaction::Owner::kPage,
-            .kind = app_interaction::Kind::kPageAction,
-            .primary_index = focus_index,
-            .secondary_index = s_interaction_generation,
-        };
-    }
-    return true;
-}
-
-page_actions::FocusUpdateOutcome FocusTouchTarget(const app_interaction::InteractiveTarget& target)
-{
-    page_actions::FocusUpdateOutcome result = {};
-    if (target.owner != app_interaction::Owner::kPage ||
-        target.kind != app_interaction::Kind::kPageAction) {
-        return result;
-    }
-    bool changed = false;
-    int old_focus_index = -1;
-    int new_focus_index = -1;
-    {
-        std::lock_guard<std::mutex> lock(s_mutex);
-        if (target.secondary_index != s_interaction_generation) {
-            return result;
-        }
-        old_focus_index = s_coordinator.focus().index();
-        changed = s_coordinator.SetFocusIndex(target.primary_index);
-        new_focus_index = s_coordinator.focus().index();
-    }
-    if (!changed) {
-        return result;
-    }
-    result.handled = true;
-    result.apply_page_state = true;
-    result.sync_footer_projection =
-        FooterProjectionChangedForFocusIndexes(old_focus_index, new_focus_index);
-    return result;
-}
-
-time_page_interactions::ActivateResult ActivateTouchTarget(
-    const app_interaction::InteractiveTarget& target)
-{
-    time_page_interactions::ActivateResult result = {};
-    if (target.owner != app_interaction::Owner::kPage ||
-        target.kind != app_interaction::Kind::kPageAction) {
-        return result;
-    }
-    std::lock_guard<std::mutex> lock(s_mutex);
-    if (target.secondary_index != s_interaction_generation) {
-        return result;
-    }
-    // Don't gate activation on the focus changing — on a tap the item was already focused
-    // by the touch-begin FocusTouchTarget, so SetFocusIndex returns false here.
-    (void)s_coordinator.SetFocusIndex(target.primary_index);
     return time_page_interactions::HandlePrimaryActivate(s_coordinator);
 }
 

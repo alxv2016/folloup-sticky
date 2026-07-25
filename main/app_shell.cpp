@@ -200,7 +200,6 @@ esp_err_t ShowHomeScreen(display_service::RefreshMode refresh_mode)
 {
     SyncStatusBarState("show_home_screen");
     page_input_runtime::ResetFocusForScreen(display_service::ScreenId::kHome);
-    page_input_runtime::ConfigureTouchProviderForScreen(display_service::ScreenId::kHome);
     footer_runtime::SetLayoutState(FooterLayoutForScreen(display_service::ScreenId::kHome));
     footer_runtime::SetProjectionState(
         page_input_runtime::BuildFooterProjectionForScreen(display_service::ScreenId::kHome));
@@ -228,7 +227,6 @@ esp_err_t ShowSettingsScreen(display_service::RefreshMode refresh_mode)
 {
     SyncStatusBarState("show_settings_screen");
     page_input_runtime::ResetFocusForScreen(display_service::ScreenId::kSettings);
-    page_input_runtime::ConfigureTouchProviderForScreen(display_service::ScreenId::kSettings);
     footer_runtime::SetLayoutState(FooterLayoutForScreen(display_service::ScreenId::kSettings));
     footer_runtime::SetProjectionState(
         page_input_runtime::BuildFooterProjectionForScreen(display_service::ScreenId::kSettings));
@@ -250,7 +248,6 @@ esp_err_t ShowVibeCheckScreen(display_service::RefreshMode refresh_mode)
 {
     SyncStatusBarState("show_vibe_check_screen");
     page_input_runtime::ResetFocusForScreen(display_service::ScreenId::kVibeCheck);
-    page_input_runtime::ConfigureTouchProviderForScreen(display_service::ScreenId::kVibeCheck);
     footer_runtime::SetLayoutState(FooterLayoutForScreen(display_service::ScreenId::kVibeCheck));
     footer_runtime::SetProjectionState(
         page_input_runtime::BuildFooterProjectionForScreen(display_service::ScreenId::kVibeCheck));
@@ -273,7 +270,6 @@ esp_err_t ShowSummarizeScreen(display_service::RefreshMode refresh_mode)
 {
     SyncStatusBarState("show_summarize_screen");
     page_input_runtime::ResetFocusForScreen(display_service::ScreenId::kSummarize);
-    page_input_runtime::ConfigureTouchProviderForScreen(display_service::ScreenId::kSummarize);
     footer_runtime::SetLayoutState(FooterLayoutForScreen(display_service::ScreenId::kSummarize));
     footer_runtime::SetProjectionState(
         page_input_runtime::BuildFooterProjectionForScreen(display_service::ScreenId::kSummarize));
@@ -297,7 +293,6 @@ esp_err_t ShowNotesScreen(display_service::RefreshMode refresh_mode)
 {
     SyncStatusBarState("show_notes_screen");
     page_input_runtime::ResetFocusForScreen(display_service::ScreenId::kNotes);
-    page_input_runtime::ConfigureTouchProviderForScreen(display_service::ScreenId::kNotes);
     footer_runtime::SetLayoutState(FooterLayoutForScreen(display_service::ScreenId::kNotes));
     footer_runtime::SetProjectionState(
         page_input_runtime::BuildFooterProjectionForScreen(display_service::ScreenId::kNotes));
@@ -318,7 +313,6 @@ esp_err_t ShowTodosScreen(display_service::RefreshMode refresh_mode)
 {
     SyncStatusBarState("show_todos_screen");
     page_input_runtime::ResetFocusForScreen(display_service::ScreenId::kTodos);
-    page_input_runtime::ConfigureTouchProviderForScreen(display_service::ScreenId::kTodos);
     footer_runtime::SetLayoutState(FooterLayoutForScreen(display_service::ScreenId::kTodos));
     footer_runtime::SetProjectionState(
         page_input_runtime::BuildFooterProjectionForScreen(display_service::ScreenId::kTodos));
@@ -339,7 +333,6 @@ esp_err_t ShowFollowUpScreen(display_service::RefreshMode refresh_mode)
 {
     SyncStatusBarState("show_follow_up_screen");
     page_input_runtime::ResetFocusForScreen(display_service::ScreenId::kFollowUp);
-    page_input_runtime::ConfigureTouchProviderForScreen(display_service::ScreenId::kFollowUp);
     footer_runtime::SetLayoutState(FooterLayoutForScreen(display_service::ScreenId::kFollowUp));
     footer_runtime::SetProjectionState(
         page_input_runtime::BuildFooterProjectionForScreen(display_service::ScreenId::kFollowUp));
@@ -401,7 +394,6 @@ esp_err_t ShowOnboardingScreen(display_service::RefreshMode refresh_mode)
     hidden_footer.show_mic = false;
     footer_runtime::SetLayoutState(hidden_footer);
     page_input_runtime::ResetFocusForScreen(display_service::ScreenId::kOnboarding);
-    page_input_runtime::ConfigureTouchProviderForScreen(display_service::ScreenId::kOnboarding);
     const esp_err_t page_err = onboarding_page_runtime::UpdateDisplayState();
     if (page_err != ESP_OK && page_err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(kTag, "Onboarding page state build failed: %s", esp_err_to_name(page_err));
@@ -452,7 +444,6 @@ esp_err_t ShowDetailsScreen(const std::string& recording_id, DetailsPageSource s
     SyncStatusBarState("show_details_screen");
     details_page_runtime::QueueShow(recording_id, source);
     page_input_runtime::ResetFocusForScreen(display_service::ScreenId::kDetails);
-    page_input_runtime::ConfigureTouchProviderForScreen(display_service::ScreenId::kDetails);
     footer_runtime::SetLayoutState(FooterLayoutForScreen(display_service::ScreenId::kDetails));
     footer_runtime::SetProjectionState(
         page_input_runtime::BuildFooterProjectionForScreen(display_service::ScreenId::kDetails));
@@ -522,7 +513,6 @@ esp_err_t ShowWifiScreen(display_service::RefreshMode refresh_mode)
 {
     SyncStatusBarState("show_wifi_screen");
     page_input_runtime::ResetFocusForScreen(display_service::ScreenId::kWifi);
-    page_input_runtime::ConfigureTouchProviderForScreen(display_service::ScreenId::kWifi);
     footer_runtime::SetLayoutState(FooterLayoutForScreen(display_service::ScreenId::kWifi));
     footer_runtime::SetProjectionState(
         page_input_runtime::BuildFooterProjectionForScreen(display_service::ScreenId::kWifi));
@@ -549,7 +539,6 @@ esp_err_t ShowTimeScreen(display_service::RefreshMode refresh_mode)
 {
     SyncStatusBarState("show_time_screen");
     page_input_runtime::ResetFocusForScreen(display_service::ScreenId::kTime);
-    page_input_runtime::ConfigureTouchProviderForScreen(display_service::ScreenId::kTime);
     footer_runtime::SetLayoutState(FooterLayoutForScreen(display_service::ScreenId::kTime));
     footer_runtime::SetProjectionState(
         page_input_runtime::BuildFooterProjectionForScreen(display_service::ScreenId::kTime));
@@ -1629,7 +1618,6 @@ void InitFooterRuntime()
 {
     footer_runtime::SetActivateHandler(HandleFooterActivate, nullptr);
     dashboard_page_runtime::SetMenuItemHandler(HandleDashboardMenuItem, nullptr);
-    page_input_runtime::ConfigureTouchProviderForScreen(display_service::ScreenId::kHome);
     footer_runtime::SetLayoutState(FooterLayoutForScreen(display_service::ScreenId::kHome));
     footer_runtime::SetProjectionState(
         page_input_runtime::BuildFooterProjectionForScreen(display_service::ScreenId::kHome));

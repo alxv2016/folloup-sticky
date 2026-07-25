@@ -16,11 +16,6 @@ esp_err_t UpdateDisplayStateAndRequestRefresh(
 page_actions::FocusMoveOutcome MoveFocus(int delta);
 onboarding_page_interactions::ActivateResult ActivateFocusedItem();
 
-bool ResolveTouchTarget(int x, int y, app_interaction::InteractiveTarget* target);
-page_actions::FocusUpdateOutcome FocusTouchTarget(const app_interaction::InteractiveTarget& target);
-onboarding_page_interactions::ActivateResult ActivateTouchTarget(
-    const app_interaction::InteractiveTarget& target);
-
 // Reset to the first slide with the Close button focused (call on page entry).
 void ResetFocus();
 

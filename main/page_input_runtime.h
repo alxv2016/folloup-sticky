@@ -21,10 +21,9 @@ struct ButtonResult {
     footer_runtime::FooterFocusItem footer_item = footer_runtime::FooterFocusItem::kNone;
 };
 
-void ConfigureTouchProviderForScreen(display_service::ScreenId screen);
 footer_runtime::ProjectionState BuildFooterProjectionForScreen(display_service::ScreenId screen);
 void ResetFocusForScreen(display_service::ScreenId screen);
-bool FocusFooterTouchTargetForCurrentScreen(const app_interaction::InteractiveTarget& target);
+
 FocusMoveResult MoveFocusForCurrentScreen(int delta, bool page_jump = false);
 ButtonResult HandleButtonEventForCurrentScreen(const button_service::ButtonEventInfo& event);
 

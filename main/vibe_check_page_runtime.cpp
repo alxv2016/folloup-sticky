@@ -55,12 +55,6 @@ void AdvanceInteractionGenerationLocked()
     }
 }
 
-int CardFocusIndexLocked()
-{
-    return s_coordinator.navigation_model().IndexOfRole(
-        page_navigation::NavigationItemRole::kVibeCheckPageCard);
-}
-
 footer_runtime::FooterFocusItem FooterItemForSelectedIndex(int selected_index)
 {
     switch (selected_index) {
@@ -173,104 +167,6 @@ vibe_check_page_interactions::ActivateResult ActivateFocusedItem()
 {
     std::lock_guard<std::mutex> lock(s_mutex);
     return vibe_check_page_interactions::HandlePrimaryActivate(s_coordinator);
-}
-
-bool ResolveTouchTarget(int x, int y, app_interaction::InteractiveTarget* target)
-{
-    if (target != nullptr) {
-        *target = {};
-    }
-    epaper_ui::VibeCheckPageState state;
-    int32_t generation = 0;
-    {
-        std::lock_guard<std::mutex> lock(s_mutex);
-        state = BuildStateLocked();
-        generation = s_interaction_generation;
-    }
-
-    epaper_ui::VibeCardActionSelection action = epaper_ui::VibeCardActionSelection::kNone;
-    if (epaper_ui::HitTestVibeCheckAction(display_service::PortraitWidth(),
-                                          display_service::PortraitHeight(), state, x, y, &action)) {
-        if (target != nullptr) {
-            *target = {
-                .owner = app_interaction::Owner::kPage,
-                .kind = app_interaction::Kind::kPageAction,
-                .primary_index = static_cast<int32_t>(action),
-                .secondary_index = generation,
-            };
-        }
-        return true;
-    }
-
-    if (epaper_ui::HitTestVibeCheckCard(display_service::PortraitWidth(),
-                                        display_service::PortraitHeight(), state, x, y)) {
-        if (target != nullptr) {
-            *target = {
-                .owner = app_interaction::Owner::kPage,
-                .kind = app_interaction::Kind::kPageComposite,
-                .primary_index = 0,
-                .secondary_index = generation,
-            };
-        }
-        return true;
-    }
-    return false;
-}
-
-page_actions::FocusUpdateOutcome FocusTouchTarget(const app_interaction::InteractiveTarget& target)
-{
-    page_actions::FocusUpdateOutcome result = {};
-    if (target.owner != app_interaction::Owner::kPage) {
-        return result;
-    }
-    int old_focus_index = -1;
-    int new_focus_index = -1;
-    {
-        std::lock_guard<std::mutex> lock(s_mutex);
-        if (target.secondary_index != s_interaction_generation) {
-            return result;
-        }
-        old_focus_index = s_coordinator.focus().index();
-        s_coordinator.SetFocusIndex(CardFocusIndexLocked());
-        if (target.kind == app_interaction::Kind::kPageAction) {
-            s_coordinator.EnterCardAtSelection(
-                static_cast<epaper_ui::VibeCardActionSelection>(target.primary_index));
-        } else if (target.kind == app_interaction::Kind::kPageComposite) {
-            s_coordinator.ExitCard();
-        } else {
-            return result;
-        }
-        new_focus_index = s_coordinator.focus().index();
-    }
-    result.handled = true;
-    result.apply_page_state = true;
-    result.sync_footer_projection =
-        FooterProjectionChangedForFocusIndexes(old_focus_index, new_focus_index);
-    return result;
-}
-
-vibe_check_page_interactions::ActivateResult ActivateTouchTarget(
-    const app_interaction::InteractiveTarget& target)
-{
-    vibe_check_page_interactions::ActivateResult result = {};
-    if (target.owner != app_interaction::Owner::kPage) {
-        return result;
-    }
-    std::lock_guard<std::mutex> lock(s_mutex);
-    if (target.secondary_index != s_interaction_generation) {
-        return result;
-    }
-    s_coordinator.SetFocusIndex(CardFocusIndexLocked());
-    if (target.kind == app_interaction::Kind::kPageAction) {
-        s_coordinator.EnterCardAtSelection(
-            static_cast<epaper_ui::VibeCardActionSelection>(target.primary_index));
-        return vibe_check_page_interactions::HandlePrimaryActivate(s_coordinator);
-    }
-    if (target.kind == app_interaction::Kind::kPageComposite) {
-        // A tap on the card body just focuses it; the action buttons are tapped directly.
-        result.handled = true;
-    }
-    return result;
 }
 
 footer_runtime::ProjectionState BuildFooterProjectionState()

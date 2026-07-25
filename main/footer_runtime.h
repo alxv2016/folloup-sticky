@@ -47,9 +47,7 @@ void SetLayoutState(const LayoutState& state);
 void SetProjectionState(const ProjectionState& state);
 LayoutState GetLayoutState();
 ProjectionState GetProjectionState();
-bool ResolveTouchTarget(int x, int y, app_interaction::InteractiveTarget* target);
-bool FocusTouchTarget(const app_interaction::InteractiveTarget& target);
-app_interaction::InputResult ActivateTouchTarget(const app_interaction::InteractiveTarget& target);
+
 epaper_ui::GlobalFooterState BuildState();
 esp_err_t UpdateDisplayState();
 esp_err_t UpdateDisplayStateAndRequestRefresh(

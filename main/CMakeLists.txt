@@ -5,7 +5,6 @@ idf_component_register(SRCS "onboarding_page_runtime.cpp" "onboarding_page_inter
                             "input_focus_runtime.cpp"
                             "lock_screen_runtime.cpp"
                             "overlay_runtime.cpp"
-                            "page_interaction_runtime.cpp"
                             "wifi_page_coordinator.cpp"
                             "status_bar_runtime.cpp"
                             "ui_refresh_runtime.cpp"

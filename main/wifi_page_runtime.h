@@ -24,11 +24,7 @@ bool CommitNetworkListSelectionAndExit();
 bool ExitNetworkListWithoutSelection();
 wifi_page_interactions::ActivateResult ActivateFocusedItem();
 wifi_page_interactions::SecondaryActivateResult SecondaryActivateFocusedItem();
-bool ResolveTouchTarget(int x, int y, app_interaction::InteractiveTarget* target);
-page_actions::FocusUpdateOutcome FocusTouchTarget(
-    const app_interaction::InteractiveTarget& target);
-wifi_page_interactions::ActivateResult ActivateTouchTarget(
-    const app_interaction::InteractiveTarget& target);
+
 footer_runtime::ProjectionState BuildFooterProjectionState();
 page_actions::FocusUpdateOutcome FocusFooterItem(footer_runtime::FooterFocusItem item);
 void ResetFocus();

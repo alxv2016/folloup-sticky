@@ -20,11 +20,6 @@ esp_err_t UpdateDisplayStateAndRequestRefresh(
 page_actions::FocusMoveOutcome MoveFocus(int delta);
 summarize_page_interactions::ActivateResult ActivateFocusedItem();
 
-bool ResolveTouchTarget(int x, int y, app_interaction::InteractiveTarget* target);
-page_actions::FocusUpdateOutcome FocusTouchTarget(const app_interaction::InteractiveTarget& target);
-summarize_page_interactions::ActivateResult ActivateTouchTarget(
-    const app_interaction::InteractiveTarget& target);
-
 footer_runtime::ProjectionState BuildFooterProjectionState();
 page_actions::FocusUpdateOutcome FocusFooterItem(footer_runtime::FooterFocusItem item);
 void ResetFocus();
