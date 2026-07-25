@@ -208,4 +208,37 @@ void SetEventHandler(EventHandler handler, void* context)
     s_event_handler_context = context;
 }
 
+esp_err_t Suspend()
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    const esp_err_t err = iot_button_stop();
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "Button polling suspend failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    ESP_LOGI(kTag, "Button polling suspended");
+    return ESP_OK;
+}
+
+esp_err_t Resume()
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    const esp_err_t err = iot_button_resume();
+    if (err != ESP_OK) {
+        ESP_LOGE(kTag, "Button polling resume failed; buttons are dead: %s",
+                 esp_err_to_name(err));
+        return err;
+    }
+
+    ESP_LOGI(kTag, "Button polling resumed");
+    return ESP_OK;
+}
+
 }  // namespace button_service

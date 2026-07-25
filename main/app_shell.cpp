@@ -70,7 +70,6 @@ constexpr uint32_t kShutdownTaskStackWords = 3072;
 constexpr TickType_t kPowerButtonReleaseSettleDelay = pdMS_TO_TICKS(500);
 
 TaskHandle_t s_shutdown_task = nullptr;
-std::atomic<bool> s_power_button_display_wake_only_active = false;
 std::atomic<bool> s_startup_complete = false;
 std::atomic<bool> s_gemini_ready = false;
 std::atomic<bool> s_up_button_pressed = false;
@@ -1274,27 +1273,6 @@ void HandleDispatchedButtonEvent(const button_service::ButtonEventInfo& event)
         return;
     }
 
-    if (event.button == button_service::ButtonId::kPowerOk &&
-        s_power_button_display_wake_only_active.load(std::memory_order_relaxed)) {
-        ESP_LOGI(kTag, "Consumed display-wake POWER_OK event=%s",
-                 ButtonEventName(event.event));
-        switch (event.event) {
-            case button_service::ButtonEvent::kPressUp:
-            case button_service::ButtonEvent::kSingleClick:
-            case button_service::ButtonEvent::kDoubleClick:
-            case button_service::ButtonEvent::kLongPressUp:
-                s_power_button_display_wake_only_active.store(false,
-                                                              std::memory_order_relaxed);
-                break;
-            case button_service::ButtonEvent::kPressDown:
-            case button_service::ButtonEvent::kPressRepeat:
-            case button_service::ButtonEvent::kLongPressStart:
-            default:
-                break;
-        }
-        return;
-    }
-
     if (storage_service::IsWriteBusy()) {
         ESP_LOGI(kTag, "Button ignored while storage write is active");
         return;
@@ -1327,8 +1305,7 @@ void HandleDispatchedButtonEvent(const button_service::ButtonEventInfo& event)
     device_sleep_runtime::NotifyUserActivity();
     if (event.button == button_service::ButtonId::kPowerOk &&
         stage_before == device_sleep_service::Stage::kDisplaySleeping) {
-        s_power_button_display_wake_only_active.store(true, std::memory_order_relaxed);
-        ESP_LOGI(kTag, "POWER_OK armed as wake-only for display sleep");
+        device_sleep_runtime::ArmPowerButtonWakeGesture("display-sleep wake");
         return;
     }
 
