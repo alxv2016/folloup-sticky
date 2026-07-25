@@ -35,6 +35,18 @@ constexpr const char* kSsidKey = "ssid";
 constexpr const char* kPasswordKey = "password";
 constexpr const char* kApUrl = "http://192.168.4.1";
 constexpr int kConnectTimeoutSec = 60;
+// Consecutive automatic reconnect attempts before the loop gives up and waits for the
+// user. Every attempt is a full radio stop/start/connect cycle, so out of range an
+// unbounded loop churns the radio -- and the battery -- forever without ever succeeding.
+constexpr int kMaxReconnectAttempts = 10;
+// Safety net for a scan that never reports. esp_wifi_stop() and esp_wifi_connect() both
+// abort a running scan without delivering WIFI_EVENT_SCAN_DONE, and without this the
+// snapshot would latch at kRunning and silently swallow every later scan request.
+constexpr int64_t kScanTimeoutUs = 12 * 1000 * 1000;
+// esp_wifi_scan_start() is rejected with ESP_ERR_WIFI_STATE while the station is still
+// tearing down an association, so give the driver a few short beats to settle.
+constexpr int kScanStartAttempts = 5;
+constexpr uint32_t kScanStartRetryDelayMs = 100;
 constexpr size_t kMaxPortalPayloadLen = 512;
 constexpr uint32_t kTransitionTaskStackWords = 8192;
 constexpr UBaseType_t kTransitionQueueDepth = 4;
@@ -64,6 +76,7 @@ enum class TransitionRequest : uint8_t {
     kDisableAccessPoint,
     kDisconnectStation,
     kStopWifi,
+    kStartScan,
 };
 
 struct Credentials {
@@ -81,6 +94,11 @@ bool s_access_point_mode = false;
 bool s_suppress_disconnect_event = false;
 bool s_connect_timer_active = false;
 bool s_reconnecting = false;
+// Consecutive failed automatic reconnects, and whether the loop has stood down. Reset by
+// anything that counts as user intent (connect, scan, Wi-Fi toggle) or a successful
+// association; see kMaxReconnectAttempts.
+int s_reconnect_attempts = 0;
+bool s_reconnect_suspended = false;
 bool s_persist_active_credentials_on_success = false;
 bool s_clear_saved_credentials_on_disconnect = true;
 int s_rssi = 0;
@@ -102,6 +120,7 @@ QueueHandle_t s_transition_queue = nullptr;
 TaskHandle_t s_transition_task = nullptr;
 TaskHandle_t s_callback_task = nullptr;
 esp_timer_handle_t s_connect_timer = nullptr;
+esp_timer_handle_t s_scan_timeout_timer = nullptr;
 esp_netif_t* s_sta_netif = nullptr;
 esp_netif_t* s_ap_netif = nullptr;
 httpd_handle_t s_portal_server = nullptr;
@@ -1002,8 +1021,44 @@ bool QueueTransition(TransitionRequest request)
     return true;
 }
 
+// Ends a scan the driver will never report on, and returns whether there was one.
+//
+// esp_wifi_stop() and esp_wifi_connect() both abort a running scan silently -- no
+// WIFI_EVENT_SCAN_DONE follows -- so every path that tears the station down has to
+// resolve the scan itself. HandleScanDoneEvent used to be the only thing that could
+// leave ScanState::kRunning, which is why an aborted scan wedged the service until
+// reboot: StartNetworkScan's "already running" guard then dropped every later request.
+bool ResolveInFlightScan(esp_err_t reason)
+{
+    {
+        std::lock_guard<std::mutex> lock(s_state_mutex);
+        if (s_scan_snapshot.state != ScanState::kRunning) {
+            return false;
+        }
+        s_scan_snapshot.state = ScanState::kFailed;
+        s_scan_snapshot.last_error = reason;
+        s_scan_snapshot.networks.clear();
+    }
+
+    if (s_scan_timeout_timer != nullptr) {
+        CheckOrAbort(esp_timer_stop(s_scan_timeout_timer), "esp_timer_stop");
+    }
+    ESP_LOGW(kTag, "Network scan aborted: %s", esp_err_to_name(reason));
+    Notify(State::kScanFailed, "SCAN_FAILED");
+    return true;
+}
+
+void OnScanTimeout(void* arg)
+{
+    (void)arg;
+    if (ResolveInFlightScan(ESP_ERR_TIMEOUT)) {
+        ESP_LOGW(kTag, "Network scan timed out without a SCAN_DONE event");
+    }
+}
+
 void StopWifiNow()
 {
+    ResolveInFlightScan(ESP_ERR_INVALID_STATE);
     CheckOrAbort(esp_timer_stop(s_connect_timer), "esp_timer_stop");
     StopConfigPortal();
     {
@@ -1034,6 +1089,7 @@ void StopWifiNow()
 
 void EnterAccessPointModeNow()
 {
+    ResolveInFlightScan(ESP_ERR_INVALID_STATE);
     InitializeStack();
     UpdateAccessPointIdentity();
     CheckOrAbort(esp_timer_stop(s_connect_timer), "esp_timer_stop");
@@ -1092,6 +1148,7 @@ void EnterAccessPointModeNow()
 
 void StartStationAttempt(bool allow_ap_fallback)
 {
+    ResolveInFlightScan(ESP_ERR_INVALID_STATE);
     InitializeStack();
     ReloadSavedCredentials();
 
@@ -1213,12 +1270,18 @@ void StartStationAttempt(bool allow_ap_fallback)
 
 void DisconnectStationNow(bool clear_saved_credentials)
 {
+    ResolveInFlightScan(ESP_ERR_INVALID_STATE);
     CheckOrAbort(esp_timer_stop(s_connect_timer), "esp_timer_stop");
     {
         std::lock_guard<std::mutex> lock(s_state_mutex);
         s_suppress_disconnect_event = true;
         s_connect_timer_active = false;
         s_reconnecting = false;
+        // A user-initiated disconnect must not be undone by the reconnect loop. Standing
+        // the loop down here is deterministic; s_suppress_disconnect_event alone is not,
+        // since STA_DISCONNECTED is delivered asynchronously on the event loop task.
+        s_reconnect_suspended = true;
+        s_reconnect_attempts = 0;
     }
 
     esp_err_t err = esp_wifi_disconnect();
@@ -1244,9 +1307,103 @@ void DisconnectStationNow(bool clear_saved_credentials)
     Notify(State::kDisconnected, clear_saved_credentials ? "DISCONNECTED" : "DISCONNECTED_TEMP");
 }
 
+// Runs on the transition worker so a scan can never interleave with the stop/start/connect
+// of a reconnect cycle. StartNetworkScan has already suspended the reconnect loop and put
+// the snapshot in kRunning; this only does the radio work.
+void StartNetworkScanNow()
+{
+    {
+        std::lock_guard<std::mutex> lock(s_state_mutex);
+        if (s_scan_snapshot.state != ScanState::kRunning) {
+            // Resolved while queued (watchdog, or a teardown that ran first) -- nobody is
+            // waiting on this scan any more.
+            ESP_LOGI(kTag, "Queued network scan is stale; skipping");
+            return;
+        }
+    }
+
+    InitializeStack();
+
+    // Break out of any in-flight association first. esp_wifi_scan_start() is rejected with
+    // ESP_ERR_WIFI_STATE while the station is connecting, which is exactly the state an
+    // out-of-range device with saved credentials sits in permanently.
+    esp_err_t err = esp_wifi_disconnect();
+    if (err != ESP_OK && err != ESP_ERR_WIFI_NOT_INIT && err != ESP_ERR_WIFI_NOT_STARTED &&
+        err != ESP_ERR_WIFI_CONN) {
+        ESP_LOGW(kTag, "esp_wifi_disconnect before scan failed: %s", esp_err_to_name(err));
+    }
+
+    const UiState state = GetUiState();
+    const wifi_mode_t desired_mode = state.access_point_mode ? WIFI_MODE_APSTA : WIFI_MODE_STA;
+    wifi_mode_t current_mode = WIFI_MODE_NULL;
+    err = esp_wifi_get_mode(&current_mode);
+    if (err != ESP_OK) {
+        ResolveInFlightScan(err);
+        return;
+    }
+
+    if (current_mode != desired_mode) {
+        err = esp_wifi_stop();
+        if (err != ESP_OK && err != ESP_ERR_WIFI_NOT_STARTED) {
+            ResolveInFlightScan(err);
+            return;
+        }
+        err = esp_wifi_set_mode(desired_mode);
+        if (err != ESP_OK) {
+            ResolveInFlightScan(err);
+            return;
+        }
+        if (desired_mode == WIFI_MODE_APSTA) {
+            wifi_config_t ap_config = {};
+            ConfigureAccessPointConfig(state.ap_ssid, &ap_config);
+            err = esp_wifi_set_config(WIFI_IF_AP, &ap_config);
+            if (err != ESP_OK) {
+                ResolveInFlightScan(err);
+                return;
+            }
+        }
+    }
+
+    err = esp_wifi_start();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ResolveInFlightScan(err);
+        return;
+    }
+
+    wifi_scan_config_t scan_config = {};
+    scan_config.ssid = nullptr;
+    scan_config.bssid = nullptr;
+    scan_config.channel = 0;
+    scan_config.show_hidden = false;
+    scan_config.scan_type = WIFI_SCAN_TYPE_ACTIVE;
+    scan_config.scan_time.active.min = 30;
+    scan_config.scan_time.active.max = 80;
+    scan_config.home_chan_dwell_time = 30;
+
+    for (int attempt = 0; attempt < kScanStartAttempts; ++attempt) {
+        err = esp_wifi_scan_start(&scan_config, false);
+        if (err != ESP_ERR_WIFI_STATE) {
+            break;
+        }
+        ESP_LOGI(kTag, "Scan start deferred; station still busy (attempt %d/%d)",
+                 attempt + 1, kScanStartAttempts);
+        vTaskDelay(pdMS_TO_TICKS(kScanStartRetryDelayMs));
+    }
+
+    if (err != ESP_OK) {
+        ResolveInFlightScan(err);
+        return;
+    }
+
+    ESP_LOGI(kTag, "Network scan started");
+}
+
 void HandleTransitionRequest(TransitionRequest request)
 {
     switch (request) {
+        case TransitionRequest::kStartScan:
+            StartNetworkScanNow();
+            break;
         case TransitionRequest::kStart:
 #if CONFIG_FOLLOWUP_WIFI_START_IN_AP_MODE
             EnterAccessPointModeNow();
@@ -1284,6 +1441,10 @@ void TransitionWorker(void*)
 
 void HandleScanDoneEvent(void* event_data)
 {
+    if (s_scan_timeout_timer != nullptr) {
+        CheckOrAbort(esp_timer_stop(s_scan_timeout_timer), "esp_timer_stop");
+    }
+
     auto* event = static_cast<wifi_event_sta_scan_done_t*>(event_data);
     uint16_t ap_count = 0;
     esp_err_t status = esp_wifi_scan_get_ap_num(&ap_count);
@@ -1351,6 +1512,8 @@ void HandleWifiEvent(int32_t event_id, void* event_data)
         auto* event = static_cast<wifi_event_sta_disconnected_t*>(event_data);
         bool suppress = false;
         bool should_reconnect = false;
+        bool attempts_exhausted = false;
+        int attempt = 0;
         std::string reconnect_ssid;
         {
             std::lock_guard<std::mutex> lock(s_state_mutex);
@@ -1360,18 +1523,40 @@ void HandleWifiEvent(int32_t event_id, void* event_data)
                 s_ip_address.clear();
                 s_rssi = 0;
                 const Credentials credentials = ResolveStationCredentialsLocked();
-                should_reconnect = s_wifi_enabled && credentials.valid() && !s_reconnecting;
-                s_reconnecting = should_reconnect;
+                const bool eligible = s_wifi_enabled && credentials.valid() &&
+                                      !s_reconnecting && !s_reconnect_suspended;
+                if (eligible && s_reconnect_attempts >= kMaxReconnectAttempts) {
+                    // Out of range the AP is simply not there, so retrying forever only
+                    // burns the radio. Stand down and wait for user intent -- a connect,
+                    // a scan, or a Wi-Fi toggle -- to re-arm the loop.
+                    s_reconnect_suspended = true;
+                    attempts_exhausted = true;
+                } else if (eligible) {
+                    ++s_reconnect_attempts;
+                    should_reconnect = true;
+                    s_reconnecting = true;
+                }
+                attempt = s_reconnect_attempts;
                 reconnect_ssid = credentials.ssid;
             }
         }
 
         if (!suppress) {
             Notify(State::kDisconnected,
-                   event != nullptr ? DisconnectReasonToString(event->reason) : "DISCONNECTED");
-            if (should_reconnect) {
+                   attempts_exhausted
+                       ? "RECONNECT_EXHAUSTED"
+                       : (event != nullptr ? DisconnectReasonToString(event->reason)
+                                           : "DISCONNECTED"));
+            if (attempts_exhausted) {
+                ESP_LOGW(kTag,
+                         "Wi-Fi reconnect gave up after %d attempts to ssid=%s; waiting "
+                         "for a scan, connect or Wi-Fi toggle",
+                         kMaxReconnectAttempts,
+                         reconnect_ssid.empty() ? "<unknown>" : reconnect_ssid.c_str());
+            } else if (should_reconnect) {
                 ESP_LOGI(kTag,
-                         "Wi-Fi disconnected; scheduling reconnect to ssid=%s",
+                         "Wi-Fi disconnected; scheduling reconnect %d/%d to ssid=%s",
+                         attempt, kMaxReconnectAttempts,
                          reconnect_ssid.empty() ? "<unknown>" : reconnect_ssid.c_str());
                 if (!QueueTransition(TransitionRequest::kStartStation)) {
                     std::lock_guard<std::mutex> lock(s_state_mutex);
@@ -1406,6 +1591,8 @@ void HandleIpEvent(int32_t event_id, void* event_data)
         std::lock_guard<std::mutex> lock(s_state_mutex);
         s_connect_timer_active = false;
         s_reconnecting = false;
+        s_reconnect_attempts = 0;
+        s_reconnect_suspended = false;
         s_connected = true;
         s_ip_address = ip_address;
         s_rssi = rssi;
@@ -1441,6 +1628,15 @@ esp_err_t Init()
         .skip_unhandled_events = true,
     };
     ESP_ERROR_CHECK(esp_timer_create(&timer_args, &s_connect_timer));
+
+    esp_timer_create_args_t scan_timer_args = {
+        .callback = OnScanTimeout,
+        .arg = nullptr,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "wifi_scan_timer",
+        .skip_unhandled_events = true,
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&scan_timer_args, &s_scan_timeout_timer));
 
     s_transition_queue = xQueueCreate(kTransitionQueueDepth, sizeof(TransitionRequest));
     if (s_transition_queue == nullptr) {
@@ -1502,6 +1698,8 @@ void SetWifiEnabled(bool enabled)
     {
         std::lock_guard<std::mutex> lock(s_state_mutex);
         s_wifi_enabled = enabled;
+        s_reconnect_attempts = 0;
+        s_reconnect_suspended = false;
     }
     QueueTransition(enabled ? TransitionRequest::kStart : TransitionRequest::kStopWifi);
 }
@@ -1514,6 +1712,8 @@ void SetAccessPointEnabled(bool enabled)
         if (enabled) {
             s_wifi_enabled = true;
         }
+        s_reconnect_attempts = 0;
+        s_reconnect_suspended = false;
     }
     QueueTransition(enabled ? TransitionRequest::kEnterAccessPoint
                             : TransitionRequest::kDisableAccessPoint);
@@ -1536,6 +1736,8 @@ bool ConnectToNetwork(const std::string& ssid, const std::string& password, bool
         s_active_credentials = {.ssid = ssid, .password = password};
         s_persist_active_credentials_on_success = save_on_success;
         s_current_ssid = ssid;
+        s_reconnect_attempts = 0;
+        s_reconnect_suspended = false;
     }
 
     return QueueTransition(TransitionRequest::kStartStation);
@@ -1555,75 +1757,47 @@ bool StartNetworkScan()
     InitializeStack();
     {
         std::lock_guard<std::mutex> lock(s_state_mutex);
-        if (!s_wifi_enabled || s_scan_snapshot.state == ScanState::kRunning) {
-            return s_wifi_enabled;
-        }
-    }
-
-    const UiState state = GetUiState();
-    const wifi_mode_t desired_mode = state.access_point_mode ? WIFI_MODE_APSTA : WIFI_MODE_STA;
-    wifi_mode_t current_mode = WIFI_MODE_NULL;
-    esp_err_t err = esp_wifi_get_mode(&current_mode);
-    if (err != ESP_OK) {
-        return false;
-    }
-
-    if (current_mode != desired_mode) {
-        err = esp_wifi_stop();
-        if (err != ESP_OK && err != ESP_ERR_WIFI_NOT_STARTED) {
+        if (!s_wifi_enabled) {
             return false;
         }
-        err = esp_wifi_set_mode(desired_mode);
-        if (err != ESP_OK) {
-            return false;
+        if (s_scan_snapshot.state == ScanState::kRunning) {
+            // Already scanning; that scan is the answer to this request.
+            return true;
         }
-        if (desired_mode == WIFI_MODE_APSTA) {
-            wifi_config_t ap_config = {};
-            strlcpy(reinterpret_cast<char*>(ap_config.ap.ssid), state.ap_ssid.c_str(),
-                    sizeof(ap_config.ap.ssid));
-            ap_config.ap.ssid_len = state.ap_ssid.size();
-            ap_config.ap.channel = 1;
-            ap_config.ap.max_connection = 4;
-            ap_config.ap.authmode = WIFI_AUTH_OPEN;
-            err = esp_wifi_set_config(WIFI_IF_AP, &ap_config);
-            if (err != ESP_OK) {
-                return false;
-            }
-        }
-    }
 
-    err = esp_wifi_start();
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        return false;
-    }
-
-    wifi_scan_config_t scan_config = {};
-    scan_config.ssid = nullptr;
-    scan_config.bssid = nullptr;
-    scan_config.channel = 0;
-    scan_config.show_hidden = false;
-    scan_config.scan_type = WIFI_SCAN_TYPE_ACTIVE;
-    scan_config.scan_time.active.min = 30;
-    scan_config.scan_time.active.max = 80;
-    scan_config.home_chan_dwell_time = 30;
-    err = esp_wifi_scan_start(&scan_config, false);
-    if (err != ESP_OK) {
-        {
-            std::lock_guard<std::mutex> lock(s_state_mutex);
-            s_scan_snapshot.state = ScanState::kFailed;
-            s_scan_snapshot.last_error = err;
-            s_scan_snapshot.networks.clear();
-        }
-        Notify(State::kScanFailed, "SCAN_FAILED");
-        return false;
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(s_state_mutex);
+        // A manual scan outranks the automatic reconnect. Asking for a network list is
+        // the user saying they are about to pick one by hand, so the loop stands down
+        // instead of racing the scan -- esp_wifi_connect() aborts a running scan without
+        // ever delivering SCAN_DONE. It stays down until the user connects or toggles
+        // Wi-Fi; a successful association re-arms it.
+        s_reconnect_suspended = true;
+        s_reconnecting = false;
         s_scan_snapshot.state = ScanState::kRunning;
         s_scan_snapshot.last_error = ESP_OK;
         s_scan_snapshot.networks.clear();
     }
+
+    // Drop the pending connect deadline; the association it was timing is about to be
+    // torn down by the scan.
+    CheckOrAbort(esp_timer_stop(s_connect_timer), "esp_timer_stop");
+    {
+        std::lock_guard<std::mutex> lock(s_state_mutex);
+        s_connect_timer_active = false;
+    }
+
+    if (s_scan_timeout_timer != nullptr) {
+        CheckOrAbort(esp_timer_stop(s_scan_timeout_timer), "esp_timer_stop");
+        const esp_err_t timer_err = esp_timer_start_once(s_scan_timeout_timer, kScanTimeoutUs);
+        if (timer_err != ESP_OK) {
+            ESP_LOGW(kTag, "Scan watchdog arm failed: %s", esp_err_to_name(timer_err));
+        }
+    }
+
+    if (!QueueTransition(TransitionRequest::kStartScan)) {
+        ResolveInFlightScan(ESP_ERR_NO_MEM);
+        return false;
+    }
+
     Notify(State::kScanning, "NETWORK_SCAN");
     return true;
 }
@@ -1644,17 +1818,27 @@ void RecoverAfterLightSleep()
     bool access_point_mode = false;
     bool reconnecting = false;
     bool has_credentials = false;
+    bool reconnect_suspended = false;
     {
         std::lock_guard<std::mutex> lock(s_state_mutex);
         wifi_enabled = s_wifi_enabled;
         connected = s_connected;
         access_point_mode = s_access_point_mode;
         reconnecting = s_reconnecting;
+        reconnect_suspended = s_reconnect_suspended;
         has_credentials = ResolveStationCredentialsLocked().valid();
     }
 
     if (!wifi_enabled) {
         ESP_LOGI(kTag, "Skipping Wi-Fi recovery after light sleep; Wi-Fi disabled");
+        return;
+    }
+
+    if (reconnect_suspended && !access_point_mode) {
+        // The reconnect loop has already stood down and is waiting for user intent.
+        // Recovering here would restart it behind the user's back, and would do so once
+        // per wake without ever counting against the attempt budget.
+        ESP_LOGI(kTag, "Skipping Wi-Fi recovery after light sleep; reconnect stood down");
         return;
     }
 
