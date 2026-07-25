@@ -16,7 +16,6 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "power_service.h"
-#include "shared_bus_service.h"
 #include "sd_card.h"
 #include "waveshare_board_config.h"
 #include "esp_timer.h"
@@ -74,29 +73,6 @@ public:
 
     WriteBusyGuard(const WriteBusyGuard&) = delete;
     WriteBusyGuard& operator=(const WriteBusyGuard&) = delete;
-};
-
-class StorageBusGuard {
-public:
-    StorageBusGuard() = default;
-
-    ~StorageBusGuard()
-    {
-        if (err_ == ESP_OK) {
-            shared_bus_service::ReleaseStorage();
-        }
-    }
-
-    esp_err_t Acquire()
-    {
-        err_ = shared_bus_service::AcquireStorage();
-        return err_;
-    }
-
-    esp_err_t err() const { return err_; }
-
-private:
-    esp_err_t err_ = ESP_FAIL;
 };
 
 SdCardPins BuildPins()
@@ -301,14 +277,6 @@ esp_err_t InitializeCardAtBootLocked(SdCard& card)
         return s_mount_result;
     }
 
-    StorageBusGuard bus_guard;
-    s_mount_result = bus_guard.Acquire();
-    if (s_mount_result != ESP_OK) {
-        ESP_LOGW(kTag, "Startup shared storage bus acquire failed: %s",
-                 esp_err_to_name(s_mount_result));
-        return s_mount_result;
-    }
-
     s_mount_result = MountCardLocked(card);
     if (s_mount_result == ESP_OK) {
         // This board behaves best when the inserted card stays mounted after
@@ -413,15 +381,6 @@ void HandleFormatRequest()
     esp_err_t err = ESP_OK;
 
     {
-        StorageBusGuard storage_bus;
-        err = storage_bus.Acquire();
-        if (err != ESP_OK) {
-            ESP_LOGW(kTag, "Shared storage bus acquire failed before mount: %s",
-                     esp_err_to_name(err));
-            CompleteOperation(Operation::kFormatSd, OperationPhase::kFailed,
-                              Mode::kError, err, card);
-            return;
-        }
         std::lock_guard<std::mutex> card_lock(s_card_mutex);
         LogFormatStep("mount_before", card);
         err = MountCardLocked(card);
@@ -433,12 +392,6 @@ void HandleFormatRequest()
                  static_cast<long long>((esp_timer_get_time() - started_at_us) / 1000));
     }
     if (err == ESP_OK) {
-        StorageBusGuard storage_bus;
-        err = storage_bus.Acquire();
-        if (err != ESP_OK) {
-            ESP_LOGW(kTag, "Shared storage bus acquire failed before format: %s",
-                     esp_err_to_name(err));
-        }
         if (err == ESP_OK) {
             std::lock_guard<std::mutex> card_lock(s_card_mutex);
             LogFormatStep("format_before", card);
@@ -452,12 +405,6 @@ void HandleFormatRequest()
         }
     }
     if (err == ESP_OK) {
-        StorageBusGuard storage_bus;
-        err = storage_bus.Acquire();
-        if (err != ESP_OK) {
-            ESP_LOGW(kTag, "Shared storage bus acquire failed before set label: %s",
-                     esp_err_to_name(err));
-        }
         if (err == ESP_OK) {
             std::lock_guard<std::mutex> card_lock(s_card_mutex);
             LogFormatStep("set_label_before", card);
@@ -474,12 +421,6 @@ void HandleFormatRequest()
         }
     }
     if (err == ESP_OK) {
-        StorageBusGuard storage_bus;
-        err = storage_bus.Acquire();
-        if (err != ESP_OK) {
-            ESP_LOGW(kTag, "Shared storage bus acquire failed before ensure dirs: %s",
-                     esp_err_to_name(err));
-        }
         if (err == ESP_OK) {
             std::lock_guard<std::mutex> card_lock(s_card_mutex);
             LogFormatStep("ensure_dirs_before", card);
@@ -532,7 +473,6 @@ esp_err_t Init()
         return s_mount_result == ESP_ERR_NOT_FOUND ? ESP_OK : s_mount_result;
     }
 
-    ESP_RETURN_ON_ERROR(shared_bus_service::Init(), kTag, "shared bus init failed");
 
     if (s_request_queue == nullptr) {
         s_request_queue = xQueueCreate(kQueueDepth, sizeof(QueuedRequest));
@@ -686,17 +626,7 @@ esp_err_t RunWithMountedFilesystem(MountedFilesystemHandler handler, void* conte
     SdCard& card = Card();
     esp_err_t err = ESP_OK;
     {
-        // Hold the shared SPI bus for the whole SD operation so it can't run
-        // concurrently with a display refresh. Both devices share one bus; without
-        // this the SD traffic contends with (and can corrupt) the e-paper's
-        // command/data stream, throttling refreshes and hanging the panel on BUSY.
-        // Acquire the bus BEFORE s_card_mutex to match the format path's lock order.
-        StorageBusGuard bus_guard;
-        err = bus_guard.Acquire();
-        if (err != ESP_OK) {
-            ESP_LOGW(kTag, "Shared storage bus acquire failed for mounted op: %s",
-                     esp_err_to_name(err));
-        } else {
+        {
             std::lock_guard<std::mutex> card_lock(s_card_mutex);
             err = MountCardLocked(card);
             if (err == ESP_OK) {
@@ -739,14 +669,7 @@ esp_err_t RecoverAfterLightSleep()
         // The SDMMC card loses its state across light sleep, so the cached mount
         // handle is stale on wake and the first read times out (sdmmc 0x107).
         // Force a clean unmount + remount to re-run the card's init sequence.
-        // Acquire the bus BEFORE s_card_mutex to match the lock order used by
-        // RunWithMountedFilesystem and the format path.
-        StorageBusGuard bus_guard;
-        err = bus_guard.Acquire();
-        if (err != ESP_OK) {
-            ESP_LOGW(kTag, "Shared storage bus acquire failed during light-sleep recovery: %s",
-                     esp_err_to_name(err));
-        } else {
+        {
             std::lock_guard<std::mutex> card_lock(s_card_mutex);
             card.Unmount();
             err = MountCardLocked(card);

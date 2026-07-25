@@ -33,7 +33,6 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "project_assets.h"
-#include "shared_bus_service.h"
 #include "waveshare_board_config.h"
 
 namespace display_service {
@@ -143,23 +142,6 @@ public:
 
     RefreshBusyGuard(const RefreshBusyGuard&) = delete;
     RefreshBusyGuard& operator=(const RefreshBusyGuard&) = delete;
-};
-
-class DisplayBusGuard {
-public:
-    explicit DisplayBusGuard(esp_err_t err) : err_(err) {}
-
-    ~DisplayBusGuard()
-    {
-        if (err_ == ESP_OK) {
-            shared_bus_service::ReleaseDisplay();
-        }
-    }
-
-    esp_err_t err() const { return err_; }
-
-private:
-    esp_err_t err_ = ESP_FAIL;
 };
 
 EpaperPanelConfig BuildPanelConfig()
@@ -568,11 +550,6 @@ esp_err_t ApplyHomeScreen(bool full_refresh)
     CaptureUnderlaySnapshot(panel.framebuffer());
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
-    DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
-    if (bus_guard.err() != ESP_OK) {
-        return bus_guard.err();
-    }
-
     RefreshBusyGuard refresh_busy;
     const esp_err_t err = full_refresh ? panel.RefreshFullBase()
                                        : panel.RefreshPartialFullScreen();
@@ -592,11 +569,6 @@ esp_err_t ApplyLockScreen(bool full_refresh)
     DrawLockScreenUnderlay(panel.framebuffer(), snapshot);
     CaptureUnderlaySnapshot(panel.framebuffer());
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
-
-    DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
-    if (bus_guard.err() != ESP_OK) {
-        return bus_guard.err();
-    }
 
     RefreshBusyGuard refresh_busy;
     const esp_err_t err = full_refresh ? panel.RefreshFullBase()
@@ -618,11 +590,6 @@ esp_err_t ApplySettings(bool full_refresh)
     CaptureUnderlaySnapshot(panel.framebuffer());
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
-    DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
-    if (bus_guard.err() != ESP_OK) {
-        return bus_guard.err();
-    }
-
     RefreshBusyGuard refresh_busy;
     const esp_err_t err = full_refresh ? panel.RefreshFullBase()
                                        : panel.RefreshPartialFullScreen();
@@ -642,11 +609,6 @@ esp_err_t ApplyWifi(bool full_refresh)
     DrawWifiUnderlay(panel.framebuffer(), snapshot);
     CaptureUnderlaySnapshot(panel.framebuffer());
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
-
-    DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
-    if (bus_guard.err() != ESP_OK) {
-        return bus_guard.err();
-    }
 
     RefreshBusyGuard refresh_busy;
     const esp_err_t err = full_refresh ? panel.RefreshFullBase()
@@ -668,11 +630,6 @@ esp_err_t ApplyTime(bool full_refresh)
     CaptureUnderlaySnapshot(panel.framebuffer());
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
-    DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
-    if (bus_guard.err() != ESP_OK) {
-        return bus_guard.err();
-    }
-
     RefreshBusyGuard refresh_busy;
     const esp_err_t err = full_refresh ? panel.RefreshFullBase()
                                        : panel.RefreshPartialFullScreen();
@@ -692,11 +649,6 @@ esp_err_t ApplyVibeCheck(bool full_refresh)
     DrawVibeCheckUnderlay(panel.framebuffer(), snapshot);
     CaptureUnderlaySnapshot(panel.framebuffer());
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
-
-    DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
-    if (bus_guard.err() != ESP_OK) {
-        return bus_guard.err();
-    }
 
     RefreshBusyGuard refresh_busy;
     const esp_err_t err = full_refresh ? panel.RefreshFullBase()
@@ -718,11 +670,6 @@ esp_err_t ApplySummarize(bool full_refresh)
     CaptureUnderlaySnapshot(panel.framebuffer());
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
-    DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
-    if (bus_guard.err() != ESP_OK) {
-        return bus_guard.err();
-    }
-
     RefreshBusyGuard refresh_busy;
     const esp_err_t err = full_refresh ? panel.RefreshFullBase()
                                        : panel.RefreshPartialFullScreen();
@@ -742,11 +689,6 @@ esp_err_t ApplyNotes(bool full_refresh)
     DrawNotesUnderlay(panel.framebuffer(), snapshot);
     CaptureUnderlaySnapshot(panel.framebuffer());
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
-
-    DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
-    if (bus_guard.err() != ESP_OK) {
-        return bus_guard.err();
-    }
 
     RefreshBusyGuard refresh_busy;
     const esp_err_t err = full_refresh ? panel.RefreshFullBase()
@@ -768,11 +710,6 @@ esp_err_t ApplyTodos(bool full_refresh)
     CaptureUnderlaySnapshot(panel.framebuffer());
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
-    DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
-    if (bus_guard.err() != ESP_OK) {
-        return bus_guard.err();
-    }
-
     RefreshBusyGuard refresh_busy;
     const esp_err_t err = full_refresh ? panel.RefreshFullBase()
                                        : panel.RefreshPartialFullScreen();
@@ -792,11 +729,6 @@ esp_err_t ApplyFollowUp(bool full_refresh)
     DrawFollowUpUnderlay(panel.framebuffer(), snapshot);
     CaptureUnderlaySnapshot(panel.framebuffer());
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
-
-    DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
-    if (bus_guard.err() != ESP_OK) {
-        return bus_guard.err();
-    }
 
     RefreshBusyGuard refresh_busy;
     const esp_err_t err = full_refresh ? panel.RefreshFullBase()
@@ -818,11 +750,6 @@ esp_err_t ApplyOnboarding(bool full_refresh)
     CaptureUnderlaySnapshot(panel.framebuffer());
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
-    DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
-    if (bus_guard.err() != ESP_OK) {
-        return bus_guard.err();
-    }
-
     RefreshBusyGuard refresh_busy;
     const esp_err_t err = full_refresh ? panel.RefreshFullBase()
                                        : panel.RefreshPartialFullScreen();
@@ -842,11 +769,6 @@ esp_err_t ApplyDetails(bool full_refresh)
     DrawDetailsUnderlay(panel.framebuffer(), snapshot);
     CaptureUnderlaySnapshot(panel.framebuffer());
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
-
-    DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
-    if (bus_guard.err() != ESP_OK) {
-        return bus_guard.err();
-    }
 
     RefreshBusyGuard refresh_busy;
     const esp_err_t err = full_refresh ? panel.RefreshFullBase()
@@ -922,8 +844,8 @@ esp_err_t EnqueueDisplayCommand(const DisplayCommand& incoming)
         }
 
         // The queue is a single slot, so xQueueOverwrite discards whatever is
-        // pending. When the display task is busy (e.g. blocked on the shared SPI
-        // bus during an SD save), a queued FULL refresh (screen transition, wake,
+        // pending. When the display task is busy (e.g. mid-refresh), a queued
+        // FULL refresh (screen transition, wake,
         // de-ghost reseed) can be sitting here when a partial refresh of a
         // different command type arrives. The merges above only apply within a
         // command type, so a cross-type partial would silently drop the pending
@@ -1004,11 +926,6 @@ esp_err_t RefreshCurrentScreenRegionLocked()
     CaptureUnderlaySnapshot(panel.framebuffer());
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
-    DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
-    if (bus_guard.err() != ESP_OK) {
-        return bus_guard.err();
-    }
-
     RefreshBusyGuard refresh_busy;
     const esp_err_t err = panel.RefreshChangedRegion();
     if (err != ESP_OK) {
@@ -1024,11 +941,6 @@ esp_err_t ApplyStartupSplash()
     EpaperPanel& panel = Panel();
     panel.Clear(true);
     DrawSplashScreen(panel.framebuffer());
-
-    DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
-    if (bus_guard.err() != ESP_OK) {
-        return bus_guard.err();
-    }
 
     RefreshBusyGuard refresh_busy;
     const esp_err_t err = panel.RefreshFullBase();
@@ -1094,11 +1006,6 @@ esp_err_t RefreshOverlayStateLocked(OverlayRefreshPolicy policy)
     std::memcpy(panel.framebuffer(), s_underlay_snapshot.data(), s_underlay_snapshot.size());
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
-    DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
-    if (bus_guard.err() != ESP_OK) {
-        return bus_guard.err();
-    }
-
     RefreshBusyGuard refresh_busy;
     const esp_err_t err = panel.RefreshPartialFullScreen();
     if (err != ESP_OK) {
@@ -1111,11 +1018,6 @@ esp_err_t RefreshOverlayStateLocked(OverlayRefreshPolicy policy)
 
 esp_err_t SleepPanelLocked(const char* reason)
 {
-    DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
-    if (bus_guard.err() != ESP_OK) {
-        return bus_guard.err();
-    }
-
     EpaperPanel& panel = Panel();
     ESP_RETURN_ON_ERROR(panel.Sleep(), kTag, "panel sleep failed");
     s_display_sleeping = true;
@@ -1265,13 +1167,9 @@ esp_err_t Init()
         return ESP_OK;
     }
 
-    ESP_RETURN_ON_ERROR(shared_bus_service::Init(), kTag, "shared bus init failed");
     // The EPD owns SPI3 and is powered from the AXP2101 rails, so there is no
     // shared SPI bus to bring up and no GPIO power-enable — the panel initializes
     // its own bus in EpaperPanel::Initialize().
-
-    DisplayBusGuard bus_guard(shared_bus_service::AcquireDisplay());
-    ESP_RETURN_ON_ERROR(bus_guard.err(), kTag, "shared display bus acquire failed");
 
     EpaperPanel& panel = Panel();
     ESP_RETURN_ON_ERROR(panel.Initialize(), kTag, "panel initialize failed");

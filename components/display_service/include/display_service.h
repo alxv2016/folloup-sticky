@@ -57,8 +57,8 @@ struct RefreshRequest {
 enum class OverlayRefreshPolicy {
     // Rebuild the underlay from the current screen with a PARTIAL refresh. Used
     // for overlay show/move and for dismissing SMALL overlays (card modals,
-    // toasts). Partial is enough here because SD I/O is serialized with the
-    // display on the shared SPI bus, so a partial refresh finishes uncorrupted.
+    // toasts). Partial is enough here: the underlay is redrawn and the small
+    // overlay region settles cleanly without a full flash.
     kRebuildUnderlay,
     // Rebuild the underlay with a FULL refresh. Used only when dismissing a LARGE
     // overlay (keyboard, select list): clearing that much high-contrast area with

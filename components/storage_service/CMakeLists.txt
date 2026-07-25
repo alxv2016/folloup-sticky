@@ -2,7 +2,7 @@ idf_component_register(
     SRCS
         "storage_service.cpp"
     INCLUDE_DIRS "include"
-    REQUIRES board power_service sd_card fatfs shared_bus_service task_config esp_timer
+    REQUIRES board power_service sd_card fatfs task_config esp_timer
 )
 
 target_compile_features(${COMPONENT_LIB} PUBLIC cxx_std_17)
