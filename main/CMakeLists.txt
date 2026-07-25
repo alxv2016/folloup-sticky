@@ -16,7 +16,7 @@ idf_component_register(SRCS "onboarding_page_runtime.cpp" "onboarding_page_inter
                                 nvs_flash page_navigation playback_service project_assets
                                 recording_archive_service
                                 recording_service recording_session_service storage_service
-                                summary_service task_config timezone_service touch_service
+                                summary_service task_config timezone_service
                                 transcription_service wifi_service)
 
 target_compile_features(${COMPONENT_LIB} PUBLIC cxx_std_17)

@@ -24,7 +24,6 @@
 #include "waveshare_board_config.h"
 #include "storage_service.h"
 #include "timezone_service.h"
-#include "touch_service.h"
 #include "wifi_service.h"
 
 namespace device_sleep_runtime {
@@ -260,15 +259,8 @@ esp_err_t RestoreAfterLightSleep()
     ESP_LOGI(kTag, "Light-sleep restore begin");
     LogLightSleepPins("before restore");
     esp_err_t err = display_service::RecoverAfterLightSleep();
-    if (touch_service::IsInitialized()) {
-        const esp_err_t touch_err = touch_service::RecoverAfterLightSleep();
-        if (touch_err != ESP_OK) {
-            ESP_LOGW(kTag, "Touch recovery after light sleep failed: %s",
-                     esp_err_to_name(touch_err));
-        }
-    }
-    // The SD card shares the SPI bus the display just re-initialized; remount it
-    // so the first post-wake read doesn't hit a stale card (sdmmc 0x107 timeout).
+    // The SDMMC card loses its state across light sleep; remount it so the first
+    // post-wake read doesn't hit a stale card (sdmmc 0x107 timeout).
     const esp_err_t storage_err = storage_service::RecoverAfterLightSleep();
     if (storage_err != ESP_OK && storage_err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(kTag, "Storage recovery after light sleep failed: %s",

@@ -45,7 +45,6 @@
 #include "summarize_page_runtime.h"
 #include "summary_service.h"
 #include "timezone_service.h"
-#include "touch_service.h"
 #include "transcription_service.h"
 #include "ui_refresh_runtime.h"
 #include "wifi_service.h"
@@ -772,21 +771,6 @@ const char* ButtonEventName(button_service::ButtonEvent event)
     }
 }
 
-const char* TouchPhaseName(touch_service::TouchPhase phase)
-{
-    switch (phase) {
-        case touch_service::TouchPhase::kBegin:
-            return "BEGIN";
-        case touch_service::TouchPhase::kMove:
-            return "MOVE";
-        case touch_service::TouchPhase::kEnd:
-            return "END";
-        case touch_service::TouchPhase::kNone:
-        default:
-            return "NONE";
-    }
-}
-
 const char* RecordingStateName(recording_service::State state)
 {
     switch (state) {
@@ -1420,84 +1404,6 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
         });
 }
 
-void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
-{
-    if (event.count > 0) {
-        ESP_LOGD(kTag,
-                 "Touch intent: phase=%s count=%u x=%u y=%u size=%u id=%u",
-                 TouchPhaseName(event.phase),
-                 static_cast<unsigned>(event.count),
-                 static_cast<unsigned>(event.points[0].x),
-                 static_cast<unsigned>(event.points[0].y),
-                 static_cast<unsigned>(event.points[0].size),
-                 static_cast<unsigned>(event.points[0].id));
-    } else {
-        ESP_LOGD(kTag, "Touch intent: phase=%s count=%u",
-                 TouchPhaseName(event.phase),
-                 static_cast<unsigned>(event.count));
-    }
-
-    // Touch is fully inert while the lock screen is active: no hit-testing, no
-    // buzzer/feedback, and no activity reset (accidental touches must not keep a
-    // locked device awake). Unlocking is button-only (POWER_OK double-click);
-    // buttons are gated separately in HandleDispatchedButtonEvent.
-    if (lock_screen_runtime::IsActive()) {
-        return;
-    }
-
-    if (event.phase == touch_service::TouchPhase::kBegin ||
-        event.phase == touch_service::TouchPhase::kMove) {
-        device_sleep_runtime::NotifyUserActivity();
-    }
-
-    const app_interaction::InputResult touch_result = input_focus_runtime::HandleTouchEvent(event);
-    PlayInteractionFeedback(touch_result);
-    FlushOverlayFeedback();
-    HandleDetailsBackIfRequested();
-    HandleOnboardingDismissIfRequested();
-    ShowOnboardingFromSettingsIfRequested();
-    if (touch_result.select_modal_submitted) {
-        if (!notes_page_runtime::HandleItemActionSelection(
-                touch_result.select_modal_selected_index) &&
-            !todos_page_runtime::HandleItemActionSelection(
-                touch_result.select_modal_selected_index) &&
-            !follow_up_page_runtime::HandleItemActionSelection(
-                touch_result.select_modal_selected_index) &&
-            !time_page_runtime::HandleSelectModalSubmit(
-                touch_result.select_modal_selected_index)) {
-            (void)recording_session_service::SubmitTagSelection(
-                touch_result.select_modal_selected_index);
-        }
-        ShowDetailsScreenIfRequested();
-    }
-    if (touch_result.request_format_sd_card) {
-        const esp_err_t err = storage_service::RequestFormatSdCard();
-        if (err != ESP_OK) {
-            ESP_LOGW(kTag, "Format SD touch request failed: %s", esp_err_to_name(err));
-            const storage_service::Snapshot snapshot = storage_service::GetSnapshot();
-            const esp_err_t overlay_err =
-                (!snapshot.inserted || err == ESP_ERR_NOT_FOUND)
-                    ? overlay_runtime::ShowStorageModalNoSdCard()
-                    : overlay_runtime::ShowStorageModalFormatError();
-            FlushOverlayFeedback();
-            if (overlay_err != ESP_OK && overlay_err != ESP_ERR_INVALID_STATE) {
-                ESP_LOGW(kTag, "Format SD touch error modal failed: %s",
-                         esp_err_to_name(overlay_err));
-            }
-        }
-    }
-    if (touch_result.request_shutdown && s_shutdown_task != nullptr) {
-        xTaskNotifyGive(s_shutdown_task);
-    }
-    if (touch_result.consumed) {
-        return;
-    }
-
-    if (storage_service::IsWriteBusy()) {
-        return;
-    }
-}
-
 void ShutdownTask(void*)
 {
     while (true) {
@@ -1798,8 +1704,6 @@ void Run()
         .inputs_enabled_context = nullptr,
         .button_handler = &HandleButtonEvent,
         .button_handler_context = nullptr,
-        .touch_handler = &HandleTouchEvent,
-        .touch_handler_context = nullptr,
     });
     PlayFeedback(feedback_service::FeedbackEvent::kStartup);
     InitImuService();

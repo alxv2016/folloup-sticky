@@ -19,22 +19,6 @@ i2c_master_bus_handle_t s_sensor_i2c_bus = nullptr;
 std::unique_ptr<Axp2101> s_pmic;
 std::unique_ptr<Es8311Codec> s_audio_codec;
 
-esp_err_t EnableOutputPin(gpio_num_t pin, int level)
-{
-    gpio_config_t config = {};
-    config.pin_bit_mask = 1ULL << pin;
-    config.mode = GPIO_MODE_INPUT_OUTPUT;
-    config.pull_up_en = GPIO_PULLUP_DISABLE;
-    config.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    config.intr_type = GPIO_INTR_DISABLE;
-
-    esp_err_t err = gpio_config(&config);
-    if (err != ESP_OK) {
-        return err;
-    }
-    return gpio_set_level(pin, level);
-}
-
 esp_err_t CreateI2cBus(i2c_port_num_t port, gpio_num_t scl_pin, gpio_num_t sda_pin,
                        i2c_master_bus_handle_t* out_bus)
 {
@@ -144,40 +128,6 @@ AudioCodec* GetAudioCodec()
     return s_audio_codec.get();
 }
 
-esp_err_t EnableTouchPower()
-{
-    esp_err_t err = EnableOutputPin(WAVESHARE_TOUCH_POWER_EN_PIN, 1);
-    if (err != ESP_OK) {
-        return err;
-    }
-
-    vTaskDelay(pdMS_TO_TICKS(WAVESHARE_TOUCH_POWER_DELAY_MS));
-    ESP_LOGI(kTag, "Touch power enabled on GPIO%d after %dms delay",
-             WAVESHARE_TOUCH_POWER_EN_PIN, WAVESHARE_TOUCH_POWER_DELAY_MS);
-    return ESP_OK;
-}
-
-esp_err_t ConfigureTouchInterruptPin(gpio_int_type_t intr_type)
-{
-    gpio_config_t config = {};
-    config.pin_bit_mask = 1ULL << WAVESHARE_TOUCH_INT_PIN;
-    config.mode = GPIO_MODE_INPUT;
-    config.pull_up_en = GPIO_PULLUP_ENABLE;
-    config.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    config.intr_type = intr_type;
-    return gpio_config(&config);
-}
-
-esp_err_t ReadTouchInterruptLevel(int* level)
-{
-    if (level == nullptr) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    *level = gpio_get_level(WAVESHARE_TOUCH_INT_PIN);
-    return ESP_OK;
-}
-
 esp_err_t EnsureSensorI2cBus(i2c_master_bus_handle_t* out_bus)
 {
     if (out_bus == nullptr) {
@@ -206,12 +156,6 @@ esp_err_t EnsureSensorI2cBus(i2c_master_bus_handle_t* out_bus)
 esp_err_t CreateSensorI2cBus(i2c_master_bus_handle_t* out_bus)
 {
     return EnsureSensorI2cBus(out_bus);
-}
-
-esp_err_t CreateTouchI2cBus(i2c_master_bus_handle_t* out_bus)
-{
-    return CreateI2cBus(WAVESHARE_TOUCH_I2C_PORT, WAVESHARE_TOUCH_I2C_SCL_PIN,
-                        WAVESHARE_TOUCH_I2C_SDA_PIN, out_bus);
 }
 
 esp_err_t AddPcf85063Device(i2c_master_bus_handle_t bus,

@@ -34,23 +34,6 @@ void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
     handler(event, context);
 }
 
-void HandleTouchEvent(const touch_service::TouchEventInfo& event, void*)
-{
-    touch_service::EventHandler handler = nullptr;
-    void* context = nullptr;
-    {
-        std::lock_guard<std::mutex> lock(s_mutex);
-        handler = s_dependencies.touch_handler;
-        context = s_dependencies.touch_handler_context;
-    }
-
-    if (handler == nullptr || !InputsEnabled()) {
-        return;
-    }
-
-    handler(event, context);
-}
-
 }  // namespace
 
 void Configure(const Dependencies& dependencies)
@@ -61,7 +44,6 @@ void Configure(const Dependencies& dependencies)
     }
 
     button_service::SetEventHandler(&HandleButtonEvent, nullptr);
-    touch_service::SetEventHandler(&HandleTouchEvent, nullptr);
 }
 
 esp_err_t InitButtonInput()
@@ -72,11 +54,6 @@ esp_err_t InitButtonInput()
     }
 
     return button_service::Init();
-}
-
-esp_err_t InitTouchInput()
-{
-    return touch_service::Init();
 }
 
 }  // namespace input_runtime_setup
