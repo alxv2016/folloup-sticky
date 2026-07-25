@@ -14,7 +14,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "audio_codec.h"
-#include "sticky_board.h"
+#include "waveshare_board.h"
 #include "storage_service.h"
 
 namespace recording_service {
@@ -31,7 +31,7 @@ constexpr uint32_t kCaptureTaskStackWords = 4096;
 // uplink are 16 kHz, so no resampling is needed.
 constexpr uint32_t kSampleRateHz = 16000;
 
-// Owned by the board (sticky_board::GetAudioCodec); the recording service only
+// Owned by the board (waveshare_board::GetAudioCodec); the recording service only
 // borrows it for input capture.
 AudioCodec* s_codec = nullptr;
 
@@ -510,7 +510,7 @@ esp_err_t Init()
         }
     }
 
-    s_codec = sticky_board::GetAudioCodec();
+    s_codec = waveshare_board::GetAudioCodec();
     if (s_codec == nullptr) {
         ESP_LOGE(kTag, "Audio codec unavailable; recording disabled");
         return ESP_ERR_NOT_FOUND;

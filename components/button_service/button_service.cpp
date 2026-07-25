@@ -5,7 +5,7 @@
 #include "button_gpio.h"
 #include "esp_log.h"
 #include "iot_button.h"
-#include "sticky_board_config.h"
+#include "waveshare_board_config.h"
 
 namespace button_service {
 namespace {
@@ -26,9 +26,9 @@ struct ButtonContext {
 };
 
 ButtonContext s_buttons[] = {
-    {"POWER_OK", ButtonId::kPowerOk, STICKY_POWER_BUTTON_PIN, nullptr},
-    {"UP", ButtonId::kUp, STICKY_BUTTON_UP_PIN, nullptr},
-    {"DOWN", ButtonId::kDown, STICKY_BUTTON_DOWN_PIN, nullptr},
+    {"POWER_OK", ButtonId::kPowerOk, WAVESHARE_POWER_BUTTON_PIN, nullptr},
+    {"UP", ButtonId::kUp, WAVESHARE_BUTTON_UP_PIN, nullptr},
+    {"DOWN", ButtonId::kDown, WAVESHARE_BUTTON_DOWN_PIN, nullptr},
 };
 
 bool s_initialized = false;

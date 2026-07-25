@@ -9,8 +9,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "gt911.h"
-#include "sticky_board.h"
-#include "sticky_board_config.h"
+#include "waveshare_board.h"
+#include "waveshare_board_config.h"
 
 namespace touch_service {
 namespace {
@@ -37,11 +37,11 @@ GT911& TouchController()
 
 uint16_t NormalizeTouchY(uint16_t raw_y)
 {
-    if (STICKY_TOUCH_LOGICAL_HEIGHT <= 0) {
+    if (WAVESHARE_TOUCH_LOGICAL_HEIGHT <= 0) {
         return raw_y;
     }
 
-    const uint16_t max_y = static_cast<uint16_t>(STICKY_TOUCH_LOGICAL_HEIGHT - 1);
+    const uint16_t max_y = static_cast<uint16_t>(WAVESHARE_TOUCH_LOGICAL_HEIGHT - 1);
     if (raw_y > max_y) {
         return 0;
     }
@@ -135,7 +135,7 @@ void TouchTask(void*)
             ulTaskNotifyTake(pdTRUE, kTouchIdlePollDelay);
 
         int int_level = 1;
-        const esp_err_t level_err = sticky_board::ReadTouchInterruptLevel(&int_level);
+        const esp_err_t level_err = waveshare_board::ReadTouchInterruptLevel(&int_level);
         if (level_err != ESP_OK) {
             ESP_LOGW(kTag, "Read TOUCH_INT level failed: %s", esp_err_to_name(level_err));
             continue;
@@ -180,25 +180,25 @@ esp_err_t StartTouchTask()
 esp_err_t AttachTouchInterrupt()
 {
     ESP_RETURN_ON_ERROR(EnsureGpioIsrService(), kTag, "GPIO ISR setup failed");
-    ESP_RETURN_ON_ERROR(sticky_board::ConfigureTouchInterruptPin(GPIO_INTR_NEGEDGE),
+    ESP_RETURN_ON_ERROR(waveshare_board::ConfigureTouchInterruptPin(GPIO_INTR_NEGEDGE),
                         kTag, "TOUCH_INT configure failed");
 
-    esp_err_t err = gpio_isr_handler_add(STICKY_TOUCH_INT_PIN, TouchInterruptIsr, nullptr);
+    esp_err_t err = gpio_isr_handler_add(WAVESHARE_TOUCH_INT_PIN, TouchInterruptIsr, nullptr);
     if (err == ESP_ERR_INVALID_STATE) {
         ESP_LOGI(kTag, "TOUCH_INT ISR handler already attached");
     } else {
         ESP_RETURN_ON_ERROR(err, kTag, "TOUCH_INT ISR handler attach failed");
     }
-    ESP_RETURN_ON_ERROR(gpio_intr_enable(STICKY_TOUCH_INT_PIN),
+    ESP_RETURN_ON_ERROR(gpio_intr_enable(WAVESHARE_TOUCH_INT_PIN),
                         kTag, "TOUCH_INT interrupt enable failed");
 
     int int_level = 1;
-    err = sticky_board::ReadTouchInterruptLevel(&int_level);
+    err = waveshare_board::ReadTouchInterruptLevel(&int_level);
     if (err != ESP_OK) {
         ESP_LOGW(kTag, "TOUCH_INT level read after attach failed: %s", esp_err_to_name(err));
     } else {
         ESP_LOGI(kTag, "TOUCH_INT ISR attached on GPIO%d, initial level=%d",
-                 STICKY_TOUCH_INT_PIN, int_level);
+                 WAVESHARE_TOUCH_INT_PIN, int_level);
     }
     return ESP_OK;
 }
@@ -206,8 +206,8 @@ esp_err_t AttachTouchInterrupt()
 esp_err_t ConfigureTouchControllerLocked(const char* phase)
 {
     GT911& gt911 = TouchController();
-    if (!gt911.begin(STICKY_TOUCH_INT_PIN, STICKY_TOUCH_RST_PIN,
-                     STICKY_TOUCH_LOGICAL_WIDTH, STICKY_TOUCH_LOGICAL_HEIGHT,
+    if (!gt911.begin(WAVESHARE_TOUCH_INT_PIN, WAVESHARE_TOUCH_RST_PIN,
+                     WAVESHARE_TOUCH_LOGICAL_WIDTH, WAVESHARE_TOUCH_LOGICAL_HEIGHT,
                      s_touch_bus)) {
         ESP_LOGW(kTag, "%s GT911 begin failed", phase);
         return ESP_FAIL;
@@ -219,8 +219,8 @@ esp_err_t ConfigureTouchControllerLocked(const char* phase)
     ESP_LOGI(kTag, "%s GT911 ready: addr=0x%02X sensor=%ux%u logical=%ux%u",
              phase, gt911.address(), static_cast<unsigned>(max_x),
              static_cast<unsigned>(max_y),
-             static_cast<unsigned>(STICKY_TOUCH_LOGICAL_WIDTH),
-             static_cast<unsigned>(STICKY_TOUCH_LOGICAL_HEIGHT));
+             static_cast<unsigned>(WAVESHARE_TOUCH_LOGICAL_WIDTH),
+             static_cast<unsigned>(WAVESHARE_TOUCH_LOGICAL_HEIGHT));
 
     gt911.onTouch(DispatchTouchPoints);
     return ESP_OK;
@@ -236,17 +236,17 @@ esp_err_t Init()
 
     ESP_LOGI(kTag,
              "Initializing touch: power=GPIO%d int=GPIO%d rst=GPIO%d scl=GPIO%d sda=GPIO%d map=%ux%u",
-             STICKY_TOUCH_POWER_EN_PIN, STICKY_TOUCH_INT_PIN, STICKY_TOUCH_RST_PIN,
-             STICKY_TOUCH_I2C_SCL_PIN, STICKY_TOUCH_I2C_SDA_PIN,
-             static_cast<unsigned>(STICKY_TOUCH_LOGICAL_WIDTH),
-             static_cast<unsigned>(STICKY_TOUCH_LOGICAL_HEIGHT));
+             WAVESHARE_TOUCH_POWER_EN_PIN, WAVESHARE_TOUCH_INT_PIN, WAVESHARE_TOUCH_RST_PIN,
+             WAVESHARE_TOUCH_I2C_SCL_PIN, WAVESHARE_TOUCH_I2C_SDA_PIN,
+             static_cast<unsigned>(WAVESHARE_TOUCH_LOGICAL_WIDTH),
+             static_cast<unsigned>(WAVESHARE_TOUCH_LOGICAL_HEIGHT));
 
-    ESP_RETURN_ON_ERROR(sticky_board::EnableTouchPower(), kTag,
+    ESP_RETURN_ON_ERROR(waveshare_board::EnableTouchPower(), kTag,
                         "touch power enable failed");
-    ESP_RETURN_ON_ERROR(sticky_board::CreateTouchI2cBus(&s_touch_bus), kTag,
+    ESP_RETURN_ON_ERROR(waveshare_board::CreateTouchI2cBus(&s_touch_bus), kTag,
                         "touch I2C bus init failed");
     ESP_LOGI(kTag, "Touch I2C bus initialized on port %d",
-             static_cast<int>(STICKY_TOUCH_I2C_PORT));
+             static_cast<int>(WAVESHARE_TOUCH_I2C_PORT));
 
     {
         std::lock_guard<std::mutex> lock(s_touch_controller_mutex);
@@ -284,7 +284,7 @@ esp_err_t RecoverAfterLightSleep()
 
     ESP_LOGI(kTag, "Recovering touch controller after light sleep");
 
-    esp_err_t err = gpio_intr_disable(STICKY_TOUCH_INT_PIN);
+    esp_err_t err = gpio_intr_disable(WAVESHARE_TOUCH_INT_PIN);
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(kTag, "TOUCH_INT interrupt disable before recovery failed: %s",
                  esp_err_to_name(err));

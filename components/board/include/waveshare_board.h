@@ -1,5 +1,5 @@
-#ifndef STICKY_BOARD_H_
-#define STICKY_BOARD_H_
+#ifndef WAVESHARE_BOARD_H_
+#define WAVESHARE_BOARD_H_
 
 #include <cstdint>
 
@@ -9,7 +9,7 @@
 #include "driver/i2c_master.h"
 #include "esp_err.h"
 
-namespace sticky_board {
+namespace waveshare_board {
 
 // Waveshare power is managed entirely by the AXP2101 PMIC on the shared I2C bus:
 // EnablePowerHold() brings up its rails/charger, and GetPmic() exposes it for
@@ -32,6 +32,6 @@ esp_err_t CreateTouchI2cBus(i2c_master_bus_handle_t* out_bus);
 esp_err_t AddPcf85063Device(i2c_master_bus_handle_t bus,
                            i2c_master_dev_handle_t* out_device);
 
-}  // namespace sticky_board
+}  // namespace waveshare_board
 
-#endif  // STICKY_BOARD_H_
+#endif  // WAVESHARE_BOARD_H_

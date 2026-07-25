@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "sticky_board.cpp"
+    SRCS "waveshare_board.cpp"
     INCLUDE_DIRS "include"
     REQUIRES axp2101 audio_hal esp_driver_gpio esp_driver_i2c esp_driver_spi
 )

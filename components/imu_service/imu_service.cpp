@@ -6,8 +6,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "qmi8658.h"
-#include "sticky_board.h"
-#include "sticky_board_config.h"
+#include "waveshare_board.h"
+#include "waveshare_board_config.h"
 
 namespace imu_service {
 namespace {
@@ -31,12 +31,12 @@ esp_err_t Init()
 
     ESP_LOGI(kTag,
              "Initializing QMI8658: addr=0x%02X bus=%d scl=GPIO%d sda=GPIO%d int=GPIO%d",
-             STICKY_QMI8658_I2C_ADDR, static_cast<int>(STICKY_SENSOR_I2C_PORT),
-             static_cast<int>(STICKY_SENSOR_I2C_SCL_PIN),
-             static_cast<int>(STICKY_SENSOR_I2C_SDA_PIN),
-             static_cast<int>(STICKY_IMU_INT_PIN));
+             WAVESHARE_QMI8658_I2C_ADDR, static_cast<int>(WAVESHARE_SENSOR_I2C_PORT),
+             static_cast<int>(WAVESHARE_SENSOR_I2C_SCL_PIN),
+             static_cast<int>(WAVESHARE_SENSOR_I2C_SDA_PIN),
+             static_cast<int>(WAVESHARE_IMU_INT_PIN));
 
-    esp_err_t err = sticky_board::EnsureSensorI2cBus(&s_sensor_bus);
+    esp_err_t err = waveshare_board::EnsureSensorI2cBus(&s_sensor_bus);
     if (err != ESP_OK) {
         ESP_LOGW(kTag, "Sensor I2C bus unavailable: %s", esp_err_to_name(err));
         return err;
@@ -44,7 +44,7 @@ esp_err_t Init()
 
     // Polling-only: the accel/gyro are read on demand (no INT2 wired), so the
     // driver runs without its interrupt task.
-    s_imu = new (std::nothrow) Qmi8658(s_sensor_bus, STICKY_QMI8658_I2C_ADDR);
+    s_imu = new (std::nothrow) Qmi8658(s_sensor_bus, WAVESHARE_QMI8658_I2C_ADDR);
     if (s_imu == nullptr) {
         return ESP_ERR_NO_MEM;
     }

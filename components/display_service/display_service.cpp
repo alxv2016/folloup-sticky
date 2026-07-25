@@ -34,14 +34,14 @@
 #include "freertos/task.h"
 #include "project_assets.h"
 #include "shared_bus_service.h"
-#include "sticky_board_config.h"
+#include "waveshare_board_config.h"
 
 namespace display_service {
 namespace {
 
 constexpr const char* kTag = "DisplayService";
-constexpr int kPortraitWidth = STICKY_EPD_HEIGHT;
-constexpr int kPortraitHeight = STICKY_EPD_WIDTH;
+constexpr int kPortraitWidth = WAVESHARE_EPD_HEIGHT;
+constexpr int kPortraitHeight = WAVESHARE_EPD_WIDTH;
 constexpr int kSplashLogoGap = design::spacing::k16;
 constexpr uint32_t kDisplayTaskStackWords = 4096;
 
@@ -98,7 +98,7 @@ epaper_ui::CardModalState s_card_modal_state = {};
 epaper_ui::SelectModalState s_select_modal_state = {};
 epaper_ui::ToastState s_toast_state = {};
 epaper_ui::StickyNoteState s_sticky_note_state = {};
-std::array<uint8_t, STICKY_EPD_BUFFER_LEN> s_underlay_snapshot = {};
+std::array<uint8_t, WAVESHARE_EPD_BUFFER_LEN> s_underlay_snapshot = {};
 bool s_underlay_snapshot_valid = false;
 
 struct RenderSnapshot {
@@ -167,16 +167,16 @@ EpaperPanelConfig BuildPanelConfig()
     EpaperPanelConfig config = {};
     // Waveshare: the EPD owns a dedicated SPI3 bus, so the panel initializes and
     // manages the bus itself (no shared-bus coordination, write-only, no MISO).
-    config.spi_host = STICKY_EPD_SPI_HOST;
-    config.cs = STICKY_EPD_CS_PIN;
-    config.dc = STICKY_EPD_DC_PIN;
-    config.rst = STICKY_EPD_RST_PIN;
-    config.busy = STICKY_EPD_BUSY_PIN;
-    config.mosi = STICKY_EPD_MOSI_PIN;
-    config.miso = STICKY_EPD_MISO_PIN;
-    config.sck = STICKY_EPD_SCK_PIN;
+    config.spi_host = WAVESHARE_EPD_SPI_HOST;
+    config.cs = WAVESHARE_EPD_CS_PIN;
+    config.dc = WAVESHARE_EPD_DC_PIN;
+    config.rst = WAVESHARE_EPD_RST_PIN;
+    config.busy = WAVESHARE_EPD_BUSY_PIN;
+    config.mosi = WAVESHARE_EPD_MOSI_PIN;
+    config.miso = WAVESHARE_EPD_MISO_PIN;
+    config.sck = WAVESHARE_EPD_SCK_PIN;
     config.external_spi_bus = false;
-    config.buffer_len = STICKY_EPD_BUFFER_LEN;
+    config.buffer_len = WAVESHARE_EPD_BUFFER_LEN;
     config.busy_timeout_ms = 10000;
     config.reset_low_ms = 2;
     config.reset_high_ms = 50;
@@ -186,7 +186,7 @@ EpaperPanelConfig BuildPanelConfig()
 
 EpaperPanel& Panel()
 {
-    static EpaperPanel panel(STICKY_EPD_WIDTH, STICKY_EPD_HEIGHT, BuildPanelConfig());
+    static EpaperPanel panel(WAVESHARE_EPD_WIDTH, WAVESHARE_EPD_HEIGHT, BuildPanelConfig());
     return panel;
 }
 
@@ -230,12 +230,12 @@ bool AssetPixelSet(const EmbeddedImageAsset& asset, int x, int y)
 
 void DrawRawPixel(uint8_t* framebuffer, int x, int y, bool black)
 {
-    if (framebuffer == nullptr || x < 0 || y < 0 || x >= STICKY_EPD_WIDTH ||
-        y >= STICKY_EPD_HEIGHT) {
+    if (framebuffer == nullptr || x < 0 || y < 0 || x >= WAVESHARE_EPD_WIDTH ||
+        y >= WAVESHARE_EPD_HEIGHT) {
         return;
     }
 
-    const size_t index = static_cast<size_t>(y) * (STICKY_EPD_WIDTH / 8) +
+    const size_t index = static_cast<size_t>(y) * (WAVESHARE_EPD_WIDTH / 8) +
                          static_cast<size_t>(x / 8);
     const uint8_t mask = static_cast<uint8_t>(0x80U >> (x & 0x07));
     if (black) {
@@ -252,7 +252,7 @@ void DrawPortraitPixel(uint8_t* framebuffer, int x, int y, bool black)
     }
 
     const int raw_x = y;
-    const int raw_y = STICKY_EPD_HEIGHT - 1 - x;
+    const int raw_y = WAVESHARE_EPD_HEIGHT - 1 - x;
     DrawRawPixel(framebuffer, raw_x, raw_y, black);
 }
 
@@ -299,34 +299,34 @@ void DrawSplashScreen(uint8_t* framebuffer)
 void DrawCurrentOverlays(uint8_t* framebuffer, const RenderSnapshot& snapshot)
 {
     epaper_ui::DrawKeyboard(framebuffer,
-                            STICKY_EPD_WIDTH,
-                            STICKY_EPD_HEIGHT,
+                            WAVESHARE_EPD_WIDTH,
+                            WAVESHARE_EPD_HEIGHT,
                             kPortraitWidth,
                             kPortraitHeight,
                             snapshot.keyboard,
                             {});
     epaper_ui::DrawToast(framebuffer,
-                         STICKY_EPD_WIDTH,
-                         STICKY_EPD_HEIGHT,
+                         WAVESHARE_EPD_WIDTH,
+                         WAVESHARE_EPD_HEIGHT,
                          kPortraitWidth,
                          kPortraitHeight,
                          snapshot.toast);
     epaper_ui::DrawSelectModal(framebuffer,
-                               STICKY_EPD_WIDTH,
-                               STICKY_EPD_HEIGHT,
+                               WAVESHARE_EPD_WIDTH,
+                               WAVESHARE_EPD_HEIGHT,
                                kPortraitWidth,
                                kPortraitHeight,
                                snapshot.select_modal);
     epaper_ui::DrawCardModal(framebuffer,
-                             STICKY_EPD_WIDTH,
-                             STICKY_EPD_HEIGHT,
+                             WAVESHARE_EPD_WIDTH,
+                             WAVESHARE_EPD_HEIGHT,
                              kPortraitWidth,
                              kPortraitHeight,
                              snapshot.card_modal);
     // Sticky-note overlay is full-page; draw it on top of every other overlay.
     epaper_ui::DrawStickyNote(framebuffer,
-                              STICKY_EPD_WIDTH,
-                              STICKY_EPD_HEIGHT,
+                              WAVESHARE_EPD_WIDTH,
+                              WAVESHARE_EPD_HEIGHT,
                               kPortraitWidth,
                               kPortraitHeight,
                               snapshot.sticky_note,
@@ -349,8 +349,8 @@ void DrawHomeUnderlay(uint8_t* framebuffer, const RenderSnapshot& snapshot)
     EpaperPanel& panel = Panel();
     panel.Clear(true);
     epaper_ui::DrawDashboardPage(framebuffer,
-                                 STICKY_EPD_WIDTH,
-                                 STICKY_EPD_HEIGHT,
+                                 WAVESHARE_EPD_WIDTH,
+                                 WAVESHARE_EPD_HEIGHT,
                                  kPortraitWidth,
                                  kPortraitHeight,
                                  snapshot.dashboard_page,
@@ -363,8 +363,8 @@ void DrawLockScreenUnderlay(uint8_t* framebuffer, const RenderSnapshot& snapshot
     EpaperPanel& panel = Panel();
     panel.Clear(true);
     epaper_ui::DrawLockScreen(framebuffer,
-                              STICKY_EPD_WIDTH,
-                              STICKY_EPD_HEIGHT,
+                              WAVESHARE_EPD_WIDTH,
+                              WAVESHARE_EPD_HEIGHT,
                               kPortraitWidth,
                               kPortraitHeight,
                               snapshot.lock_screen,
@@ -376,8 +376,8 @@ void DrawSettingsUnderlay(uint8_t* framebuffer, const RenderSnapshot& snapshot)
     EpaperPanel& panel = Panel();
     panel.Clear(true);
     epaper_ui::DrawSettingsPage(framebuffer,
-                                STICKY_EPD_WIDTH,
-                                STICKY_EPD_HEIGHT,
+                                WAVESHARE_EPD_WIDTH,
+                                WAVESHARE_EPD_HEIGHT,
                                 kPortraitWidth,
                                 kPortraitHeight,
                                 snapshot.settings_page,
@@ -390,8 +390,8 @@ void DrawWifiUnderlay(uint8_t* framebuffer, const RenderSnapshot& snapshot)
     EpaperPanel& panel = Panel();
     panel.Clear(true);
     epaper_ui::DrawWifiPage(framebuffer,
-                            STICKY_EPD_WIDTH,
-                            STICKY_EPD_HEIGHT,
+                            WAVESHARE_EPD_WIDTH,
+                            WAVESHARE_EPD_HEIGHT,
                             kPortraitWidth,
                             kPortraitHeight,
                             snapshot.wifi_page,
@@ -404,8 +404,8 @@ void DrawTimeUnderlay(uint8_t* framebuffer, const RenderSnapshot& snapshot)
     EpaperPanel& panel = Panel();
     panel.Clear(true);
     epaper_ui::DrawTimePage(framebuffer,
-                            STICKY_EPD_WIDTH,
-                            STICKY_EPD_HEIGHT,
+                            WAVESHARE_EPD_WIDTH,
+                            WAVESHARE_EPD_HEIGHT,
                             kPortraitWidth,
                             kPortraitHeight,
                             snapshot.time_page,
@@ -418,8 +418,8 @@ void DrawVibeCheckUnderlay(uint8_t* framebuffer, const RenderSnapshot& snapshot)
     EpaperPanel& panel = Panel();
     panel.Clear(true);
     epaper_ui::DrawVibeCheckPage(framebuffer,
-                                 STICKY_EPD_WIDTH,
-                                 STICKY_EPD_HEIGHT,
+                                 WAVESHARE_EPD_WIDTH,
+                                 WAVESHARE_EPD_HEIGHT,
                                  kPortraitWidth,
                                  kPortraitHeight,
                                  snapshot.vibe_check_page,
@@ -432,8 +432,8 @@ void DrawSummarizeUnderlay(uint8_t* framebuffer, const RenderSnapshot& snapshot)
     EpaperPanel& panel = Panel();
     panel.Clear(true);
     epaper_ui::DrawSummarizePage(framebuffer,
-                                 STICKY_EPD_WIDTH,
-                                 STICKY_EPD_HEIGHT,
+                                 WAVESHARE_EPD_WIDTH,
+                                 WAVESHARE_EPD_HEIGHT,
                                  kPortraitWidth,
                                  kPortraitHeight,
                                  snapshot.summarize_page,
@@ -446,8 +446,8 @@ void DrawNotesUnderlay(uint8_t* framebuffer, const RenderSnapshot& snapshot)
     EpaperPanel& panel = Panel();
     panel.Clear(true);
     epaper_ui::DrawNotesPage(framebuffer,
-                             STICKY_EPD_WIDTH,
-                             STICKY_EPD_HEIGHT,
+                             WAVESHARE_EPD_WIDTH,
+                             WAVESHARE_EPD_HEIGHT,
                              kPortraitWidth,
                              kPortraitHeight,
                              snapshot.notes_page,
@@ -460,8 +460,8 @@ void DrawTodosUnderlay(uint8_t* framebuffer, const RenderSnapshot& snapshot)
     EpaperPanel& panel = Panel();
     panel.Clear(true);
     epaper_ui::DrawTodosPage(framebuffer,
-                             STICKY_EPD_WIDTH,
-                             STICKY_EPD_HEIGHT,
+                             WAVESHARE_EPD_WIDTH,
+                             WAVESHARE_EPD_HEIGHT,
                              kPortraitWidth,
                              kPortraitHeight,
                              snapshot.todos_page,
@@ -474,8 +474,8 @@ void DrawFollowUpUnderlay(uint8_t* framebuffer, const RenderSnapshot& snapshot)
     EpaperPanel& panel = Panel();
     panel.Clear(true);
     epaper_ui::DrawFollowUpPage(framebuffer,
-                                STICKY_EPD_WIDTH,
-                                STICKY_EPD_HEIGHT,
+                                WAVESHARE_EPD_WIDTH,
+                                WAVESHARE_EPD_HEIGHT,
                                 kPortraitWidth,
                                 kPortraitHeight,
                                 snapshot.follow_up_page,
@@ -488,8 +488,8 @@ void DrawOnboardingUnderlay(uint8_t* framebuffer, const RenderSnapshot& snapshot
     EpaperPanel& panel = Panel();
     panel.Clear(true);
     epaper_ui::DrawOnboardingPage(framebuffer,
-                                  STICKY_EPD_WIDTH,
-                                  STICKY_EPD_HEIGHT,
+                                  WAVESHARE_EPD_WIDTH,
+                                  WAVESHARE_EPD_HEIGHT,
                                   kPortraitWidth,
                                   kPortraitHeight,
                                   snapshot.onboarding_page,
@@ -501,8 +501,8 @@ void DrawDetailsUnderlay(uint8_t* framebuffer, const RenderSnapshot& snapshot)
     EpaperPanel& panel = Panel();
     panel.Clear(true);
     epaper_ui::DrawDetailsPage(framebuffer,
-                               STICKY_EPD_WIDTH,
-                               STICKY_EPD_HEIGHT,
+                               WAVESHARE_EPD_WIDTH,
+                               WAVESHARE_EPD_HEIGHT,
                                kPortraitWidth,
                                kPortraitHeight,
                                snapshot.details_page,

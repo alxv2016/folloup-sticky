@@ -1,8 +1,8 @@
-#include "sticky_board.h"
+#include "waveshare_board.h"
 
 #include <memory>
 
-#include "sticky_board_config.h"
+#include "waveshare_board_config.h"
 
 #include "axp2101.h"
 #include "board_es8311_codec.h"
@@ -10,10 +10,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-namespace sticky_board {
+namespace waveshare_board {
 namespace {
 
-constexpr const char* kTag = "StickyBoard";
+constexpr const char* kTag = "WaveshareBoard";
 
 i2c_master_bus_handle_t s_sensor_i2c_bus = nullptr;
 std::unique_ptr<Axp2101> s_pmic;
@@ -47,7 +47,7 @@ esp_err_t CreateI2cBus(i2c_port_num_t port, gpio_num_t scl_pin, gpio_num_t sda_p
     config.scl_io_num = scl_pin;
     config.sda_io_num = sda_pin;
     config.clk_source = I2C_CLK_SRC_DEFAULT;
-    config.glitch_ignore_cnt = STICKY_I2C_GLITCH_IGNORE_CNT;
+    config.glitch_ignore_cnt = WAVESHARE_I2C_GLITCH_IGNORE_CNT;
     config.flags.enable_internal_pullup = 1;
 
     return i2c_new_master_bus(&config, out_bus);
@@ -100,7 +100,7 @@ esp_err_t EnablePowerHold()
 
     // The AXP2101 base ctor talks to the chip and aborts if it is absent; on this
     // board it feeds every rail, so a missing PMIC is unrecoverable by design.
-    s_pmic = std::make_unique<Axp2101>(bus, STICKY_AXP2101_I2C_ADDR, STICKY_PMIC_IRQ_PIN);
+    s_pmic = std::make_unique<Axp2101>(bus, WAVESHARE_AXP2101_I2C_ADDR, WAVESHARE_PMIC_IRQ_PIN);
     ConfigurePmicRails(s_pmic.get());
 
     ESP_LOGI(kTag, "AXP2101 power hold established (batt=%d%% vbus=%d charging=%d)",
@@ -130,37 +130,37 @@ AudioCodec* GetAudioCodec()
     // ES8311 control shares the sensor I2C bus; audio streams over I2S0. Full-duplex
     // at a single 16 kHz clock (input == output) drives both capture and playback.
     s_audio_codec = std::make_unique<Es8311Codec>(
-        bus, STICKY_SENSOR_I2C_PORT,
-        STICKY_AUDIO_SAMPLE_RATE_HZ, STICKY_AUDIO_SAMPLE_RATE_HZ,
-        STICKY_AUDIO_I2S_MCLK, STICKY_AUDIO_I2S_BCLK, STICKY_AUDIO_I2S_WS,
-        STICKY_AUDIO_I2S_DOUT, STICKY_AUDIO_I2S_DIN, STICKY_AUDIO_PA_PIN,
+        bus, WAVESHARE_SENSOR_I2C_PORT,
+        WAVESHARE_AUDIO_SAMPLE_RATE_HZ, WAVESHARE_AUDIO_SAMPLE_RATE_HZ,
+        WAVESHARE_AUDIO_I2S_MCLK, WAVESHARE_AUDIO_I2S_BCLK, WAVESHARE_AUDIO_I2S_WS,
+        WAVESHARE_AUDIO_I2S_DOUT, WAVESHARE_AUDIO_I2S_DIN, WAVESHARE_AUDIO_PA_PIN,
         ES8311_CODEC_DEFAULT_ADDR);
     // Keep the output path (and PA) enabled for the codec's lifetime so system
     // sound cues and clip playback can write to it without per-event PA toggling
     // (input is enabled on demand by the recording service).
     s_audio_codec->EnableOutput(true);
     ESP_LOGI(kTag, "ES8311 audio codec created (%d Hz duplex, output enabled)",
-             STICKY_AUDIO_SAMPLE_RATE_HZ);
+             WAVESHARE_AUDIO_SAMPLE_RATE_HZ);
     return s_audio_codec.get();
 }
 
 esp_err_t EnableTouchPower()
 {
-    esp_err_t err = EnableOutputPin(STICKY_TOUCH_POWER_EN_PIN, 1);
+    esp_err_t err = EnableOutputPin(WAVESHARE_TOUCH_POWER_EN_PIN, 1);
     if (err != ESP_OK) {
         return err;
     }
 
-    vTaskDelay(pdMS_TO_TICKS(STICKY_TOUCH_POWER_DELAY_MS));
+    vTaskDelay(pdMS_TO_TICKS(WAVESHARE_TOUCH_POWER_DELAY_MS));
     ESP_LOGI(kTag, "Touch power enabled on GPIO%d after %dms delay",
-             STICKY_TOUCH_POWER_EN_PIN, STICKY_TOUCH_POWER_DELAY_MS);
+             WAVESHARE_TOUCH_POWER_EN_PIN, WAVESHARE_TOUCH_POWER_DELAY_MS);
     return ESP_OK;
 }
 
 esp_err_t ConfigureTouchInterruptPin(gpio_int_type_t intr_type)
 {
     gpio_config_t config = {};
-    config.pin_bit_mask = 1ULL << STICKY_TOUCH_INT_PIN;
+    config.pin_bit_mask = 1ULL << WAVESHARE_TOUCH_INT_PIN;
     config.mode = GPIO_MODE_INPUT;
     config.pull_up_en = GPIO_PULLUP_ENABLE;
     config.pull_down_en = GPIO_PULLDOWN_DISABLE;
@@ -174,7 +174,7 @@ esp_err_t ReadTouchInterruptLevel(int* level)
         return ESP_ERR_INVALID_ARG;
     }
 
-    *level = gpio_get_level(STICKY_TOUCH_INT_PIN);
+    *level = gpio_get_level(WAVESHARE_TOUCH_INT_PIN);
     return ESP_OK;
 }
 
@@ -188,8 +188,8 @@ esp_err_t EnsureSensorI2cBus(i2c_master_bus_handle_t* out_bus)
         return ESP_OK;
     }
 
-    esp_err_t err = CreateI2cBus(STICKY_SENSOR_I2C_PORT, STICKY_SENSOR_I2C_SCL_PIN,
-                                 STICKY_SENSOR_I2C_SDA_PIN, &s_sensor_i2c_bus);
+    esp_err_t err = CreateI2cBus(WAVESHARE_SENSOR_I2C_PORT, WAVESHARE_SENSOR_I2C_SCL_PIN,
+                                 WAVESHARE_SENSOR_I2C_SDA_PIN, &s_sensor_i2c_bus);
     if (err != ESP_OK) {
         s_sensor_i2c_bus = nullptr;
         return err;
@@ -197,9 +197,9 @@ esp_err_t EnsureSensorI2cBus(i2c_master_bus_handle_t* out_bus)
 
     *out_bus = s_sensor_i2c_bus;
     ESP_LOGI(kTag, "Sensor I2C bus initialized: port=%d scl=GPIO%d sda=GPIO%d",
-             static_cast<int>(STICKY_SENSOR_I2C_PORT),
-             static_cast<int>(STICKY_SENSOR_I2C_SCL_PIN),
-             static_cast<int>(STICKY_SENSOR_I2C_SDA_PIN));
+             static_cast<int>(WAVESHARE_SENSOR_I2C_PORT),
+             static_cast<int>(WAVESHARE_SENSOR_I2C_SCL_PIN),
+             static_cast<int>(WAVESHARE_SENSOR_I2C_SDA_PIN));
     return ESP_OK;
 }
 
@@ -210,8 +210,8 @@ esp_err_t CreateSensorI2cBus(i2c_master_bus_handle_t* out_bus)
 
 esp_err_t CreateTouchI2cBus(i2c_master_bus_handle_t* out_bus)
 {
-    return CreateI2cBus(STICKY_TOUCH_I2C_PORT, STICKY_TOUCH_I2C_SCL_PIN,
-                        STICKY_TOUCH_I2C_SDA_PIN, out_bus);
+    return CreateI2cBus(WAVESHARE_TOUCH_I2C_PORT, WAVESHARE_TOUCH_I2C_SCL_PIN,
+                        WAVESHARE_TOUCH_I2C_SDA_PIN, out_bus);
 }
 
 esp_err_t AddPcf85063Device(i2c_master_bus_handle_t bus,
@@ -223,10 +223,10 @@ esp_err_t AddPcf85063Device(i2c_master_bus_handle_t bus,
 
     i2c_device_config_t config = {};
     config.dev_addr_length = I2C_ADDR_BIT_LEN_7;
-    config.device_address = STICKY_PCF85063_I2C_ADDR;
-    config.scl_speed_hz = STICKY_I2C_SPEED_HZ;
+    config.device_address = WAVESHARE_PCF85063_I2C_ADDR;
+    config.scl_speed_hz = WAVESHARE_I2C_SPEED_HZ;
 
     return i2c_master_bus_add_device(bus, &config, out_device);
 }
 
-}  // namespace sticky_board
+}  // namespace waveshare_board

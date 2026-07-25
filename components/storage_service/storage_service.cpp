@@ -18,7 +18,7 @@
 #include "power_service.h"
 #include "shared_bus_service.h"
 #include "sd_card.h"
-#include "sticky_board_config.h"
+#include "waveshare_board_config.h"
 #include "esp_timer.h"
 
 namespace storage_service {
@@ -104,12 +104,12 @@ SdCardPins BuildPins()
     SdCardPins pins = {};
     pins.slot = SDMMC_HOST_SLOT_1;
     pins.bus_width = 4;
-    pins.clk = STICKY_SD_CLK_PIN;
-    pins.cmd = STICKY_SD_CMD_PIN;
-    pins.d0 = STICKY_SD_D0_PIN;
-    pins.d1 = STICKY_SD_D1_PIN;
-    pins.d2 = STICKY_SD_D2_PIN;
-    pins.d3 = STICKY_SD_D3_PIN;
+    pins.clk = WAVESHARE_SD_CLK_PIN;
+    pins.cmd = WAVESHARE_SD_CMD_PIN;
+    pins.d0 = WAVESHARE_SD_D0_PIN;
+    pins.d1 = WAVESHARE_SD_D1_PIN;
+    pins.d2 = WAVESHARE_SD_D2_PIN;
+    pins.d3 = WAVESHARE_SD_D3_PIN;
     pins.internal_pullup = true;
     // Waveshare has no card-detect or power-enable line for the SD slot.
     pins.power_enable = GPIO_NUM_NC;

@@ -21,7 +21,7 @@
 #include "imu_service.h"
 #include "recording_service.h"
 #include "status_bar_runtime.h"
-#include "sticky_board_config.h"
+#include "waveshare_board_config.h"
 #include "storage_service.h"
 #include "timezone_service.h"
 #include "touch_service.h"
@@ -174,17 +174,17 @@ void LogLightSleepPins(const char* phase)
     ESP_LOGI(kTag,
              "Light-sleep %s pins: FN(GPIO%d)=%d PMIC_IRQ(GPIO%d)=%d",
              phase,
-             STICKY_POWER_BUTTON_PIN,
-             gpio_get_level(STICKY_POWER_BUTTON_PIN),
-             STICKY_PMIC_IRQ_PIN,
-             gpio_get_level(STICKY_PMIC_IRQ_PIN));
+             WAVESHARE_POWER_BUTTON_PIN,
+             gpio_get_level(WAVESHARE_POWER_BUTTON_PIN),
+             WAVESHARE_PMIC_IRQ_PIN,
+             gpio_get_level(WAVESHARE_PMIC_IRQ_PIN));
 }
 
 esp_err_t ConfigurePowerButtonWakeInput(const char* context)
 {
     ESP_LOGI(kTag, "Light-sleep wake input config begin: %s", context);
     gpio_config_t power_button_config = {};
-    power_button_config.pin_bit_mask = 1ULL << STICKY_POWER_BUTTON_PIN;
+    power_button_config.pin_bit_mask = 1ULL << WAVESHARE_POWER_BUTTON_PIN;
     power_button_config.mode = GPIO_MODE_INPUT;
     power_button_config.pull_up_en = GPIO_PULLUP_ENABLE;
     power_button_config.pull_down_en = GPIO_PULLDOWN_DISABLE;
@@ -207,23 +207,23 @@ esp_err_t ConfigurePowerButtonWakeInput(const char* context)
 esp_err_t ArmLightSleepGpioWake()
 {
     ESP_RETURN_ON_ERROR(
-        gpio_wakeup_enable(STICKY_POWER_BUTTON_PIN, GPIO_INTR_LOW_LEVEL), kTag,
+        gpio_wakeup_enable(WAVESHARE_POWER_BUTTON_PIN, GPIO_INTR_LOW_LEVEL), kTag,
         "enable FN light-sleep wake failed");
     ESP_RETURN_ON_ERROR(
-        gpio_wakeup_enable(STICKY_PMIC_IRQ_PIN, GPIO_INTR_LOW_LEVEL), kTag,
+        gpio_wakeup_enable(WAVESHARE_PMIC_IRQ_PIN, GPIO_INTR_LOW_LEVEL), kTag,
         "enable PMIC-IRQ light-sleep wake failed");
     ESP_RETURN_ON_ERROR(esp_sleep_enable_gpio_wakeup(), kTag,
                         "enable GPIO light-sleep wake source failed");
     ESP_LOGI(kTag, "Light-sleep GPIO wake armed: FN(GPIO%d) + PMIC_IRQ(GPIO%d), any-low",
-             STICKY_POWER_BUTTON_PIN, STICKY_PMIC_IRQ_PIN);
+             WAVESHARE_POWER_BUTTON_PIN, WAVESHARE_PMIC_IRQ_PIN);
     return ESP_OK;
 }
 
 void DisarmLightSleepGpioWake()
 {
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_GPIO);
-    gpio_wakeup_disable(STICKY_POWER_BUTTON_PIN);
-    gpio_wakeup_disable(STICKY_PMIC_IRQ_PIN);
+    gpio_wakeup_disable(WAVESHARE_POWER_BUTTON_PIN);
+    gpio_wakeup_disable(WAVESHARE_PMIC_IRQ_PIN);
 }
 
 esp_err_t WaitForPowerButtonReleased()
@@ -231,7 +231,7 @@ esp_err_t WaitForPowerButtonReleased()
     ESP_LOGI(kTag, "Light-sleep POWER_OK release wait begin");
     uint32_t stable_high_samples = 0;
     for (uint32_t sample = 0; sample < kPowerButtonReleaseMaxSamples; ++sample) {
-        const int level = gpio_get_level(STICKY_POWER_BUTTON_PIN);
+        const int level = gpio_get_level(WAVESHARE_POWER_BUTTON_PIN);
         if (level == 1) {
             ++stable_high_samples;
             if (stable_high_samples >= kPowerButtonReleaseStableSamples) {
@@ -358,7 +358,7 @@ esp_err_t EnterLightSleep()
     const esp_sleep_wakeup_cause_t wakeup_cause = esp_sleep_get_wakeup_cause();
     // FN and the AXP2101 IRQ are the GPIO wake sources; a low FN level on wake means
     // the button woke us, so its press/release is suppressed downstream.
-    const bool power_button_wake = gpio_get_level(STICKY_POWER_BUTTON_PIN) == 0;
+    const bool power_button_wake = gpio_get_level(WAVESHARE_POWER_BUTTON_PIN) == 0;
 
     DisarmLightSleepGpioWake();
     ESP_LOGI(kTag, "Light-sleep GPIO wake disarmed");

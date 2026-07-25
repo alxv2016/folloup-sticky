@@ -9,7 +9,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "pcf85063.h"
-#include "sticky_board.h"
+#include "waveshare_board.h"
 
 namespace power_service {
 namespace {
@@ -91,7 +91,7 @@ esp_err_t EnsureRtc()
     }
 
     if (s_rtc_device == nullptr) {
-        esp_err_t err = sticky_board::AddPcf85063Device(s_sensor_bus, &s_rtc_device);
+        esp_err_t err = waveshare_board::AddPcf85063Device(s_sensor_bus, &s_rtc_device);
         if (err != ESP_OK) {
             s_rtc_device = nullptr;
             return err;
@@ -148,7 +148,7 @@ void FillBatteryStatus(BatteryStatus* battery)
     }
 
     battery->available = false;
-    Axp2101* pmic = sticky_board::GetPmic();
+    Axp2101* pmic = waveshare_board::GetPmic();
     if (pmic == nullptr || !pmic->isBatteryConnect()) {
         return;
     }
@@ -174,7 +174,7 @@ void FillPowerSnapshot(PowerSnapshot* power)
     }
 
     *power = PowerSnapshot{};
-    Axp2101* pmic = sticky_board::GetPmic();
+    Axp2101* pmic = waveshare_board::GetPmic();
     if (pmic == nullptr) {
         return;
     }
@@ -284,7 +284,7 @@ esp_err_t Init()
     // The AXP2101 rail bring-up in the board layer leaves the charger enabled.
     s_charger_enabled = true;
 
-    err = sticky_board::EnsureSensorI2cBus(&s_sensor_bus);
+    err = waveshare_board::EnsureSensorI2cBus(&s_sensor_bus);
     if (err == ESP_OK) {
         err = EnsureRtc();
         if (err != ESP_OK) {
@@ -324,7 +324,7 @@ esp_err_t EnablePowerHold()
         return ESP_OK;
     }
 
-    esp_err_t err = sticky_board::EnablePowerHold();
+    esp_err_t err = waveshare_board::EnablePowerHold();
     if (err == ESP_OK) {
         s_power_hold_enabled = true;
     }
@@ -455,7 +455,7 @@ esp_err_t RequestShutdown()
         ESP_LOGW(kTag, "Continuing shutdown after RTC clear failure");
     }
 
-    Axp2101* pmic = sticky_board::GetPmic();
+    Axp2101* pmic = waveshare_board::GetPmic();
     if (pmic == nullptr) {
         ESP_LOGE(kTag, "PMIC unavailable; cannot power off");
         return ESP_ERR_INVALID_STATE;

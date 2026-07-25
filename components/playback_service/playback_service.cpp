@@ -7,7 +7,7 @@
 
 #include "audio_codec.h"
 #include "esp_log.h"
-#include "sticky_board.h"
+#include "waveshare_board.h"
 
 namespace playback_service {
 namespace {
@@ -60,7 +60,7 @@ esp_err_t PlayFile(const char* path)
         ~PlayingGuard() { s_playing.store(false, std::memory_order_relaxed); }
     } playing_guard;
 
-    AudioCodec* codec = sticky_board::GetAudioCodec();
+    AudioCodec* codec = waveshare_board::GetAudioCodec();
     if (codec == nullptr) {
         ESP_LOGE(kTag, "Audio codec unavailable; cannot play %s", path);
         return ESP_ERR_INVALID_STATE;

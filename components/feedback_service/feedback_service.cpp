@@ -1,7 +1,7 @@
 #include "feedback_service.h"
 
 #include "esp_log.h"
-#include "sticky_board.h"
+#include "waveshare_board.h"
 #include "system_sound_service.h"
 
 namespace feedback_service {
@@ -44,7 +44,7 @@ SoundCue CueForEvent(FeedbackEvent event)
 
 esp_err_t Init()
 {
-    AudioCodec* codec = sticky_board::GetAudioCodec();
+    AudioCodec* codec = waveshare_board::GetAudioCodec();
     if (codec == nullptr) {
         ESP_LOGW(kTag, "Audio codec unavailable; feedback cues disabled");
         return ESP_ERR_NOT_FOUND;
