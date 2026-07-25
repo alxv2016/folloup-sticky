@@ -22,6 +22,14 @@ void SetShutdownPendingProvider(ShutdownPendingProvider provider, void* context)
 esp_err_t StartAutoSleep(const AutoSleepSettings& settings);
 esp_err_t StartMotionPolling();
 void NotifyUserActivity();
+
+// Marks the POWER_OK press that is waking the device so it only wakes.
+//
+// Every event that press produces is swallowed by ConsumeWakeOnlyPowerButtonEvent
+// until the gesture resolves, with one deliberate exception: DOUBLE_CLICK is let
+// through, so waking and toggling the lock screen stays a single gesture. Armed by
+// the light-sleep exit path and by the display-sleep wake in app_shell.
+void ArmPowerButtonWakeGesture(const char* reason);
 bool ConsumeWakeOnlyPowerButtonEvent(const button_service::ButtonEventInfo& event);
 
 }  // namespace device_sleep_runtime

@@ -42,6 +42,11 @@ constexpr size_t kAutoSleepEventQueueDepth = 8;
 constexpr TickType_t kPowerButtonReleasePollDelay = pdMS_TO_TICKS(20);
 constexpr uint32_t kPowerButtonReleaseStableSamples = 10;
 constexpr uint32_t kPowerButtonReleaseMaxSamples = 250;
+// Upper bound on how long a wake gesture may keep FN suppressed. A press -> release ->
+// double-click-window sequence resolves well inside this; the deadline only exists so a
+// gesture whose terminal event never arrives (a triple tap emits neither SINGLE_CLICK nor
+// DOUBLE_CLICK) cannot strand the suppression forever.
+constexpr int64_t kWakeGestureTimeoutUs = 2 * 1000 * 1000;
 
 enum class MotionState {
     kUnknown,
@@ -63,7 +68,9 @@ std::mutex s_motion_mutex;
 std::mutex s_shutdown_provider_mutex;
 ShutdownPendingProvider s_shutdown_pending_provider = nullptr;
 void* s_shutdown_pending_context = nullptr;
-std::atomic<bool> s_power_button_wake_only_active = false;
+std::atomic<bool> s_wake_gesture_active = false;
+std::atomic<bool> s_wake_gesture_long_press = false;
+std::atomic<int64_t> s_wake_gesture_deadline_us = 0;
 bool s_have_last_motion_sample = false;
 AccelSampleMg s_last_motion_sample = {};
 int64_t s_quiet_started_us = 0;
@@ -281,7 +288,6 @@ esp_err_t AbortLightSleepEntry(esp_err_t err, const char* reason)
     ESP_LOGW(kTag, "Aborting light sleep entry: %s: %s",
              reason, esp_err_to_name(err));
     DisarmLightSleepGpioWake();
-    s_power_button_wake_only_active.store(false, std::memory_order_relaxed);
     status_bar_runtime::SetSleepIndicatorVisible(false);
     const esp_err_t status_bar_err = status_bar_runtime::UpdateDisplayState();
     if (status_bar_err != ESP_OK) {
@@ -340,36 +346,56 @@ esp_err_t EnterLightSleep()
     ESP_LOGI(kTag,
              "Light-sleep start now. Expect 'returned from esp_light_sleep_start' "
              "next; if logs show a boot banner instead, the board reset or lost power.");
-    s_power_button_wake_only_active.store(true, std::memory_order_relaxed);
-    ESP_LOGI(kTag, "Wake-only POWER_OK suppression armed before light sleep");
     vTaskDelay(pdMS_TO_TICKS(50));
+    // Freeze the button state machine across the sleep. esp_timer's clock is snapped
+    // forward by the sleep duration on wake, and iot_button's 5ms tick timer does not
+    // skip unhandled events -- left running it would replay one tick per missed 5ms in
+    // a single burst, racing the still-held wake press past the long-press threshold
+    // and destroying single/double-click classification for the whole gesture.
+    (void)button_service::Suspend();
     const esp_err_t sleep_err = esp_light_sleep_start();
+
+    // Restore the FN pad and the button poller before anything slow (logging is ~10ms per
+    // line at 115200 baud), so the wake press is still being held when polling resumes and
+    // the gesture can be classified. Unlike the Sticky's EXT1 path there is no RTC re-mux
+    // to undo here: gpio_wakeup_enable leaves the pad on the digital peripheral, so the
+    // level read below is genuine.
+    const esp_sleep_wakeup_cause_t wakeup_cause = esp_sleep_get_wakeup_cause();
+    DisarmLightSleepGpioWake();
+    const esp_err_t reconfig_err = ConfigurePowerButtonWakeInput("post-light-sleep");
+
+    // FN and the AXP2101 IRQ are the GPIO wake sources; a low FN level on wake means the
+    // button woke us, so its press/release is suppressed downstream.
+    const bool power_button_held = gpio_get_level(WAVESHARE_POWER_BUTTON_PIN) == 0;
+    const bool power_button_wake = power_button_held;
+
+    // Commit the stage transition before buttons go live, so a wake press cannot race
+    // in while the service still reports kLightSleeping and queue a second
+    // kWakeFromLightSleep action (which would run the whole restore twice).
+    const bool wake_committed = device_sleep_service::NotifyLightSleepWake(
+        device_sleep_service::TransitionReason::kInteraction);
+    // Arm on "still held", not on "was the wake source": a tap short enough to end
+    // before polling resumes produces no events at all, and arming for it would
+    // swallow the user's next deliberate press instead.
+    if (power_button_held) {
+        ArmPowerButtonWakeGesture("light-sleep wake");
+    }
+    (void)button_service::Resume();
+
     ESP_LOGI(kTag, "Light-sleep returned from esp_light_sleep_start: err=%s",
              esp_err_to_name(sleep_err));
-
-    const esp_sleep_wakeup_cause_t wakeup_cause = esp_sleep_get_wakeup_cause();
-    // FN and the AXP2101 IRQ are the GPIO wake sources; a low FN level on wake means
-    // the button woke us, so its press/release is suppressed downstream.
-    const bool power_button_wake = gpio_get_level(WAVESHARE_POWER_BUTTON_PIN) == 0;
-
-    DisarmLightSleepGpioWake();
     ESP_LOGI(kTag, "Light-sleep GPIO wake disarmed");
-
-    const esp_err_t reconfig_err = ConfigurePowerButtonWakeInput("post-light-sleep");
     if (reconfig_err != ESP_OK) {
         ESP_LOGW(kTag, "FN digital input restore after light sleep failed: %s",
                  esp_err_to_name(reconfig_err));
     }
-
     ESP_LOGI(kTag, "Exited light sleep: cause=%s power_button=%d err=%s",
              WakeupCauseName(wakeup_cause),
              power_button_wake ? 1 : 0,
              esp_err_to_name(sleep_err));
     LogLightSleepPins("after wake source cleanup");
-
-    if (!power_button_wake) {
-        s_power_button_wake_only_active.store(false, std::memory_order_relaxed);
-        ESP_LOGI(kTag, "Wake-only POWER_OK suppression cleared; wake was not POWER_OK");
+    if (!wake_committed) {
+        ESP_LOGW(kTag, "Light-sleep wake did not transition service state");
     }
 
     status_bar_runtime::SetSleepIndicatorVisible(false);
@@ -377,12 +403,6 @@ esp_err_t EnterLightSleep()
     if (status_bar_err != ESP_OK) {
         ESP_LOGW(kTag, "Status bar clear after light sleep failed: %s",
                  esp_err_to_name(status_bar_err));
-    }
-
-    const bool wake_committed =
-        device_sleep_service::NotifyLightSleepWake(device_sleep_service::TransitionReason::kInteraction);
-    if (!wake_committed) {
-        ESP_LOGW(kTag, "Light-sleep wake did not transition service state");
     }
 
     const esp_err_t restore_err = RestoreAfterLightSleep();
@@ -682,29 +702,61 @@ void NotifyUserActivity()
     device_sleep_service::NotifyUserActivity(device_sleep_service::ActivitySource::kInteraction);
 }
 
+void ArmPowerButtonWakeGesture(const char* reason)
+{
+    s_wake_gesture_long_press.store(false, std::memory_order_relaxed);
+    s_wake_gesture_deadline_us.store(esp_timer_get_time() + kWakeGestureTimeoutUs,
+                                     std::memory_order_relaxed);
+    s_wake_gesture_active.store(true, std::memory_order_relaxed);
+    ESP_LOGI(kTag, "POWER_OK wake gesture armed: %s", reason);
+}
+
 bool ConsumeWakeOnlyPowerButtonEvent(const button_service::ButtonEventInfo& event)
 {
     if (event.button != button_service::ButtonId::kPowerOk ||
-        !s_power_button_wake_only_active.load(std::memory_order_relaxed)) {
+        !s_wake_gesture_active.load(std::memory_order_relaxed)) {
         return false;
     }
 
-    ESP_LOGI(kTag, "Consumed wake-only POWER_OK event=%s",
-             ButtonEventName(event.event));
+    if (esp_timer_get_time() >
+        s_wake_gesture_deadline_us.load(std::memory_order_relaxed)) {
+        ESP_LOGW(kTag, "POWER_OK wake gesture timed out; releasing suppression");
+        s_wake_gesture_active.store(false, std::memory_order_relaxed);
+        return false;
+    }
 
+    // iot_button orders a gesture's events PRESS_UP -> SINGLE_CLICK / DOUBLE_CLICK, and
+    // LONG_PRESS_UP -> PRESS_UP. Suppression must therefore survive PRESS_UP, otherwise
+    // the wake tap's trailing SINGLE_CLICK leaks into the app.
     switch (event.event) {
-        case button_service::ButtonEvent::kPressUp:
-        case button_service::ButtonEvent::kSingleClick:
         case button_service::ButtonEvent::kDoubleClick:
-        case button_service::ButtonEvent::kLongPressUp:
-            s_power_button_wake_only_active.store(false, std::memory_order_relaxed);
+            // The one event that is not swallowed: a deliberate double click is the
+            // lock-screen toggle, so waking and unlocking stays a single gesture.
+            s_wake_gesture_active.store(false, std::memory_order_relaxed);
+            ESP_LOGI(kTag, "Wake gesture resolved as DOUBLE_CLICK; forwarding to app");
+            return false;
+        case button_service::ButtonEvent::kSingleClick:
+            s_wake_gesture_active.store(false, std::memory_order_relaxed);
+            break;
+        case button_service::ButtonEvent::kLongPressStart:
+            s_wake_gesture_long_press.store(true, std::memory_order_relaxed);
+            break;
+        case button_service::ButtonEvent::kPressUp:
+            // A long press produces no click event, so its trailing PRESS_UP is the
+            // gesture's terminal event. A tap's PRESS_UP is not: a click still follows.
+            if (s_wake_gesture_long_press.load(std::memory_order_relaxed)) {
+                s_wake_gesture_active.store(false, std::memory_order_relaxed);
+            }
             break;
         case button_service::ButtonEvent::kPressDown:
-        case button_service::ButtonEvent::kLongPressStart:
+        case button_service::ButtonEvent::kPressRepeat:
+        case button_service::ButtonEvent::kLongPressUp:
         default:
             break;
     }
 
+    ESP_LOGI(kTag, "Consumed wake-only POWER_OK event=%s",
+             ButtonEventName(event.event));
     return true;
 }
 
