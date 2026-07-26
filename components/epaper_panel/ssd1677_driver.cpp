@@ -12,10 +12,17 @@ namespace {
 
 constexpr const char* kTag = "Ssd1677";
 constexpr int kMaxPartialRefreshesBeforeFull = 20;
-constexpr uint8_t kDisplayUpdateCtrl1Differential[] = {0x00, 0x00};
-constexpr uint8_t kDisplayUpdateCtrl1Full[] = {0x40, 0x00};
+// Display Update Control 2 (0x22) sequences, matching the `followup` esp-epaper driver
+// that is proven on this panel: 0xF7 drives the mode-1 full waveform, 0xFF the mode-2
+// differential waveform used for partials.
+//
+// Display Update Control 1 (0x21) is deliberately never written. Its reset default is
+// "normal" for both RAM planes, which is what makes the panel compare 0x24 against 0x26
+// and move only the changed pixels. Writing it is also load-bearing in the wrong
+// direction here: InitPartial intentionally skips the hardware reset, so any value left
+// in 0x21 by a preceding full refresh would carry into the next partial.
 constexpr uint8_t kDisplayUpdateCtrl2Full = 0xF7;
-constexpr uint8_t kDisplayUpdateCtrl2Partial = 0xFC;
+constexpr uint8_t kDisplayUpdateCtrl2Partial = 0xFF;
 
 }  // namespace
 
@@ -150,10 +157,6 @@ esp_err_t EpaperPanel::DisplayFullBase()
 esp_err_t EpaperPanel::TurnOnDisplay()
 {
     const int64_t start_us = esp_timer_get_time();
-    ESP_RETURN_ON_ERROR(
-        SendCommandWithData(0x21, kDisplayUpdateCtrl1Full, sizeof(kDisplayUpdateCtrl1Full)),
-        kTag,
-        "display update control 1 command failed");
     ESP_RETURN_ON_ERROR(SendCommand(0x22), kTag, "display update control command failed");
     ESP_RETURN_ON_ERROR(SendData(kDisplayUpdateCtrl2Full), kTag, "display update control 2 full data failed");
     ESP_RETURN_ON_ERROR(SendCommand(0x20), kTag, "master activation command failed");
@@ -165,12 +168,6 @@ esp_err_t EpaperPanel::TurnOnDisplay()
 esp_err_t EpaperPanel::TurnOnDisplayPart()
 {
     const int64_t start_us = esp_timer_get_time();
-    ESP_RETURN_ON_ERROR(SendCommandWithData(
-                            0x21,
-                            kDisplayUpdateCtrl1Differential,
-                            sizeof(kDisplayUpdateCtrl1Differential)),
-                        kTag,
-                        "partial update control 1 command failed");
     ESP_RETURN_ON_ERROR(SendCommand(0x22), kTag, "partial update control command failed");
     ESP_RETURN_ON_ERROR(SendData(kDisplayUpdateCtrl2Partial), kTag, "partial update control 2 data failed");
     ESP_RETURN_ON_ERROR(SendCommand(0x20), kTag, "partial master activation command failed");
