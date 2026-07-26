@@ -11,24 +11,31 @@ namespace button_service {
 namespace {
 
 constexpr const char* kTag = "ButtonService";
+// Tap ceiling: a press shorter than this is a click, and two inside the window are a
+// double-click. Shared by every key.
 constexpr uint16_t kShortPressMs = 180;
-// Hold duration before BUTTON_LONG_PRESS_START fires. The power-button long-press starts
-// a recording, so this is effectively the hold-to-record latency. Kept comfortably above
-// kShortPressMs (180ms tap ceiling) so a normal tap / single-click can't accidentally
-// record; lowered from 500ms so the recording trigger feels snappier.
-constexpr uint16_t kLongPressMs = 300;
+// Per-key hold thresholds, matching the reference firmware's NavigationSwitch:
+//   - ACTION: 500ms, the hold-to-record latency. Well clear of the tap ceiling so a
+//     normal click can never start a recording by accident.
+//   - UP/DOWN: 350ms before hold-to-repeat scrolling kicks in.
+//   - FN: same as ACTION, so a deliberate hold is needed for its long-press action.
+constexpr uint16_t kActionLongPressMs = 500;
+constexpr uint16_t kNavigationLongPressMs = 350;
+constexpr uint16_t kFunctionLongPressMs = 500;
 
 struct ButtonContext {
     const char* label = nullptr;
-    ButtonId id = ButtonId::kPowerOk;
+    ButtonId id = ButtonId::kAction;
     gpio_num_t gpio = GPIO_NUM_NC;
+    uint16_t long_press_ms = 0;
     button_handle_t handle = nullptr;
 };
 
 ButtonContext s_buttons[] = {
-    {"POWER_OK", ButtonId::kPowerOk, WAVESHARE_POWER_BUTTON_PIN, nullptr},
-    {"UP", ButtonId::kUp, WAVESHARE_BUTTON_UP_PIN, nullptr},
-    {"DOWN", ButtonId::kDown, WAVESHARE_BUTTON_DOWN_PIN, nullptr},
+    {"ACTION", ButtonId::kAction, WAVESHARE_BUTTON_ACTION_PIN, kActionLongPressMs, nullptr},
+    {"UP", ButtonId::kUp, WAVESHARE_BUTTON_UP_PIN, kNavigationLongPressMs, nullptr},
+    {"FN", ButtonId::kFunction, WAVESHARE_BUTTON_FUNCTION_PIN, kFunctionLongPressMs, nullptr},
+    {"DOWN", ButtonId::kDown, WAVESHARE_BUTTON_DOWN_PIN, kNavigationLongPressMs, nullptr},
 };
 
 bool s_initialized = false;
@@ -137,7 +144,7 @@ esp_err_t CreateButton(ButtonContext* context)
     }
 
     button_config_t button_config = {};
-    button_config.long_press_time = kLongPressMs;
+    button_config.long_press_time = context->long_press_ms;
     button_config.short_press_time = kShortPressMs;
 
     button_gpio_config_t gpio_config = {};

@@ -7,12 +7,20 @@
 #include "driver/i2c_master.h"
 #include "driver/spi_master.h"
 
-// Waveshare has four momentary buttons (active-low to GND): BOOT (GPIO0, left as
-// the flash/boot strap), UP (GPIO4), FN (GPIO5, the OK/action button), and DOWN
-// (GPIO6). The app's three logical buttons map onto UP / FN / DOWN. FN doubles as
-// the light-sleep wake button (alongside the AXP2101 power-key IRQ).
-#define WAVESHARE_POWER_BUTTON_PIN       GPIO_NUM_5
+// Waveshare has four momentary buttons, all active-low to GND. The mapping below
+// mirrors the `followup` esp-epaper board target, which is the proven configuration
+// for this hardware:
+//
+//   ACTION (BOOT, GPIO0) -- record arm/start/stop, and primary activate. Also the
+//                           light-sleep wake button, alongside the AXP2101 IRQ.
+//                           GPIO0 is the boot/download strap, so it must read high
+//                           at reset; it is only ever driven low by a press.
+//   UP     (GPIO4)       -- navigate up, hold to repeat.
+//   FN     (GPIO5)       -- primary activate, double-click, long-press.
+//   DOWN   (GPIO6)       -- navigate down, hold to repeat.
+#define WAVESHARE_BUTTON_ACTION_PIN      GPIO_NUM_0
 #define WAVESHARE_BUTTON_UP_PIN          GPIO_NUM_4
+#define WAVESHARE_BUTTON_FUNCTION_PIN    GPIO_NUM_5
 #define WAVESHARE_BUTTON_DOWN_PIN        GPIO_NUM_6
 
 // Waveshare SD card: ESP32-S3 SDMMC controller, 4-bit, on the GPIO matrix.

@@ -639,7 +639,7 @@ ButtonResult HandleVibeCheckButtonEvent(const button_service::ButtonEventInfo& e
         return result;
     }
 
-    if (event.button != button_service::ButtonId::kPowerOk) {
+    if (!button_service::IsPrimaryButton(event.button)) {
         return result;
     }
 
@@ -767,7 +767,7 @@ ButtonResult HandleSummarizeButtonEvent(const button_service::ButtonEventInfo& e
         return result;
     }
 
-    if (event.button != button_service::ButtonId::kPowerOk) {
+    if (!button_service::IsPrimaryButton(event.button)) {
         return result;
     }
 
@@ -900,7 +900,7 @@ ButtonResult HandleNotesButtonEvent(const button_service::ButtonEventInfo& event
         return result;
     }
 
-    if (event.button != button_service::ButtonId::kPowerOk) {
+    if (!button_service::IsPrimaryButton(event.button)) {
         return result;
     }
 
@@ -1032,7 +1032,7 @@ ButtonResult HandleTodosButtonEvent(const button_service::ButtonEventInfo& event
         return result;
     }
 
-    if (event.button != button_service::ButtonId::kPowerOk) {
+    if (!button_service::IsPrimaryButton(event.button)) {
         return result;
     }
 
@@ -1165,7 +1165,7 @@ ButtonResult HandleFollowUpButtonEvent(const button_service::ButtonEventInfo& ev
         return result;
     }
 
-    if (event.button != button_service::ButtonId::kPowerOk) {
+    if (!button_service::IsPrimaryButton(event.button)) {
         return result;
     }
 
@@ -1232,7 +1232,7 @@ ButtonResult HandleOnboardingButtonEvent(const button_service::ButtonEventInfo& 
 
     // Consistent with every other page: UP/DOWN rove (handled upstream in input_focus_runtime),
     // POWER_OK activates the focused control (Prev/Next change the slide, Close dismisses).
-    if (event.button != button_service::ButtonId::kPowerOk) {
+    if (!button_service::IsPrimaryButton(event.button)) {
         return result;
     }
 
@@ -1368,7 +1368,7 @@ ButtonResult HandleDetailsButtonEvent(const button_service::ButtonEventInfo& eve
         return result;
     }
 
-    if (event.button != button_service::ButtonId::kPowerOk) {
+    if (!button_service::IsPrimaryButton(event.button)) {
         return result;
     }
 
@@ -1392,7 +1392,7 @@ ButtonResult HandleDetailsButtonEvent(const button_service::ButtonEventInfo& eve
 ButtonResult HandleSettingsButtonEvent(const button_service::ButtonEventInfo& event)
 {
     ButtonResult result = {};
-    if (event.button != button_service::ButtonId::kPowerOk) {
+    if (!button_service::IsPrimaryButton(event.button)) {
         return result;
     }
 
@@ -1419,7 +1419,7 @@ ButtonResult HandleWifiButtonEvent(const button_service::ButtonEventInfo& event)
 
     switch (event.event) {
         case button_service::ButtonEvent::kSingleClick:
-            if (event.button != button_service::ButtonId::kPowerOk) {
+            if (!button_service::IsPrimaryButton(event.button)) {
                 return result;
             }
             return ApplyWifiActivateResult(wifi_page_runtime::ActivateFocusedItem());
@@ -1429,7 +1429,7 @@ ButtonResult HandleWifiButtonEvent(const button_service::ButtonEventInfo& event)
                 return ApplyWifiSecondaryActivateResult(
                     wifi_page_runtime::SecondaryActivateFocusedItem());
             }
-            if (event.button != button_service::ButtonId::kPowerOk) {
+            if (!button_service::IsPrimaryButton(event.button)) {
                 return result;
             }
             result.handled = true;
@@ -1439,7 +1439,7 @@ ButtonResult HandleWifiButtonEvent(const button_service::ButtonEventInfo& event)
         case button_service::ButtonEvent::kPressUp:
         case button_service::ButtonEvent::kPressRepeat:
         case button_service::ButtonEvent::kLongPressUp:
-            if (event.button != button_service::ButtonId::kPowerOk) {
+            if (!button_service::IsPrimaryButton(event.button)) {
                 return result;
             }
             result.handled = true;
@@ -1454,7 +1454,7 @@ ButtonResult HandleWifiButtonEvent(const button_service::ButtonEventInfo& event)
 ButtonResult HandleTimeButtonEvent(const button_service::ButtonEventInfo& event)
 {
     ButtonResult result = {};
-    if (event.button != button_service::ButtonId::kPowerOk) {
+    if (!button_service::IsPrimaryButton(event.button)) {
         return result;
     }
 
@@ -1478,7 +1478,7 @@ ButtonResult HandleTimeButtonEvent(const button_service::ButtonEventInfo& event)
 ButtonResult HandleDashboardButtonEvent(const button_service::ButtonEventInfo& event)
 {
     ButtonResult result = {};
-    if (event.button != button_service::ButtonId::kPowerOk) {
+    if (!button_service::IsPrimaryButton(event.button)) {
         return result;
     }
 
@@ -1644,7 +1644,7 @@ ButtonResult HandleButtonEventForCurrentScreen(const button_service::ButtonEvent
     // than thread a per-page intent through every page's activation, handle it centrally: the shared
     // per-page footer handler only maps Home/Settings/Wifi/Time, so a focused Sticky button falls
     // through here on a POWER_OK single click.
-    if (!result.handled && event.button == button_service::ButtonId::kPowerOk &&
+    if (!result.handled && button_service::IsPrimaryButton(event.button) &&
         event.event == button_service::ButtonEvent::kSingleClick &&
         BuildFooterProjectionForScreen(screen).focused_item ==
             footer_runtime::FooterFocusItem::kSticky) {

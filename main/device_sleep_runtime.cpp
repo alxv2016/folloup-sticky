@@ -180,8 +180,8 @@ void LogLightSleepPins(const char* phase)
     ESP_LOGI(kTag,
              "Light-sleep %s pins: FN(GPIO%d)=%d PMIC_IRQ(GPIO%d)=%d",
              phase,
-             WAVESHARE_POWER_BUTTON_PIN,
-             gpio_get_level(WAVESHARE_POWER_BUTTON_PIN),
+             WAVESHARE_BUTTON_ACTION_PIN,
+             gpio_get_level(WAVESHARE_BUTTON_ACTION_PIN),
              WAVESHARE_PMIC_IRQ_PIN,
              gpio_get_level(WAVESHARE_PMIC_IRQ_PIN));
 }
@@ -190,7 +190,7 @@ esp_err_t ConfigurePowerButtonWakeInput(const char* context)
 {
     ESP_LOGI(kTag, "Light-sleep wake input config begin: %s", context);
     gpio_config_t power_button_config = {};
-    power_button_config.pin_bit_mask = 1ULL << WAVESHARE_POWER_BUTTON_PIN;
+    power_button_config.pin_bit_mask = 1ULL << WAVESHARE_BUTTON_ACTION_PIN;
     power_button_config.mode = GPIO_MODE_INPUT;
     power_button_config.pull_up_en = GPIO_PULLUP_ENABLE;
     power_button_config.pull_down_en = GPIO_PULLDOWN_DISABLE;
@@ -213,7 +213,7 @@ esp_err_t ConfigurePowerButtonWakeInput(const char* context)
 esp_err_t ArmLightSleepGpioWake()
 {
     ESP_RETURN_ON_ERROR(
-        gpio_wakeup_enable(WAVESHARE_POWER_BUTTON_PIN, GPIO_INTR_LOW_LEVEL), kTag,
+        gpio_wakeup_enable(WAVESHARE_BUTTON_ACTION_PIN, GPIO_INTR_LOW_LEVEL), kTag,
         "enable FN light-sleep wake failed");
     ESP_RETURN_ON_ERROR(
         gpio_wakeup_enable(WAVESHARE_PMIC_IRQ_PIN, GPIO_INTR_LOW_LEVEL), kTag,
@@ -221,14 +221,14 @@ esp_err_t ArmLightSleepGpioWake()
     ESP_RETURN_ON_ERROR(esp_sleep_enable_gpio_wakeup(), kTag,
                         "enable GPIO light-sleep wake source failed");
     ESP_LOGI(kTag, "Light-sleep GPIO wake armed: FN(GPIO%d) + PMIC_IRQ(GPIO%d), any-low",
-             WAVESHARE_POWER_BUTTON_PIN, WAVESHARE_PMIC_IRQ_PIN);
+             WAVESHARE_BUTTON_ACTION_PIN, WAVESHARE_PMIC_IRQ_PIN);
     return ESP_OK;
 }
 
 void DisarmLightSleepGpioWake()
 {
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_GPIO);
-    gpio_wakeup_disable(WAVESHARE_POWER_BUTTON_PIN);
+    gpio_wakeup_disable(WAVESHARE_BUTTON_ACTION_PIN);
     gpio_wakeup_disable(WAVESHARE_PMIC_IRQ_PIN);
 }
 
@@ -237,7 +237,7 @@ esp_err_t WaitForPowerButtonReleased()
     ESP_LOGI(kTag, "Light-sleep POWER_OK release wait begin");
     uint32_t stable_high_samples = 0;
     for (uint32_t sample = 0; sample < kPowerButtonReleaseMaxSamples; ++sample) {
-        const int level = gpio_get_level(WAVESHARE_POWER_BUTTON_PIN);
+        const int level = gpio_get_level(WAVESHARE_BUTTON_ACTION_PIN);
         if (level == 1) {
             ++stable_high_samples;
             if (stable_high_samples >= kPowerButtonReleaseStableSamples) {
@@ -366,7 +366,7 @@ esp_err_t EnterLightSleep()
 
     // FN and the AXP2101 IRQ are the GPIO wake sources; a low FN level on wake means the
     // button woke us, so its press/release is suppressed downstream.
-    const bool power_button_held = gpio_get_level(WAVESHARE_POWER_BUTTON_PIN) == 0;
+    const bool power_button_held = gpio_get_level(WAVESHARE_BUTTON_ACTION_PIN) == 0;
     const bool power_button_wake = power_button_held;
 
     // Commit the stage transition before buttons go live, so a wake press cannot race
@@ -713,7 +713,7 @@ void ArmPowerButtonWakeGesture(const char* reason)
 
 bool ConsumeWakeOnlyPowerButtonEvent(const button_service::ButtonEventInfo& event)
 {
-    if (event.button != button_service::ButtonId::kPowerOk ||
+    if (event.button != button_service::ButtonId::kAction ||
         !s_wake_gesture_active.load(std::memory_order_relaxed)) {
         return false;
     }

@@ -885,7 +885,7 @@ app_interaction::InputResult HandleButtonEvent(const button_service::ButtonEvent
         if (s_sticky_note_state.visible) {
             result.consumed = true;
             const int focus_index = s_sticky_note_focus.index();
-            if (event.button == button_service::ButtonId::kPowerOk &&
+            if (button_service::IsPrimaryButton(event.button) &&
                 event.event == button_service::ButtonEvent::kSingleClick) {
                 play_click = true;
                 if (StickyFocusIsBody(focus_index)) {
@@ -933,7 +933,7 @@ app_interaction::InputResult HandleButtonEvent(const button_service::ButtonEvent
             result.consumed = true;
             switch (event.event) {
                 case button_service::ButtonEvent::kSingleClick:
-                    if (event.button == button_service::ButtonId::kPowerOk &&
+                    if (button_service::IsPrimaryButton(event.button) &&
                         epaper_ui::CardModalActionCount(s_card_modal_state) > 0) {
                         const int index = s_card_modal_state.selected_action_index;
                         switch (s_card_modal_purpose) {
@@ -984,7 +984,7 @@ app_interaction::InputResult HandleButtonEvent(const button_service::ButtonEvent
             keyboard_context = s_keyboard_event_context;
             switch (event.event) {
                 case button_service::ButtonEvent::kSingleClick:
-                    if (event.button == button_service::ButtonId::kPowerOk) {
+                    if (button_service::IsPrimaryButton(event.button)) {
                         const epaper_ui::KeyboardActionResult action =
                             epaper_ui::KeyboardController::ActivateFocusedKey(s_keyboard_state, false);
                         keyboard_callback_state = s_keyboard_state;
@@ -1011,7 +1011,7 @@ app_interaction::InputResult HandleButtonEvent(const button_service::ButtonEvent
             result.consumed = true;
             switch (event.event) {
                 case button_service::ButtonEvent::kSingleClick:
-                    if (event.button == button_service::ButtonId::kPowerOk) {
+                    if (button_service::IsPrimaryButton(event.button)) {
                         result.select_modal_submitted = true;
                         result.select_modal_selected_index = CurrentSelectModalIndexLocked();
                         s_select_modal_state = {};

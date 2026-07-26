@@ -70,7 +70,6 @@ constexpr TickType_t kPowerButtonReleaseSettleDelay = pdMS_TO_TICKS(500);
 TaskHandle_t s_shutdown_task = nullptr;
 std::atomic<bool> s_startup_complete = false;
 std::atomic<bool> s_gemini_ready = false;
-std::atomic<bool> s_up_button_pressed = false;
 std::mutex s_recording_session_feedback_mutex;
 recording_session_service::Phase s_last_recording_session_feedback_phase =
     recording_session_service::Phase::kIdle;
@@ -726,8 +725,10 @@ void ConfirmPendingOtaImage()
 const char* ButtonIdName(button_service::ButtonId button)
 {
     switch (button) {
-        case button_service::ButtonId::kPowerOk:
-            return "POWER_OK";
+        case button_service::ButtonId::kAction:
+            return "ACTION";
+        case button_service::ButtonId::kFunction:
+            return "FN";
         case button_service::ButtonId::kUp:
             return "UP";
         case button_service::ButtonId::kDown:
@@ -1193,14 +1194,6 @@ void HandleDispatchedButtonEvent(const button_service::ButtonEventInfo& event)
              ButtonIdName(event.button), ButtonEventName(event.event),
              static_cast<unsigned long>(event.pressed_ms));
 
-    if (event.button == button_service::ButtonId::kUp) {
-        if (event.event == button_service::ButtonEvent::kPressDown) {
-            s_up_button_pressed.store(true, std::memory_order_relaxed);
-        } else if (event.event == button_service::ButtonEvent::kPressUp) {
-            s_up_button_pressed.store(false, std::memory_order_relaxed);
-        }
-    }
-
     const app_interaction::InputResult overlay_result =
         input_focus_runtime::HandleButtonEvent(event);
     PlayInteractionFeedback(overlay_result);
@@ -1250,20 +1243,36 @@ void HandleDispatchedButtonEvent(const button_service::ButtonEventInfo& event)
         return;
     }
 
-    if (event.button == button_service::ButtonId::kPowerOk &&
-        event.event == button_service::ButtonEvent::kPressDown &&
-        s_up_button_pressed.load(std::memory_order_relaxed)) {
+    // No UP+power shutdown chord on this board. That gesture existed for the Sticky's
+    // discrete power latch; here the AXP2101 owns power-off through its own key, so a
+    // chord would only duplicate it and can misfire during navigation.
+
+    const device_sleep_service::Stage stage_before =
+        device_sleep_service::GetSnapshot().runtime.stage;
+    device_sleep_runtime::NotifyUserActivity();
+    if (event.button == button_service::ButtonId::kAction &&
+        stage_before == device_sleep_service::Stage::kDisplaySleeping) {
+        device_sleep_runtime::ArmPowerButtonWakeGesture("display-sleep wake");
+        return;
+    }
+
+    // FN long-press opens the shutdown confirmation. This is the only entry point to
+    // the software shutdown path (clean RTC-interrupt clear, then AXP2101 PowerOff);
+    // the AXP2101's own power key still hard-cuts the rails without it. Handled here
+    // rather than in the switch below because per-screen page input consumes primary
+    // long-press without acting on it.
+    if (event.button == button_service::ButtonId::kFunction &&
+        event.event == button_service::ButtonEvent::kLongPressStart) {
         if constexpr (!kEnablePowerButtonShutdown) {
-            ESP_LOGW(kTag, "Shutdown chord detected but shutdown is disabled");
+            ESP_LOGW(kTag, "FN long-press shutdown requested but shutdown is disabled");
             return;
         }
-
         if (s_shutdown_task == nullptr) {
-            ESP_LOGW(kTag, "Shutdown chord detected but shutdown task unavailable");
+            ESP_LOGW(kTag, "FN long-press shutdown requested but shutdown task unavailable");
             return;
         }
 
-        ESP_LOGW(kTag, "Shutdown chord detected: UP held while POWER_OK pressed");
+        ESP_LOGI(kTag, "FN long-press: showing shutdown confirmation");
         const esp_err_t err = overlay_runtime::ShowShutdownModal();
         FlushOverlayFeedback();
         if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
@@ -1272,20 +1281,11 @@ void HandleDispatchedButtonEvent(const button_service::ButtonEventInfo& event)
         return;
     }
 
-    const device_sleep_service::Stage stage_before =
-        device_sleep_service::GetSnapshot().runtime.stage;
-    device_sleep_runtime::NotifyUserActivity();
-    if (event.button == button_service::ButtonId::kPowerOk &&
-        stage_before == device_sleep_service::Stage::kDisplaySleeping) {
-        device_sleep_runtime::ArmPowerButtonWakeGesture("display-sleep wake");
-        return;
-    }
-
-    // The POWER_OK press/hold gesture (arm on press-down, start on long-press,
+    // The ACTION press/hold gesture (arm on press-down, start on long-press,
     // stop/cancel on release) is a global recording control, so it must be
     // evaluated before per-screen page input. Taps (single/double click) fall
     // through the switch's default below and are routed to the page handlers.
-    if (event.button == button_service::ButtonId::kPowerOk) {
+    if (event.button == button_service::ButtonId::kAction) {
         const recording_session_service::Context recording_context =
             BuildRecordingSessionContext();
         bool handled = false;
@@ -1332,11 +1332,11 @@ void HandleDispatchedButtonEvent(const button_service::ButtonEventInfo& event)
             // lock-screen refresh, making the keys feel live behind the lock.
             break;
         case button_service::ButtonEvent::kDoubleClick:
-            // POWER_OK double-click toggles the lock screen. DOWN double-click is reserved as
+            // FN double-click toggles the lock screen. DOWN double-click is reserved as
             // the app-wide "exit an entered UI" gesture and is handled by the per-screen page
             // input (WiFi network list, Vibe Check card, ...); it is intentionally a no-op at
             // this level. Any other button just plays the double-click cue.
-            if (event.button == button_service::ButtonId::kPowerOk) {
+            if (event.button == button_service::ButtonId::kFunction) {
                 const bool was_active = lock_screen_runtime::IsActive();
                 const esp_err_t err = lock_screen_runtime::Toggle();
                 if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
@@ -1351,7 +1351,8 @@ void HandleDispatchedButtonEvent(const button_service::ButtonEventInfo& event)
             }
             break;
         case button_service::ButtonEvent::kLongPressStart:
-            if (event.button != button_service::ButtonId::kPowerOk) {
+            // ACTION's long press starts a recording and plays its own cue.
+            if (event.button != button_service::ButtonId::kAction) {
                 PlayFeedback(feedback_service::FeedbackEvent::kButtonLongPress);
             }
             break;
