@@ -218,7 +218,12 @@ esp_err_t EpaperPanel::ReadBusy()
             partial_refresh_count_ = 0;
             return ESP_ERR_TIMEOUT;
         }
-        vTaskDelay(pdMS_TO_TICKS(kBusyPollDelayMs));
+        // At least one tick. pdMS_TO_TICKS(5) is 0 at CONFIG_FREERTOS_HZ=100, and
+        // vTaskDelay(0) does not block -- it yields only to equal-or-higher priority, so
+        // the idle task (priority 0) never ran while this task (priority 3) polled. A
+        // panel busy for a couple of seconds, or the 10s timeout path, then starved IDLE
+        // on this core and tripped the task watchdog.
+        vTaskDelay(std::max<TickType_t>(1, pdMS_TO_TICKS(kBusyPollDelayMs)));
     }
     metrics_.panel_busy_us += esp_timer_get_time() - start_us;
     return ESP_OK;
