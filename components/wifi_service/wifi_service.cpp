@@ -1324,16 +1324,23 @@ void StartNetworkScanNow()
 
     InitializeStack();
 
-    // Break out of any in-flight association first. esp_wifi_scan_start() is rejected with
-    // ESP_ERR_WIFI_STATE while the station is connecting, which is exactly the state an
-    // out-of-range device with saved credentials sits in permanently.
-    esp_err_t err = esp_wifi_disconnect();
-    if (err != ESP_OK && err != ESP_ERR_WIFI_NOT_INIT && err != ESP_ERR_WIFI_NOT_STARTED &&
-        err != ESP_ERR_WIFI_CONN) {
-        ESP_LOGW(kTag, "esp_wifi_disconnect before scan failed: %s", esp_err_to_name(err));
+    const UiState state = GetUiState();
+
+    // Break out of an in-flight association, but only when there is not an established
+    // one. esp_wifi_scan_start() is rejected with ESP_ERR_WIFI_STATE while the station is
+    // *connecting* -- the state an out-of-range device with saved credentials sits in
+    // permanently -- but scanning while *connected* is fine. Disconnecting regardless
+    // dropped a live link every time the Wi-Fi page was opened, since entry always starts
+    // a scan.
+    esp_err_t err = ESP_OK;
+    if (!state.connected) {
+        err = esp_wifi_disconnect();
+        if (err != ESP_OK && err != ESP_ERR_WIFI_NOT_INIT && err != ESP_ERR_WIFI_NOT_STARTED &&
+            err != ESP_ERR_WIFI_CONN) {
+            ESP_LOGW(kTag, "esp_wifi_disconnect before scan failed: %s", esp_err_to_name(err));
+        }
     }
 
-    const UiState state = GetUiState();
     const wifi_mode_t desired_mode = state.access_point_mode ? WIFI_MODE_APSTA : WIFI_MODE_STA;
     wifi_mode_t current_mode = WIFI_MODE_NULL;
     err = esp_wifi_get_mode(&current_mode);
@@ -1755,6 +1762,7 @@ bool DisconnectFromNetwork(bool clear_saved_credentials)
 bool StartNetworkScan()
 {
     InitializeStack();
+    bool preempt_connection = false;
     {
         std::lock_guard<std::mutex> lock(s_state_mutex);
         if (!s_wifi_enabled) {
@@ -1765,22 +1773,27 @@ bool StartNetworkScan()
             return true;
         }
 
-        // A manual scan outranks the automatic reconnect. Asking for a network list is
-        // the user saying they are about to pick one by hand, so the loop stands down
-        // instead of racing the scan -- esp_wifi_connect() aborts a running scan without
-        // ever delivering SCAN_DONE. It stays down until the user connects or toggles
-        // Wi-Fi; a successful association re-arms it.
-        s_reconnect_suspended = true;
-        s_reconnecting = false;
+        // Preempt the reconnect loop only when we are NOT associated. A scan runs fine
+        // against a live connection -- esp_wifi_scan_start is rejected for "connecting",
+        // not "connected" -- and the Wi-Fi page starts a scan on every entry, so standing
+        // the loop down unconditionally tore down a perfectly good link just for opening
+        // the page. When we are mid-connect the loop does have to stand down, because
+        // esp_wifi_connect aborts a running scan without ever delivering SCAN_DONE. It
+        // stays down until the user connects or toggles Wi-Fi; associating re-arms it.
+        preempt_connection = !s_connected;
+        if (preempt_connection) {
+            s_reconnect_suspended = true;
+            s_reconnecting = false;
+        }
         s_scan_snapshot.state = ScanState::kRunning;
         s_scan_snapshot.last_error = ESP_OK;
         s_scan_snapshot.networks.clear();
     }
 
-    // Drop the pending connect deadline; the association it was timing is about to be
-    // torn down by the scan.
-    CheckOrAbort(esp_timer_stop(s_connect_timer), "esp_timer_stop");
-    {
+    // Only drop the pending connect deadline when the scan is going to tear the
+    // association down; an established link keeps its timer state untouched.
+    if (preempt_connection) {
+        CheckOrAbort(esp_timer_stop(s_connect_timer), "esp_timer_stop");
         std::lock_guard<std::mutex> lock(s_state_mutex);
         s_connect_timer_active = false;
     }
