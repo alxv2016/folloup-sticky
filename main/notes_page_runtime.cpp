@@ -439,14 +439,17 @@ bool HandleItemActionSelection(int selected_index)
             }
             break;
         }
+        // No explicit SyncFromArchive here (or below): the archive mutators notify
+        // subscribers on success, and app_shell's archive handler re-syncs whichever page
+        // is on screen -- which is this one, since the action modal opened over it. Syncing
+        // again would repeat a full ListRecordings (every entry plus every transcript file,
+        // off the SPI bus the panel shares) and repaint identical data twice.
         case ItemAction::kTurnToTask:
             (void)recording_archive_service::UpdateRecordingTag(
                 entry.recording_id, recording_archive_service::RecordingTag::kTask);
-            (void)SyncFromArchive(true);
             break;
         case ItemAction::kDelete:
             (void)recording_archive_service::DeleteRecording(entry.recording_id);
-            (void)SyncFromArchive(true);
             break;
         case ItemAction::kClose:
         default:
