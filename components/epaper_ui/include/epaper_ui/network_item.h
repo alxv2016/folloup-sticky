@@ -20,6 +20,8 @@ struct NetworkItemState {
     bool current_network = false;
     bool private_network = false;
     NetworkSignalStrength signal_strength = NetworkSignalStrength::kStrong;
+
+    bool operator==(const NetworkItemState& other) const = default;
 };
 
 struct NetworkItemStyle {

@@ -22,6 +22,8 @@ constexpr const char* kTag = "WifiPageRuntime";
 std::mutex s_mutex;
 WifiPageCoordinator s_coordinator = {};
 int32_t s_interaction_generation = 1;
+// Last state handed to the display, so an event that changes nothing renders nothing.
+epaper_ui::WifiPageState s_last_rendered_state = {};
 
 void AdvanceInteractionGenerationLocked()
 {
@@ -333,24 +335,31 @@ void ResetFocus()
 
 esp_err_t SyncFromService(bool request_refresh_if_active)
 {
+    epaper_ui::WifiPageState next = {};
     {
         std::lock_guard<std::mutex> lock(s_mutex);
         s_coordinator.RefreshFromService(wifi_service::GetUiState(), wifi_service::GetScanSnapshot());
+        next = BuildStateLocked();
     }
 
-    // kFull, not kPartial. This page is the only one driven by a burst of async radio
-    // events right after entry: entering it starts a scan, and scanning -> complete ->
-    // connect each fire a service event, so several whole-screen updates land within
-    // seconds. Two things go wrong when those are differential. The scan-complete redraw
-    // swaps an empty list for a populated one -- a large-area change, which the short
-    // partial waveform does not drive hard enough to reach the rails, so it ghosts. And
-    // every pixel that did not change (header, labels, footer) gets no drive at all across
-    // the whole burst, so it fades. A full refresh re-drives every pixel with the mode-1
-    // waveform, which is the only one that reaches full contrast on this panel -- the fast
-    // waveform flashes but settles washed out, so it is not usable here.
+    // Only drive the panel when what we would render actually differs.
+    //
+    // Entering this page starts a scan, and every wifi_service event that follows lands
+    // here. The first of them (kScanning) carries no new content at all: ShowWifiScreen
+    // already synced this page and the screen transition renders it. Refreshing anyway
+    // meant page entry drove the panel twice -- and because the transition publishes the
+    // current screen before its own multi-second drive, that extra command paints the Wi-Fi
+    // UI, so it showed up as a stray refresh wrapped around the real one. No other page
+    // does this because no other page's Show*Screen starts a service that emits events.
+    const bool changed = !(next == s_last_rendered_state);
+    s_last_rendered_state = next;
+    if (!changed) {
+        return ESP_OK;
+    }
+
     const esp_err_t err =
         request_refresh_if_active
-            ? UpdateDisplayStateAndRequestRefresh(display_service::RefreshMode::kFull)
+            ? UpdateDisplayStateAndRequestRefresh(display_service::RefreshMode::kPartial)
             : UpdateDisplayState();
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(kTag, "WiFi page sync failed: %s", esp_err_to_name(err));
