@@ -508,6 +508,8 @@ const char* RefreshModeName(RefreshMode refresh_mode)
     switch (refresh_mode) {
         case RefreshMode::kPartial:
             return "partial";
+        case RefreshMode::kFast:
+            return "fast";
         case RefreshMode::kFull:
             return "full";
         default:
@@ -540,9 +542,22 @@ const char* OverlayRefreshPolicyName(OverlayRefreshPolicy policy)
     }
 }
 
-esp_err_t RefreshCurrentScreenLocked(bool full_refresh);
+esp_err_t RefreshCurrentScreenLocked(RefreshMode refresh_mode);
 
-esp_err_t ApplyHomeScreen(bool full_refresh)
+esp_err_t RefreshForMode(EpaperPanel& panel, RefreshMode refresh_mode)
+{
+    switch (refresh_mode) {
+        case RefreshMode::kFull:
+            return panel.RefreshFullBase();
+        case RefreshMode::kFast:
+            return panel.RefreshFastBase();
+        case RefreshMode::kPartial:
+        default:
+            return panel.RefreshPartialFullScreen();
+    }
+}
+
+esp_err_t ApplyHomeScreen(RefreshMode refresh_mode)
 {
     const RenderSnapshot& snapshot = CaptureRenderSnapshot();
     EpaperPanel& panel = Panel();
@@ -551,8 +566,7 @@ esp_err_t ApplyHomeScreen(bool full_refresh)
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
     RefreshBusyGuard refresh_busy;
-    const esp_err_t err = full_refresh ? panel.RefreshFullBase()
-                                       : panel.RefreshPartialFullScreen();
+    const esp_err_t err = RefreshForMode(panel, refresh_mode);
     if (err != ESP_OK) {
         return err;
     }
@@ -562,7 +576,7 @@ esp_err_t ApplyHomeScreen(bool full_refresh)
     return ESP_OK;
 }
 
-esp_err_t ApplyLockScreen(bool full_refresh)
+esp_err_t ApplyLockScreen(RefreshMode refresh_mode)
 {
     const RenderSnapshot& snapshot = CaptureRenderSnapshot();
     EpaperPanel& panel = Panel();
@@ -571,8 +585,7 @@ esp_err_t ApplyLockScreen(bool full_refresh)
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
     RefreshBusyGuard refresh_busy;
-    const esp_err_t err = full_refresh ? panel.RefreshFullBase()
-                                       : panel.RefreshPartialFullScreen();
+    const esp_err_t err = RefreshForMode(panel, refresh_mode);
     if (err != ESP_OK) {
         return err;
     }
@@ -582,7 +595,7 @@ esp_err_t ApplyLockScreen(bool full_refresh)
     return ESP_OK;
 }
 
-esp_err_t ApplySettings(bool full_refresh)
+esp_err_t ApplySettings(RefreshMode refresh_mode)
 {
     const RenderSnapshot& snapshot = CaptureRenderSnapshot();
     EpaperPanel& panel = Panel();
@@ -591,8 +604,7 @@ esp_err_t ApplySettings(bool full_refresh)
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
     RefreshBusyGuard refresh_busy;
-    const esp_err_t err = full_refresh ? panel.RefreshFullBase()
-                                       : panel.RefreshPartialFullScreen();
+    const esp_err_t err = RefreshForMode(panel, refresh_mode);
     if (err != ESP_OK) {
         return err;
     }
@@ -602,7 +614,7 @@ esp_err_t ApplySettings(bool full_refresh)
     return ESP_OK;
 }
 
-esp_err_t ApplyWifi(bool full_refresh)
+esp_err_t ApplyWifi(RefreshMode refresh_mode)
 {
     const RenderSnapshot& snapshot = CaptureRenderSnapshot();
     EpaperPanel& panel = Panel();
@@ -611,8 +623,7 @@ esp_err_t ApplyWifi(bool full_refresh)
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
     RefreshBusyGuard refresh_busy;
-    const esp_err_t err = full_refresh ? panel.RefreshFullBase()
-                                       : panel.RefreshPartialFullScreen();
+    const esp_err_t err = RefreshForMode(panel, refresh_mode);
     if (err != ESP_OK) {
         return err;
     }
@@ -622,7 +633,7 @@ esp_err_t ApplyWifi(bool full_refresh)
     return ESP_OK;
 }
 
-esp_err_t ApplyTime(bool full_refresh)
+esp_err_t ApplyTime(RefreshMode refresh_mode)
 {
     const RenderSnapshot& snapshot = CaptureRenderSnapshot();
     EpaperPanel& panel = Panel();
@@ -631,8 +642,7 @@ esp_err_t ApplyTime(bool full_refresh)
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
     RefreshBusyGuard refresh_busy;
-    const esp_err_t err = full_refresh ? panel.RefreshFullBase()
-                                       : panel.RefreshPartialFullScreen();
+    const esp_err_t err = RefreshForMode(panel, refresh_mode);
     if (err != ESP_OK) {
         return err;
     }
@@ -642,7 +652,7 @@ esp_err_t ApplyTime(bool full_refresh)
     return ESP_OK;
 }
 
-esp_err_t ApplyVibeCheck(bool full_refresh)
+esp_err_t ApplyVibeCheck(RefreshMode refresh_mode)
 {
     const RenderSnapshot& snapshot = CaptureRenderSnapshot();
     EpaperPanel& panel = Panel();
@@ -651,8 +661,7 @@ esp_err_t ApplyVibeCheck(bool full_refresh)
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
     RefreshBusyGuard refresh_busy;
-    const esp_err_t err = full_refresh ? panel.RefreshFullBase()
-                                       : panel.RefreshPartialFullScreen();
+    const esp_err_t err = RefreshForMode(panel, refresh_mode);
     if (err != ESP_OK) {
         return err;
     }
@@ -662,7 +671,7 @@ esp_err_t ApplyVibeCheck(bool full_refresh)
     return ESP_OK;
 }
 
-esp_err_t ApplySummarize(bool full_refresh)
+esp_err_t ApplySummarize(RefreshMode refresh_mode)
 {
     const RenderSnapshot& snapshot = CaptureRenderSnapshot();
     EpaperPanel& panel = Panel();
@@ -671,8 +680,7 @@ esp_err_t ApplySummarize(bool full_refresh)
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
     RefreshBusyGuard refresh_busy;
-    const esp_err_t err = full_refresh ? panel.RefreshFullBase()
-                                       : panel.RefreshPartialFullScreen();
+    const esp_err_t err = RefreshForMode(panel, refresh_mode);
     if (err != ESP_OK) {
         return err;
     }
@@ -682,7 +690,7 @@ esp_err_t ApplySummarize(bool full_refresh)
     return ESP_OK;
 }
 
-esp_err_t ApplyNotes(bool full_refresh)
+esp_err_t ApplyNotes(RefreshMode refresh_mode)
 {
     const RenderSnapshot& snapshot = CaptureRenderSnapshot();
     EpaperPanel& panel = Panel();
@@ -691,8 +699,7 @@ esp_err_t ApplyNotes(bool full_refresh)
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
     RefreshBusyGuard refresh_busy;
-    const esp_err_t err = full_refresh ? panel.RefreshFullBase()
-                                       : panel.RefreshPartialFullScreen();
+    const esp_err_t err = RefreshForMode(panel, refresh_mode);
     if (err != ESP_OK) {
         return err;
     }
@@ -702,7 +709,7 @@ esp_err_t ApplyNotes(bool full_refresh)
     return ESP_OK;
 }
 
-esp_err_t ApplyTodos(bool full_refresh)
+esp_err_t ApplyTodos(RefreshMode refresh_mode)
 {
     const RenderSnapshot& snapshot = CaptureRenderSnapshot();
     EpaperPanel& panel = Panel();
@@ -711,8 +718,7 @@ esp_err_t ApplyTodos(bool full_refresh)
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
     RefreshBusyGuard refresh_busy;
-    const esp_err_t err = full_refresh ? panel.RefreshFullBase()
-                                       : panel.RefreshPartialFullScreen();
+    const esp_err_t err = RefreshForMode(panel, refresh_mode);
     if (err != ESP_OK) {
         return err;
     }
@@ -722,7 +728,7 @@ esp_err_t ApplyTodos(bool full_refresh)
     return ESP_OK;
 }
 
-esp_err_t ApplyFollowUp(bool full_refresh)
+esp_err_t ApplyFollowUp(RefreshMode refresh_mode)
 {
     const RenderSnapshot& snapshot = CaptureRenderSnapshot();
     EpaperPanel& panel = Panel();
@@ -731,8 +737,7 @@ esp_err_t ApplyFollowUp(bool full_refresh)
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
     RefreshBusyGuard refresh_busy;
-    const esp_err_t err = full_refresh ? panel.RefreshFullBase()
-                                       : panel.RefreshPartialFullScreen();
+    const esp_err_t err = RefreshForMode(panel, refresh_mode);
     if (err != ESP_OK) {
         return err;
     }
@@ -742,7 +747,7 @@ esp_err_t ApplyFollowUp(bool full_refresh)
     return ESP_OK;
 }
 
-esp_err_t ApplyOnboarding(bool full_refresh)
+esp_err_t ApplyOnboarding(RefreshMode refresh_mode)
 {
     const RenderSnapshot& snapshot = CaptureRenderSnapshot();
     EpaperPanel& panel = Panel();
@@ -751,8 +756,7 @@ esp_err_t ApplyOnboarding(bool full_refresh)
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
     RefreshBusyGuard refresh_busy;
-    const esp_err_t err = full_refresh ? panel.RefreshFullBase()
-                                       : panel.RefreshPartialFullScreen();
+    const esp_err_t err = RefreshForMode(panel, refresh_mode);
     if (err != ESP_OK) {
         return err;
     }
@@ -762,7 +766,7 @@ esp_err_t ApplyOnboarding(bool full_refresh)
     return ESP_OK;
 }
 
-esp_err_t ApplyDetails(bool full_refresh)
+esp_err_t ApplyDetails(RefreshMode refresh_mode)
 {
     const RenderSnapshot& snapshot = CaptureRenderSnapshot();
     EpaperPanel& panel = Panel();
@@ -771,8 +775,7 @@ esp_err_t ApplyDetails(bool full_refresh)
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
     RefreshBusyGuard refresh_busy;
-    const esp_err_t err = full_refresh ? panel.RefreshFullBase()
-                                       : panel.RefreshPartialFullScreen();
+    const esp_err_t err = RefreshForMode(panel, refresh_mode);
     if (err != ESP_OK) {
         return err;
     }
@@ -803,7 +806,7 @@ esp_err_t EnqueueDisplayCommand(const DisplayCommand& incoming)
                        OverlayRefreshPolicy::kRebuildUnderlayFull;
             case DisplayCommandType::kRefreshCurrent:
             case DisplayCommandType::kSetScreen:
-                return command.refresh_request.refresh_mode == RefreshMode::kFull;
+                return command.refresh_request.refresh_mode != RefreshMode::kPartial;
             default:
                 return false;
         }
@@ -878,7 +881,7 @@ esp_err_t RefreshCurrentScreenRegionLocked()
     // glass shadow, so a partial refresh can never strand a changed pixel.
     const RenderSnapshot& snapshot = CaptureRenderSnapshot();
     if (HasVisibleOverlay(snapshot)) {
-        return RefreshCurrentScreenLocked(false);
+        return RefreshCurrentScreenLocked(RefreshMode::kPartial);
     }
 
     EpaperPanel& panel = Panel();
@@ -952,35 +955,35 @@ esp_err_t ApplyStartupSplash()
     return ESP_OK;
 }
 
-esp_err_t RefreshCurrentScreenLocked(bool full_refresh)
+esp_err_t RefreshCurrentScreenLocked(RefreshMode refresh_mode)
 {
     switch (s_current_screen.load(std::memory_order_relaxed)) {
         case ScreenId::kHome:
-            return ApplyHomeScreen(full_refresh);
+            return ApplyHomeScreen(refresh_mode);
         case ScreenId::kSettings:
-            return ApplySettings(full_refresh);
+            return ApplySettings(refresh_mode);
         case ScreenId::kWifi:
-            return ApplyWifi(full_refresh);
+            return ApplyWifi(refresh_mode);
         case ScreenId::kTime:
-            return ApplyTime(full_refresh);
+            return ApplyTime(refresh_mode);
         case ScreenId::kVibeCheck:
-            return ApplyVibeCheck(full_refresh);
+            return ApplyVibeCheck(refresh_mode);
         case ScreenId::kSummarize:
-            return ApplySummarize(full_refresh);
+            return ApplySummarize(refresh_mode);
         case ScreenId::kNotes:
-            return ApplyNotes(full_refresh);
+            return ApplyNotes(refresh_mode);
         case ScreenId::kTodos:
-            return ApplyTodos(full_refresh);
+            return ApplyTodos(refresh_mode);
         case ScreenId::kFollowUp:
-            return ApplyFollowUp(full_refresh);
+            return ApplyFollowUp(refresh_mode);
         case ScreenId::kOnboarding:
-            return ApplyOnboarding(full_refresh);
+            return ApplyOnboarding(refresh_mode);
         case ScreenId::kDetails:
-            return ApplyDetails(full_refresh);
+            return ApplyDetails(refresh_mode);
         case ScreenId::kLockScreen:
-            return ApplyLockScreen(full_refresh);
+            return ApplyLockScreen(refresh_mode);
         default:
-            return ApplyHomeScreen(full_refresh);
+            return ApplyHomeScreen(refresh_mode);
     }
 }
 
@@ -988,13 +991,15 @@ esp_err_t RefreshOverlayStateLocked(OverlayRefreshPolicy policy)
 {
     if (policy == OverlayRefreshPolicy::kRebuildUnderlay ||
         policy == OverlayRefreshPolicy::kRebuildUnderlayFull || !s_underlay_snapshot_valid) {
-        const bool full_refresh = policy == OverlayRefreshPolicy::kRebuildUnderlayFull;
+        const RefreshMode refresh_mode = policy == OverlayRefreshPolicy::kRebuildUnderlayFull
+                                             ? RefreshMode::kFull
+                                             : RefreshMode::kPartial;
         ESP_LOGI(kTag,
                  "Overlay refresh path: policy=%s snapshot_valid=%d full=%d",
                  OverlayRefreshPolicyName(policy),
                  s_underlay_snapshot_valid ? 1 : 0,
-                 full_refresh ? 1 : 0);
-        return RefreshCurrentScreenLocked(full_refresh);
+                 refresh_mode == RefreshMode::kFull ? 1 : 0);
+        return RefreshCurrentScreenLocked(refresh_mode);
     }
 
     EpaperPanel& panel = Panel();
@@ -1055,29 +1060,29 @@ void DisplayTask(void*)
         esp_err_t err = ESP_OK;
         if (command.type == DisplayCommandType::kSetScreen) {
             if (command.screen == ScreenId::kLockScreen) {
-                err = ApplyLockScreen(command.refresh_request.refresh_mode == RefreshMode::kFull);
+                err = ApplyLockScreen(command.refresh_request.refresh_mode);
             } else if (command.screen == ScreenId::kWifi) {
-                err = ApplyWifi(command.refresh_request.refresh_mode == RefreshMode::kFull);
+                err = ApplyWifi(command.refresh_request.refresh_mode);
             } else if (command.screen == ScreenId::kSettings) {
-                err = ApplySettings(command.refresh_request.refresh_mode == RefreshMode::kFull);
+                err = ApplySettings(command.refresh_request.refresh_mode);
             } else if (command.screen == ScreenId::kTime) {
-                err = ApplyTime(command.refresh_request.refresh_mode == RefreshMode::kFull);
+                err = ApplyTime(command.refresh_request.refresh_mode);
             } else if (command.screen == ScreenId::kVibeCheck) {
-                err = ApplyVibeCheck(command.refresh_request.refresh_mode == RefreshMode::kFull);
+                err = ApplyVibeCheck(command.refresh_request.refresh_mode);
             } else if (command.screen == ScreenId::kSummarize) {
-                err = ApplySummarize(command.refresh_request.refresh_mode == RefreshMode::kFull);
+                err = ApplySummarize(command.refresh_request.refresh_mode);
             } else if (command.screen == ScreenId::kNotes) {
-                err = ApplyNotes(command.refresh_request.refresh_mode == RefreshMode::kFull);
+                err = ApplyNotes(command.refresh_request.refresh_mode);
             } else if (command.screen == ScreenId::kTodos) {
-                err = ApplyTodos(command.refresh_request.refresh_mode == RefreshMode::kFull);
+                err = ApplyTodos(command.refresh_request.refresh_mode);
             } else if (command.screen == ScreenId::kFollowUp) {
-                err = ApplyFollowUp(command.refresh_request.refresh_mode == RefreshMode::kFull);
+                err = ApplyFollowUp(command.refresh_request.refresh_mode);
             } else if (command.screen == ScreenId::kOnboarding) {
-                err = ApplyOnboarding(command.refresh_request.refresh_mode == RefreshMode::kFull);
+                err = ApplyOnboarding(command.refresh_request.refresh_mode);
             } else if (command.screen == ScreenId::kDetails) {
-                err = ApplyDetails(command.refresh_request.refresh_mode == RefreshMode::kFull);
+                err = ApplyDetails(command.refresh_request.refresh_mode);
             } else {
-                err = ApplyHomeScreen(command.refresh_request.refresh_mode == RefreshMode::kFull);
+                err = ApplyHomeScreen(command.refresh_request.refresh_mode);
             }
         } else if (command.type == DisplayCommandType::kRefreshOverlay) {
             err = RefreshOverlayStateLocked(command.overlay_refresh_policy);
@@ -1086,7 +1091,7 @@ void DisplayTask(void*)
                           command.refresh_request.refresh_mode == RefreshMode::kPartial
                       ? RefreshCurrentScreenRegionLocked()
                       : RefreshCurrentScreenLocked(
-                            command.refresh_request.refresh_mode == RefreshMode::kFull);
+                            command.refresh_request.refresh_mode);
         }
         if (err != ESP_OK) {
             ESP_LOGW(kTag, "Display refresh failed (mode=%s): %s",
@@ -1482,7 +1487,7 @@ esp_err_t RefreshCurrentScreen(const RefreshRequest& refresh_request)
         return RefreshCurrentScreenRegionLocked();
     }
 
-    return RefreshCurrentScreenLocked(refresh_request.refresh_mode == RefreshMode::kFull);
+    return RefreshCurrentScreenLocked(refresh_request.refresh_mode);
 }
 
 esp_err_t RefreshCurrentScreen(RefreshMode refresh_mode)
@@ -1533,7 +1538,7 @@ esp_err_t WakeDisplay()
         return ESP_OK;
     }
 
-    ESP_RETURN_ON_ERROR(RefreshCurrentScreenLocked(true),
+    ESP_RETURN_ON_ERROR(RefreshCurrentScreenLocked(RefreshMode::kFull),
                         kTag,
                         "display wake refresh failed");
     s_display_sleeping = false;
@@ -1548,7 +1553,7 @@ esp_err_t RecoverAfterLightSleep()
     }
 
     std::lock_guard<std::mutex> lock(s_panel_mutex);
-    ESP_RETURN_ON_ERROR(RefreshCurrentScreenLocked(true),
+    ESP_RETURN_ON_ERROR(RefreshCurrentScreenLocked(RefreshMode::kFull),
                         kTag,
                         "display light-sleep recovery refresh failed");
     s_display_sleeping = false;

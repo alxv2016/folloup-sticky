@@ -11,7 +11,10 @@
 namespace {
 
 constexpr const char* kTag = "Ssd1677";
-constexpr int kMaxPartialRefreshesBeforeFull = 20;
+// Consecutive differential updates before the panel is re-driven in full. 20 was long
+// enough for the fade to become obvious; the flush is now on the fast waveform, so a
+// tighter budget costs little.
+constexpr int kMaxPartialRefreshesBeforeFlush = 8;
 // Display Update Control 2 (0x22) sequences, matching the `followup` esp-epaper driver
 // that is proven on this panel: 0xF7 drives the mode-1 full waveform, 0xFF the mode-2
 // differential waveform used for partials.
@@ -23,6 +26,10 @@ constexpr int kMaxPartialRefreshesBeforeFull = 20;
 // in 0x21 by a preceding full refresh would carry into the next partial.
 constexpr uint8_t kDisplayUpdateCtrl2Full = 0xF7;
 constexpr uint8_t kDisplayUpdateCtrl2Partial = 0xFF;
+// Fast full refresh: 0xD7 drops the "load temperature from sensor" bit that 0xF7 sets, so
+// the value forced into the temperature register (0x1A) below picks the fast OTP waveform.
+constexpr uint8_t kDisplayUpdateCtrl2Fast = 0xD7;
+constexpr uint8_t kFastWaveformTemperature[] = {0x6A};
 
 }  // namespace
 
@@ -63,7 +70,7 @@ esp_err_t EpaperPanel::SetCursor(uint16_t x_start, uint16_t y_start)
     return SendCommandWithData(0x4F, cursor_y, sizeof(cursor_y));
 }
 
-esp_err_t EpaperPanel::InitFull()
+esp_err_t EpaperPanel::InitFull(bool fast)
 {
     vTaskDelay(pdMS_TO_TICKS(10));
     ESP_RETURN_ON_ERROR(HardwareReset(), kTag, "hardware reset failed");
@@ -97,6 +104,14 @@ esp_err_t EpaperPanel::InitFull()
                         kTag, "border waveform failed");
     ESP_RETURN_ON_ERROR(SendCommandWithData(0x18, temperature_select, sizeof(temperature_select)),
                         kTag, "temperature selection failed");
+    if (fast) {
+        // Force the temperature register instead of reading the sensor, which selects the
+        // panel's fast OTP waveform. Paired with kDisplayUpdateCtrl2Fast, whose missing
+        // "load temperature" bit is what leaves this forced value in effect.
+        ESP_RETURN_ON_ERROR(
+            SendCommandWithData(0x1A, kFastWaveformTemperature, sizeof(kFastWaveformTemperature)),
+            kTag, "fast waveform selection failed");
+    }
     ESP_RETURN_ON_ERROR(SetCursor(full_x_start, full_y_start), kTag, "full RAM cursor failed");
 
     metrics_.init_ready_us = metrics_.panel_busy_us;
@@ -165,6 +180,17 @@ esp_err_t EpaperPanel::TurnOnDisplay()
     return ESP_OK;
 }
 
+esp_err_t EpaperPanel::TurnOnDisplayFast()
+{
+    const int64_t start_us = esp_timer_get_time();
+    ESP_RETURN_ON_ERROR(SendCommand(0x22), kTag, "fast update control command failed");
+    ESP_RETURN_ON_ERROR(SendData(kDisplayUpdateCtrl2Fast), kTag, "fast update control 2 data failed");
+    ESP_RETURN_ON_ERROR(SendCommand(0x20), kTag, "fast master activation command failed");
+    ESP_RETURN_ON_ERROR(ReadBusy(), kTag, "busy wait after fast update failed");
+    metrics_.trigger_us = esp_timer_get_time() - start_us;
+    return ESP_OK;
+}
+
 esp_err_t EpaperPanel::TurnOnDisplayPart()
 {
     const int64_t start_us = esp_timer_get_time();
@@ -190,10 +216,27 @@ esp_err_t EpaperPanel::RefreshFull()
 
 esp_err_t EpaperPanel::RefreshFullBase()
 {
+    return RefreshFullBaseInternal(false);
+}
+
+// Same frame as RefreshFullBase, driven by the panel's fast OTP waveform instead of the
+// mode-1 full waveform. Substantially quicker, at the cost of a less thorough clear -- so
+// it is the right choice for routine screen changes and the wrong one for periodically
+// flushing accumulated ghosting, which still wants RefreshFullBase.
+esp_err_t EpaperPanel::RefreshFastBase()
+{
+    return RefreshFullBaseInternal(true);
+}
+
+esp_err_t EpaperPanel::RefreshFullBaseInternal(bool fast)
+{
     ResetMetrics();
-    ESP_RETURN_ON_ERROR(InitFull(), kTag, "full init failed");
+    ESP_RETURN_ON_ERROR(InitFull(fast), kTag, "full init failed");
     ESP_RETURN_ON_ERROR(DisplayFullBase(), kTag, "full base image write failed");
-    ESP_RETURN_ON_ERROR(TurnOnDisplay(), kTag, "full base display update failed");
+    // Both RAM planes were written, so the panel's old/new comparison is seeded either
+    // way and the partial path below stays valid after a fast refresh.
+    ESP_RETURN_ON_ERROR(fast ? TurnOnDisplayFast() : TurnOnDisplay(),
+                        kTag, "full base display update failed");
     CopyFramebufferToPrevious();
     base_image_initialized_ = true;
     wake_refresh_pending_ = false;
@@ -204,8 +247,13 @@ esp_err_t EpaperPanel::RefreshFullBase()
 
 esp_err_t EpaperPanel::RefreshPartialFullScreen()
 {
-    if (!CanPartialRefresh(kMaxPartialRefreshesBeforeFull)) {
-        return RefreshFullBase();
+    // A differential update only drives pixels where 0x24 != 0x26, so everything that did
+    // not change gets no drive at all and its contrast decays -- the screen goes visibly
+    // lighter across a run of partials. Periodically re-drive every pixel to restore it.
+    // The fast waveform makes that cheap enough to do often; a true full refresh still
+    // happens on every screen change, which is what clears accumulated ghosting.
+    if (!CanPartialRefresh(kMaxPartialRefreshesBeforeFlush)) {
+        return RefreshFastBase();
     }
     if (framebuffer_ == nullptr || previous_framebuffer_ == nullptr) {
         return ESP_ERR_INVALID_STATE;

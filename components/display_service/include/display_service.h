@@ -41,6 +41,10 @@ enum class ScreenId {
 
 enum class RefreshMode {
     kPartial,
+    // Full-screen redraw on the panel's fast OTP waveform. Noticeably quicker than kFull
+    // but clears accumulated ghosting less thoroughly, so kFull remains the right choice
+    // for periodic flushes and anything following a long partial run.
+    kFast,
     kFull,
 };
 
