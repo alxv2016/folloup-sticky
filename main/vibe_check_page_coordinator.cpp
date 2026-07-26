@@ -258,22 +258,27 @@ bool VibeCheckPageCoordinator::RandomizeIdea()
     return !current_recording_id_.empty() && current_recording_id_ != previous;
 }
 
-bool VibeCheckPageCoordinator::RemoveCurrentIdea()
+bool VibeCheckPageCoordinator::RemoveIdea(const std::string& recording_id)
 {
-    if (current_recording_id_.empty()) {
+    if (recording_id.empty()) {
         return false;
     }
-    const std::string removed_id = current_recording_id_;
     const auto it = std::remove_if(ideas_.begin(), ideas_.end(),
-                                   [&removed_id](const RecordingEntry& entry) {
-                                       return entry.recording_id == removed_id;
+                                   [&recording_id](const RecordingEntry& entry) {
+                                       return entry.recording_id == recording_id;
                                    });
     if (it == ideas_.end()) {
+        // Already gone -- typically because the archive mutation's synchronous notify
+        // re-synced this page before we got here. Nothing to do, and specifically do not
+        // touch the selection: it is now pointing at a different, still-valid idea.
         return false;
     }
     ideas_.erase(it, ideas_.end());
-    current_recording_id_.clear();
-    SelectRandomIdea(false);
+    // Only re-select when the entry we dropped was the one on screen.
+    if (current_recording_id_ == recording_id) {
+        current_recording_id_.clear();
+        SelectRandomIdea(false);
+    }
     ResetSessionIfEmpty();
     RebuildCardState();
     if (!HasIdeas()) {
