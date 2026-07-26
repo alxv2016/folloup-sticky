@@ -58,11 +58,20 @@ esp_err_t EpaperPanel::Initialize()
     ESP_RETURN_ON_ERROR(InitGpio(), kTag, "GPIO init failed");
 
     if (framebuffer_ == nullptr) {
-        framebuffer_ = static_cast<uint8_t*>(
-            heap_caps_malloc(config_.buffer_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        // Internal RAM first, PSRAM only as a fallback. Every refresh memcpys this buffer
+        // into the SPI bounce buffer, and a CPU read of PSRAM goes through the flash/PSRAM
+        // cache -- anything that disables that cache (a flash write, which a Wi-Fi scan
+        // performs when it stores calibration data) makes the read return stale cache
+        // contents rather than stalling. The panel then paints whatever was copied, which
+        // shows up as hard banding. Internal RAM has no such window.
+        framebuffer_ =
+            static_cast<uint8_t*>(heap_caps_malloc(config_.buffer_len, MALLOC_CAP_INTERNAL |
+                                                                           MALLOC_CAP_8BIT));
         if (framebuffer_ == nullptr) {
-            framebuffer_ =
-                static_cast<uint8_t*>(heap_caps_malloc(config_.buffer_len, MALLOC_CAP_8BIT));
+            ESP_LOGW(kTag, "Framebuffer falling back to PSRAM; refreshes are exposed to "
+                           "cache-disable windows");
+            framebuffer_ = static_cast<uint8_t*>(
+                heap_caps_malloc(config_.buffer_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
         }
         if (framebuffer_ == nullptr) {
             ESP_LOGE(kTag, "Failed to allocate %d-byte framebuffer", config_.buffer_len);
@@ -71,11 +80,15 @@ esp_err_t EpaperPanel::Initialize()
     }
 
     if (previous_framebuffer_ == nullptr) {
-        previous_framebuffer_ = static_cast<uint8_t*>(
-            heap_caps_malloc(config_.buffer_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        // Same reasoning: this one is memcpy'd into the SPI buffer for the 0x26 plane on
+        // every partial, and memcmp'd against the live framebuffer.
+        previous_framebuffer_ =
+            static_cast<uint8_t*>(heap_caps_malloc(config_.buffer_len, MALLOC_CAP_INTERNAL |
+                                                                           MALLOC_CAP_8BIT));
         if (previous_framebuffer_ == nullptr) {
-            previous_framebuffer_ =
-                static_cast<uint8_t*>(heap_caps_malloc(config_.buffer_len, MALLOC_CAP_8BIT));
+            ESP_LOGW(kTag, "Shadow framebuffer falling back to PSRAM");
+            previous_framebuffer_ = static_cast<uint8_t*>(
+                heap_caps_malloc(config_.buffer_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
         }
         if (previous_framebuffer_ == nullptr) {
             ESP_LOGE(kTag, "Failed to allocate %d-byte retained framebuffer", config_.buffer_len);

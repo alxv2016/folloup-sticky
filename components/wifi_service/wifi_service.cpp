@@ -122,6 +122,9 @@ constexpr int kScanDeferMaxMs = 4000;
 // the refresh may not have started yet when we first look. Give it this long to appear
 // before deciding there is nothing to wait for.
 constexpr int kScanDeferStartMs = 400;
+// Let the panel finish settling after the refresh reports done before the radio goes on
+// air, rather than starting the instant the last transaction completes.
+constexpr int kScanDeferSettleMs = 150;
 PortalRouteRegistrar s_portal_registrar = nullptr;
 void* s_portal_registrar_context = nullptr;
 QueueHandle_t s_transition_queue = nullptr;
@@ -1420,8 +1423,9 @@ void StartNetworkScanNow()
                 ++polls;
             }
             if (polls > 0) {
+                vTaskDelay(pdMS_TO_TICKS(kScanDeferSettleMs));
                 ESP_LOGI(kTag, "Scan deferred %d ms for the display",
-                         polls * kScanDeferPollMs);
+                         polls * kScanDeferPollMs + kScanDeferSettleMs);
             }
         }
     }
