@@ -3,7 +3,9 @@
 #include <ctime>
 #include <string>
 
+#include "esp_log.h"
 #include "esp_random.h"
+#include "esp_timer.h"
 #include "sdkconfig.h"
 
 namespace {
@@ -11,7 +13,32 @@ namespace {
 using page_navigation::NavigationItemRole;
 using page_navigation::NavigationItemSection;
 
+constexpr const char* kTag = "DashboardPage";
 constexpr int64_t kMinValidEpoch = 1704067200;  // 2024-01-01 UTC
+
+// Entropy for the per-boot welcome-message offset.
+//
+// esp_random() alone is not enough here. ESP-IDF only guarantees true random numbers once
+// the RF subsystem is up (see "Random Number Generation"): the bootloader's entropy source
+// is disabled before the app starts, and this runs milliseconds into boot, before the
+// queued esp_wifi_start() has actually brought RF up. Left on its own the seed can repeat
+// across boots, which pins the greeting to the same message every time.
+//
+// So mix in sources that do vary at this point:
+//   - the RTC-backed wall clock, which differs on every boot (timezone_service restores it
+//     from the PCF8563 before the home screen is shown);
+//   - the boot-relative microsecond timer, which jitters with SD mount and display init
+//     timing and covers the first-ever boot where the RTC has not been set yet.
+uint32_t WelcomeSeedEntropy()
+{
+    uint32_t entropy = esp_random();
+    entropy ^= static_cast<uint32_t>(esp_timer_get_time());
+    const time_t now = time(nullptr);
+    if (static_cast<int64_t>(now) >= kMinValidEpoch) {
+        entropy ^= static_cast<uint32_t>(now);
+    }
+    return entropy;
+}
 
 // Fills weekday/date strings from the system clock; leaves them empty when time is invalid.
 void FillCurrentDate(epaper_ui::CurrentDateState* date)
@@ -57,8 +84,11 @@ void DashboardPageCoordinator::PrepareForShow()
 {
     if (!welcome_seeded_) {
         welcome_seed_ =
-            esp_random() % static_cast<uint32_t>(epaper_ui::WelcomeMessageTitleCount());
+            WelcomeSeedEntropy() % static_cast<uint32_t>(epaper_ui::WelcomeMessageTitleCount());
         welcome_seeded_ = true;
+        ESP_LOGI(kTag, "Welcome message seeded: seed=%u period=%u",
+                 static_cast<unsigned>(welcome_seed_),
+                 static_cast<unsigned>(WelcomePeriodsSinceEpoch()));
     }
     focus_.Configure(navigation_model_.item_count, 0);
 }
