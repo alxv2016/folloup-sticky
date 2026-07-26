@@ -131,17 +131,16 @@ bool OnboardingPageCoordinator::MoveFocus(int delta)
     if (delta == 0) {
         return false;
     }
-    const int step = delta > 0 ? 1 : -1;
-    const int count = navigation_model_.item_count;
-    for (int attempt = 0; attempt < count; ++attempt) {
-        if (!focus_.Move(step)) {
-            return false;
-        }
-        if (ControlSelectable(FocusedControl())) {
-            return true;  // landed on a focusable control
-        }
-    }
-    return false;  // no other focusable control to move to
+    // UP/DOWN pages the carousel rather than roving the control row.
+    //
+    // Roving does not work here: the row is Close/Prev/Next, and on the first slide -- where
+    // onboarding always opens -- Prev is disabled and Close is hidden, leaving Next as the
+    // only selectable control. The old loop then wrapped a full circle back onto Next and
+    // still reported success, so UP/DOWN played a cue and repainted without ever moving.
+    // Paging is also what the keys mean everywhere else in the app, and it keeps every slide
+    // reachable without touch. EnsureFocusEnabled (inside Next/PrevSlide) keeps the focused
+    // control valid, so a click still activates Next, or Close on the last slide.
+    return delta > 0 ? NextSlide() : PrevSlide();
 }
 
 bool OnboardingPageCoordinator::SetFocusIndex(int index)
