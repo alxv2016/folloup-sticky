@@ -571,6 +571,12 @@ esp_err_t ApplyHomeScreen(RefreshMode refresh_mode)
     CaptureUnderlaySnapshot(panel.framebuffer());
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
+    // Publish the screen before driving the panel, not after. The drive takes
+    // seconds, and ScreenActiveForRefresh gates on this value: leaving it stale for
+    // the whole render means an async event arriving mid-transition sees the old
+    // screen, skips merging into this refresh, and lands afterwards as a separate
+    // partial-waveform drive over an image that was already correct.
+    s_current_screen.store(ScreenId::kHome, std::memory_order_relaxed);
     RefreshBusyGuard refresh_busy;
     const esp_err_t err = RefreshForMode(panel, refresh_mode);
     if (err != ESP_OK) {
@@ -578,7 +584,6 @@ esp_err_t ApplyHomeScreen(RefreshMode refresh_mode)
     }
 
     LogMetrics(panel.metrics());
-    s_current_screen.store(ScreenId::kHome, std::memory_order_relaxed);
     return ESP_OK;
 }
 
@@ -590,6 +595,12 @@ esp_err_t ApplyLockScreen(RefreshMode refresh_mode)
     CaptureUnderlaySnapshot(panel.framebuffer());
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
+    // Publish the screen before driving the panel, not after. The drive takes
+    // seconds, and ScreenActiveForRefresh gates on this value: leaving it stale for
+    // the whole render means an async event arriving mid-transition sees the old
+    // screen, skips merging into this refresh, and lands afterwards as a separate
+    // partial-waveform drive over an image that was already correct.
+    s_current_screen.store(ScreenId::kLockScreen, std::memory_order_relaxed);
     RefreshBusyGuard refresh_busy;
     const esp_err_t err = RefreshForMode(panel, refresh_mode);
     if (err != ESP_OK) {
@@ -597,7 +608,6 @@ esp_err_t ApplyLockScreen(RefreshMode refresh_mode)
     }
 
     LogMetrics(panel.metrics());
-    s_current_screen.store(ScreenId::kLockScreen, std::memory_order_relaxed);
     return ESP_OK;
 }
 
@@ -609,6 +619,12 @@ esp_err_t ApplySettings(RefreshMode refresh_mode)
     CaptureUnderlaySnapshot(panel.framebuffer());
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
+    // Publish the screen before driving the panel, not after. The drive takes
+    // seconds, and ScreenActiveForRefresh gates on this value: leaving it stale for
+    // the whole render means an async event arriving mid-transition sees the old
+    // screen, skips merging into this refresh, and lands afterwards as a separate
+    // partial-waveform drive over an image that was already correct.
+    s_current_screen.store(ScreenId::kSettings, std::memory_order_relaxed);
     RefreshBusyGuard refresh_busy;
     const esp_err_t err = RefreshForMode(panel, refresh_mode);
     if (err != ESP_OK) {
@@ -616,7 +632,6 @@ esp_err_t ApplySettings(RefreshMode refresh_mode)
     }
 
     LogMetrics(panel.metrics());
-    s_current_screen.store(ScreenId::kSettings, std::memory_order_relaxed);
     return ESP_OK;
 }
 
@@ -628,6 +643,12 @@ esp_err_t ApplyWifi(RefreshMode refresh_mode)
     CaptureUnderlaySnapshot(panel.framebuffer());
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
+    // Publish the screen before driving the panel, not after. The drive takes
+    // seconds, and ScreenActiveForRefresh gates on this value: leaving it stale for
+    // the whole render means an async event arriving mid-transition sees the old
+    // screen, skips merging into this refresh, and lands afterwards as a separate
+    // partial-waveform drive over an image that was already correct.
+    s_current_screen.store(ScreenId::kWifi, std::memory_order_relaxed);
     RefreshBusyGuard refresh_busy;
     const esp_err_t err = RefreshForMode(panel, refresh_mode);
     if (err != ESP_OK) {
@@ -635,7 +656,6 @@ esp_err_t ApplyWifi(RefreshMode refresh_mode)
     }
 
     LogMetrics(panel.metrics());
-    s_current_screen.store(ScreenId::kWifi, std::memory_order_relaxed);
     return ESP_OK;
 }
 
@@ -647,6 +667,12 @@ esp_err_t ApplyTime(RefreshMode refresh_mode)
     CaptureUnderlaySnapshot(panel.framebuffer());
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
+    // Publish the screen before driving the panel, not after. The drive takes
+    // seconds, and ScreenActiveForRefresh gates on this value: leaving it stale for
+    // the whole render means an async event arriving mid-transition sees the old
+    // screen, skips merging into this refresh, and lands afterwards as a separate
+    // partial-waveform drive over an image that was already correct.
+    s_current_screen.store(ScreenId::kTime, std::memory_order_relaxed);
     RefreshBusyGuard refresh_busy;
     const esp_err_t err = RefreshForMode(panel, refresh_mode);
     if (err != ESP_OK) {
@@ -654,7 +680,6 @@ esp_err_t ApplyTime(RefreshMode refresh_mode)
     }
 
     LogMetrics(panel.metrics());
-    s_current_screen.store(ScreenId::kTime, std::memory_order_relaxed);
     return ESP_OK;
 }
 
@@ -666,6 +691,12 @@ esp_err_t ApplyVibeCheck(RefreshMode refresh_mode)
     CaptureUnderlaySnapshot(panel.framebuffer());
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
+    // Publish the screen before driving the panel, not after. The drive takes
+    // seconds, and ScreenActiveForRefresh gates on this value: leaving it stale for
+    // the whole render means an async event arriving mid-transition sees the old
+    // screen, skips merging into this refresh, and lands afterwards as a separate
+    // partial-waveform drive over an image that was already correct.
+    s_current_screen.store(ScreenId::kVibeCheck, std::memory_order_relaxed);
     RefreshBusyGuard refresh_busy;
     const esp_err_t err = RefreshForMode(panel, refresh_mode);
     if (err != ESP_OK) {
@@ -673,7 +704,6 @@ esp_err_t ApplyVibeCheck(RefreshMode refresh_mode)
     }
 
     LogMetrics(panel.metrics());
-    s_current_screen.store(ScreenId::kVibeCheck, std::memory_order_relaxed);
     return ESP_OK;
 }
 
@@ -685,6 +715,12 @@ esp_err_t ApplySummarize(RefreshMode refresh_mode)
     CaptureUnderlaySnapshot(panel.framebuffer());
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
+    // Publish the screen before driving the panel, not after. The drive takes
+    // seconds, and ScreenActiveForRefresh gates on this value: leaving it stale for
+    // the whole render means an async event arriving mid-transition sees the old
+    // screen, skips merging into this refresh, and lands afterwards as a separate
+    // partial-waveform drive over an image that was already correct.
+    s_current_screen.store(ScreenId::kSummarize, std::memory_order_relaxed);
     RefreshBusyGuard refresh_busy;
     const esp_err_t err = RefreshForMode(panel, refresh_mode);
     if (err != ESP_OK) {
@@ -692,7 +728,6 @@ esp_err_t ApplySummarize(RefreshMode refresh_mode)
     }
 
     LogMetrics(panel.metrics());
-    s_current_screen.store(ScreenId::kSummarize, std::memory_order_relaxed);
     return ESP_OK;
 }
 
@@ -704,6 +739,12 @@ esp_err_t ApplyNotes(RefreshMode refresh_mode)
     CaptureUnderlaySnapshot(panel.framebuffer());
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
+    // Publish the screen before driving the panel, not after. The drive takes
+    // seconds, and ScreenActiveForRefresh gates on this value: leaving it stale for
+    // the whole render means an async event arriving mid-transition sees the old
+    // screen, skips merging into this refresh, and lands afterwards as a separate
+    // partial-waveform drive over an image that was already correct.
+    s_current_screen.store(ScreenId::kNotes, std::memory_order_relaxed);
     RefreshBusyGuard refresh_busy;
     const esp_err_t err = RefreshForMode(panel, refresh_mode);
     if (err != ESP_OK) {
@@ -711,7 +752,6 @@ esp_err_t ApplyNotes(RefreshMode refresh_mode)
     }
 
     LogMetrics(panel.metrics());
-    s_current_screen.store(ScreenId::kNotes, std::memory_order_relaxed);
     return ESP_OK;
 }
 
@@ -723,6 +763,12 @@ esp_err_t ApplyTodos(RefreshMode refresh_mode)
     CaptureUnderlaySnapshot(panel.framebuffer());
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
+    // Publish the screen before driving the panel, not after. The drive takes
+    // seconds, and ScreenActiveForRefresh gates on this value: leaving it stale for
+    // the whole render means an async event arriving mid-transition sees the old
+    // screen, skips merging into this refresh, and lands afterwards as a separate
+    // partial-waveform drive over an image that was already correct.
+    s_current_screen.store(ScreenId::kTodos, std::memory_order_relaxed);
     RefreshBusyGuard refresh_busy;
     const esp_err_t err = RefreshForMode(panel, refresh_mode);
     if (err != ESP_OK) {
@@ -730,7 +776,6 @@ esp_err_t ApplyTodos(RefreshMode refresh_mode)
     }
 
     LogMetrics(panel.metrics());
-    s_current_screen.store(ScreenId::kTodos, std::memory_order_relaxed);
     return ESP_OK;
 }
 
@@ -742,6 +787,12 @@ esp_err_t ApplyFollowUp(RefreshMode refresh_mode)
     CaptureUnderlaySnapshot(panel.framebuffer());
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
+    // Publish the screen before driving the panel, not after. The drive takes
+    // seconds, and ScreenActiveForRefresh gates on this value: leaving it stale for
+    // the whole render means an async event arriving mid-transition sees the old
+    // screen, skips merging into this refresh, and lands afterwards as a separate
+    // partial-waveform drive over an image that was already correct.
+    s_current_screen.store(ScreenId::kFollowUp, std::memory_order_relaxed);
     RefreshBusyGuard refresh_busy;
     const esp_err_t err = RefreshForMode(panel, refresh_mode);
     if (err != ESP_OK) {
@@ -749,7 +800,6 @@ esp_err_t ApplyFollowUp(RefreshMode refresh_mode)
     }
 
     LogMetrics(panel.metrics());
-    s_current_screen.store(ScreenId::kFollowUp, std::memory_order_relaxed);
     return ESP_OK;
 }
 
@@ -761,6 +811,12 @@ esp_err_t ApplyOnboarding(RefreshMode refresh_mode)
     CaptureUnderlaySnapshot(panel.framebuffer());
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
+    // Publish the screen before driving the panel, not after. The drive takes
+    // seconds, and ScreenActiveForRefresh gates on this value: leaving it stale for
+    // the whole render means an async event arriving mid-transition sees the old
+    // screen, skips merging into this refresh, and lands afterwards as a separate
+    // partial-waveform drive over an image that was already correct.
+    s_current_screen.store(ScreenId::kOnboarding, std::memory_order_relaxed);
     RefreshBusyGuard refresh_busy;
     const esp_err_t err = RefreshForMode(panel, refresh_mode);
     if (err != ESP_OK) {
@@ -768,7 +824,6 @@ esp_err_t ApplyOnboarding(RefreshMode refresh_mode)
     }
 
     LogMetrics(panel.metrics());
-    s_current_screen.store(ScreenId::kOnboarding, std::memory_order_relaxed);
     return ESP_OK;
 }
 
@@ -780,6 +835,12 @@ esp_err_t ApplyDetails(RefreshMode refresh_mode)
     CaptureUnderlaySnapshot(panel.framebuffer());
     DrawCurrentOverlays(panel.framebuffer(), snapshot);
 
+    // Publish the screen before driving the panel, not after. The drive takes
+    // seconds, and ScreenActiveForRefresh gates on this value: leaving it stale for
+    // the whole render means an async event arriving mid-transition sees the old
+    // screen, skips merging into this refresh, and lands afterwards as a separate
+    // partial-waveform drive over an image that was already correct.
+    s_current_screen.store(ScreenId::kDetails, std::memory_order_relaxed);
     RefreshBusyGuard refresh_busy;
     const esp_err_t err = RefreshForMode(panel, refresh_mode);
     if (err != ESP_OK) {
@@ -787,7 +848,6 @@ esp_err_t ApplyDetails(RefreshMode refresh_mode)
     }
 
     LogMetrics(panel.metrics());
-    s_current_screen.store(ScreenId::kDetails, std::memory_order_relaxed);
     return ESP_OK;
 }
 

@@ -98,6 +98,13 @@ esp_err_t UpdateDisplayStateAndRequestRefresh(display_service::RefreshMode refre
         ui_refresh_runtime::SurfaceKey::kStatusBar, &UpdateDisplayState, refresh_mode);
 }
 
+esp_err_t UpdateDisplayStateAndRequestRefresh(
+    const display_service::RefreshRequest& refresh_request)
+{
+    return ui_refresh_runtime::Schedule(
+        ui_refresh_runtime::SurfaceKey::kStatusBar, &UpdateDisplayState, refresh_request);
+}
+
 esp_err_t UpdateDisplayStateAndRefreshNow(display_service::RefreshMode refresh_mode)
 {
     ESP_RETURN_ON_ERROR(UpdateDisplayState(), "StatusBarRuntime", "set status bar state failed");

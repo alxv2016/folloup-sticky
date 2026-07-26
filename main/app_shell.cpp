@@ -1174,10 +1174,18 @@ void HandleWifiEvent(const wifi_service::Event& event, void*)
     gemini_service::SetNetworkState(event.ui_state.connected,
                                     event.ui_state.access_point_mode);
 
+    // Region scope, not screen scope. Wi-Fi events fire during and right after the page
+    // transition, and a screen-scope partial re-inits the panel and drives it whatever the
+    // content -- landing a second, weaker drive on top of a page the transition already
+    // rendered correctly. RefreshChangedRegion compares against the glass first and does
+    // nothing when only the status bar's own pixels are unchanged.
     const esp_err_t status_bar_err =
         s_startup_complete.load(std::memory_order_relaxed)
             ? status_bar_runtime::UpdateDisplayStateAndRequestRefresh(
-                  display_service::RefreshMode::kPartial)
+                  display_service::RefreshRequest{
+                      .refresh_mode = display_service::RefreshMode::kPartial,
+                      .scope = display_service::RefreshScope::kRegion,
+                  })
             : status_bar_runtime::UpdateDisplayState();
     if (status_bar_err != ESP_OK && status_bar_err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(kTag, "Status bar update after Wi-Fi event failed: %s",

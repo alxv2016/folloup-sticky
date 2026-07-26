@@ -13,6 +13,12 @@ epaper_ui::StatusBarState BuildState();
 esp_err_t UpdateDisplayState();
 esp_err_t UpdateDisplayStateAndRequestRefresh(
     display_service::RefreshMode refresh_mode = display_service::RefreshMode::kPartial);
+// Overload carrying a full RefreshRequest, so callers can ask for RefreshScope::kRegion.
+// A region refresh routes through RefreshChangedRegion, which compares the framebuffer
+// against the glass and does nothing when they match -- unlike the screen-scope partial,
+// which re-inits the panel and drives it regardless.
+esp_err_t UpdateDisplayStateAndRequestRefresh(
+    const display_service::RefreshRequest& refresh_request);
 esp_err_t UpdateDisplayStateAndRefreshNow(
     display_service::RefreshMode refresh_mode = display_service::RefreshMode::kPartial);
 
