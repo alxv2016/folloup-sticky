@@ -322,16 +322,17 @@ bool HandleItemActionSelection(int selected_index)
             s_pending_view_details_id = entry.recording_id;
             break;
         }
+        // Neither case syncs explicitly: both mutators notify on success and app_shell's
+        // archive handler re-syncs the on-screen page, which is this one. Syncing again
+        // would repeat a full ListRecordings and repaint identical data.
         case ItemAction::kCompleteFollowUp:
             // Completing clears the follow-up flag (follow_up=false, follow_up_completed=true), so
-            // the item leaves this list. Tick the box optimistically, then persist + re-sync.
+            // the item leaves this list. Tick the box optimistically, then persist.
             SetEntryChecked(entry.recording_id, true);
             (void)recording_archive_service::MarkRecordingFollowUp(entry.recording_id, false, true);
-            (void)SyncFromArchive(true);
             break;
         case ItemAction::kDelete:
             (void)recording_archive_service::DeleteRecording(entry.recording_id);
-            (void)SyncFromArchive(true);
             break;
         case ItemAction::kClose:
         default:

@@ -356,9 +356,11 @@ bool HandleItemActionSelection(int selected_index)
             }
             break;
         }
+        // No explicit SyncFromArchive: DeleteRecording notifies on success and app_shell's
+        // archive handler re-syncs the on-screen page, which is this one. Syncing again
+        // would repeat a full ListRecordings and repaint identical data.
         case ItemAction::kDelete:
             (void)recording_archive_service::DeleteRecording(entry.recording_id);
-            (void)SyncFromArchive(true);
             break;
         case ItemAction::kClose:
         default:
