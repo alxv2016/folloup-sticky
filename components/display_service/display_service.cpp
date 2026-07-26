@@ -546,6 +546,12 @@ esp_err_t RefreshCurrentScreenLocked(RefreshMode refresh_mode);
 
 esp_err_t RefreshForMode(EpaperPanel& panel, RefreshMode refresh_mode)
 {
+    // Logged on every panel drive so a refresh complaint can be read off the device
+    // instead of inferred: which waveform actually ran, on which screen, and in what
+    // order relative to the other refreshes a page kicks off.
+    ESP_LOGI(kTag, "panel drive: mode=%s screen=%d",
+             RefreshModeName(refresh_mode),
+             static_cast<int>(s_current_screen.load(std::memory_order_relaxed)));
     switch (refresh_mode) {
         case RefreshMode::kFull:
             return panel.RefreshFullBase();
