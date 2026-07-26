@@ -114,6 +114,14 @@ std::mutex s_callback_mutex;
 std::deque<Event> s_pending_events;
 EventHandler s_event_handler = nullptr;
 void* s_event_context = nullptr;
+ScanDeferProvider s_scan_defer_provider = nullptr;
+void* s_scan_defer_context = nullptr;
+constexpr int kScanDeferPollMs = 20;
+constexpr int kScanDeferMaxMs = 4000;
+// A scan queued by page entry is requested just before the screen-change refresh is, so
+// the refresh may not have started yet when we first look. Give it this long to appear
+// before deciding there is nothing to wait for.
+constexpr int kScanDeferStartMs = 400;
 PortalRouteRegistrar s_portal_registrar = nullptr;
 void* s_portal_registrar_context = nullptr;
 QueueHandle_t s_transition_queue = nullptr;
@@ -1387,6 +1395,37 @@ void StartNetworkScanNow()
     scan_config.scan_time.active.max = 80;
     scan_config.home_chan_dwell_time = 30;
 
+    // Hold the scan off while the panel is mid-refresh; see ScanDeferProvider. Capped so a
+    // stuck or very slow refresh delays the scan rather than losing it.
+    {
+        ScanDeferProvider defer_provider = nullptr;
+        void* defer_context = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(s_state_mutex);
+            defer_provider = s_scan_defer_provider;
+            defer_context = s_scan_defer_context;
+        }
+        if (defer_provider != nullptr) {
+            int polls = 0;
+            // Phase 1: let a just-requested refresh actually begin.
+            const int start_polls = kScanDeferStartMs / kScanDeferPollMs;
+            while (polls < start_polls && !defer_provider(defer_context)) {
+                vTaskDelay(pdMS_TO_TICKS(kScanDeferPollMs));
+                ++polls;
+            }
+            // Phase 2: let it finish painting before the radio goes on air.
+            const int max_polls = kScanDeferMaxMs / kScanDeferPollMs;
+            while (polls < max_polls && defer_provider(defer_context)) {
+                vTaskDelay(pdMS_TO_TICKS(kScanDeferPollMs));
+                ++polls;
+            }
+            if (polls > 0) {
+                ESP_LOGI(kTag, "Scan deferred %d ms for the display",
+                         polls * kScanDeferPollMs);
+            }
+        }
+    }
+
     for (int attempt = 0; attempt < kScanStartAttempts; ++attempt) {
         err = esp_wifi_scan_start(&scan_config, false);
         if (err != ESP_ERR_WIFI_STATE) {
@@ -1691,6 +1730,13 @@ void SetEventHandler(EventHandler handler, void* context)
     std::lock_guard<std::mutex> lock(s_callback_mutex);
     s_event_handler = handler;
     s_event_context = context;
+}
+
+void SetScanDeferProvider(ScanDeferProvider provider, void* context)
+{
+    std::lock_guard<std::mutex> lock(s_state_mutex);
+    s_scan_defer_provider = provider;
+    s_scan_defer_context = context;
 }
 
 void SetPortalRouteRegistrar(PortalRouteRegistrar registrar, void* context)

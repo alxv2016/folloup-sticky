@@ -68,6 +68,13 @@ esp_err_t Init();
 void Start();
 void SetEventHandler(EventHandler handler, void* context);
 void SetPortalRouteRegistrar(PortalRouteRegistrar registrar, void* context);
+
+// Returns true while it is a bad moment to put the radio on air. A scan is the noisiest
+// RF the device does -- channel hopping at TX power -- and an e-paper refresh drives the
+// panel's charge pump hard, so overlapping them browns out the update. wifi_service has no
+// business knowing about the display, so the owner supplies this.
+using ScanDeferProvider = bool (*)(void* context);
+void SetScanDeferProvider(ScanDeferProvider provider, void* context);
 void SetWifiEnabled(bool enabled);
 void SetAccessPointEnabled(bool enabled);
 void EnterAccessPointMode();

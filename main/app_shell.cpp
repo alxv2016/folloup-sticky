@@ -1561,6 +1561,9 @@ void InitGeminiService()
 void InitWifiService()
 {
     wifi_service::SetEventHandler(HandleWifiEvent, nullptr);
+    // Keep scans off the air while the panel is refreshing.
+    wifi_service::SetScanDeferProvider(
+        [](void*) { return display_service::IsRefreshInProgress(); }, nullptr);
     wifi_service::SetPortalRouteRegistrar(RegisterWifiBackendRoutes, nullptr);
     const esp_err_t err = wifi_service::Init();
     if (err != ESP_OK) {
