@@ -56,8 +56,11 @@ bool RebuildClockStateLocked(bool force)
         std::tm local_tm = {};
         localtime_r(&now, &local_tm);
 
-        char hour_text[3] = {};
-        char minute_text[3] = {};
+        // Sized for the widest %02d the compiler must assume (an int can print more than
+        // two digits), not just the 00-59 these actually produce. -Os turns the narrower
+        // buffers into a format-truncation error.
+        char hour_text[12] = {};
+        char minute_text[12] = {};
         char weekday_text[16] = {};
         char month_text[8] = {};
 
