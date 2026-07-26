@@ -338,18 +338,19 @@ esp_err_t SyncFromService(bool request_refresh_if_active)
         s_coordinator.RefreshFromService(wifi_service::GetUiState(), wifi_service::GetScanSnapshot());
     }
 
-    // kFast, not kPartial. This page is the only one driven by a burst of async radio
+    // kFull, not kPartial. This page is the only one driven by a burst of async radio
     // events right after entry: entering it starts a scan, and scanning -> complete ->
     // connect each fire a service event, so several whole-screen updates land within
     // seconds. Two things go wrong when those are differential. The scan-complete redraw
     // swaps an empty list for a populated one -- a large-area change, which the short
     // partial waveform does not drive hard enough to reach the rails, so it ghosts. And
     // every pixel that did not change (header, labels, footer) gets no drive at all across
-    // the whole burst, so it fades. The fast full waveform re-drives the panel each time
-    // and is cheap enough to do on an event.
+    // the whole burst, so it fades. A full refresh re-drives every pixel with the mode-1
+    // waveform, which is the only one that reaches full contrast on this panel -- the fast
+    // waveform flashes but settles washed out, so it is not usable here.
     const esp_err_t err =
         request_refresh_if_active
-            ? UpdateDisplayStateAndRequestRefresh(display_service::RefreshMode::kFast)
+            ? UpdateDisplayStateAndRequestRefresh(display_service::RefreshMode::kFull)
             : UpdateDisplayState();
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(kTag, "WiFi page sync failed: %s", esp_err_to_name(err));

@@ -250,10 +250,10 @@ esp_err_t EpaperPanel::RefreshPartialFullScreen()
     // A differential update only drives pixels where 0x24 != 0x26, so everything that did
     // not change gets no drive at all and its contrast decays -- the screen goes visibly
     // lighter across a run of partials. Periodically re-drive every pixel to restore it.
-    // The fast waveform makes that cheap enough to do often; a true full refresh still
-    // happens on every screen change, which is what clears accumulated ghosting.
+    // Use the mode-1 full waveform, not the fast one: fast flashes but settles at lower
+    // contrast on this panel, so it cannot be used to restore a faded screen.
     if (!CanPartialRefresh(kMaxPartialRefreshesBeforeFlush)) {
-        return RefreshFastBase();
+        return RefreshFullBase();
     }
     if (framebuffer_ == nullptr || previous_framebuffer_ == nullptr) {
         return ESP_ERR_INVALID_STATE;
