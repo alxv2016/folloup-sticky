@@ -286,9 +286,12 @@ void DeleteCurrentIdea()
         (void)overlay_runtime::ShowToastForDuration(toast, 2000);
         return;
     }
+    // Remove by id, not "the current idea": DeleteRecording notifies archive subscribers
+    // synchronously, so this page may already have re-synced and moved the selection to a
+    // different idea while we were inside the call above.
     {
         std::lock_guard<std::mutex> lock(s_mutex);
-        s_coordinator.RemoveCurrentIdea();
+        s_coordinator.RemoveIdea(recording_id);
     }
     (void)UpdateDisplayStateAndRequestRefresh(display_service::RefreshMode::kPartial);
 }
@@ -304,11 +307,21 @@ void PinCurrentIdea()
         return;
     }
     if (!recording_archive_service::MarkRecordingFollowUp(recording_id, true, false)) {
+        // Same rule as the delete path: leave the idea on the card so it stays consistent
+        // with the archive, rather than having it vanish here while it is still an un-pinned
+        // idea on the SD card.
         ESP_LOGW(kTag, "Pin idea failed: id=%s", recording_id.c_str());
+        epaper_ui::ToastState toast = {};
+        toast.visible = true;
+        toast.body_text = "Couldn't follow up -- try again";
+        toast.leading_icon = project_assets::GetIcon(EmbeddedIconId::kCheck);
+        (void)overlay_runtime::ShowToastForDuration(toast, 2000);
+        return;
     }
+    // See DeleteCurrentIdea: MarkRecordingFollowUp notifies synchronously too.
     {
         std::lock_guard<std::mutex> lock(s_mutex);
-        s_coordinator.RemoveCurrentIdea();
+        s_coordinator.RemoveIdea(recording_id);
     }
     (void)UpdateDisplayStateAndRequestRefresh(display_service::RefreshMode::kPartial);
 }

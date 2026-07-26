@@ -37,8 +37,14 @@ public:
 
     // Shuffle to a different idea. Returns true when the shown idea actually changed.
     bool RandomizeIdea();
-    // Drop the current idea from the in-memory list (caller performs the archive-side action).
-    bool RemoveCurrentIdea();
+    // Drop one specific idea from the in-memory list (caller performs the archive-side action).
+    //
+    // Takes the id explicitly rather than acting on whatever is currently shown: the archive
+    // mutation that precedes this call notifies subscribers synchronously, which re-enters
+    // RefreshFromArchive and can move the selection to a different idea before we get here.
+    // Removing "the current idea" at that point would drop an innocent one. No-ops when the
+    // entry is already gone, so it is safe whether or not that re-sync already handled it.
+    bool RemoveIdea(const std::string& recording_id);
     const std::string& current_recording_id() const { return current_recording_id_; }
 
     epaper_ui::VibeCheckPageState BuildState() const;
