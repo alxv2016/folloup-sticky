@@ -43,6 +43,12 @@ esp_err_t ShowStorageModalConfirmFormat();
 esp_err_t ShowStorageModalFormatting();
 esp_err_t ShowStorageModalFormatSuccess();
 esp_err_t ShowStorageModalFormatError();
+// OTG (USB mass-storage) modals. UsbEntering and UsbActive carry no dismiss action, so
+// they stay up until the flow moves them on -- UsbActive's only action exits OTG.
+esp_err_t ShowStorageModalUsbEntering();
+esp_err_t ShowStorageModalUsbActive();
+esp_err_t ShowStorageModalUsbNoCable();
+esp_err_t ShowStorageModalUsbError();
 esp_err_t DismissStorageModal();
 esp_err_t ShowSelectModal(const epaper_ui::SelectModalState& state);
 esp_err_t DismissSelectModal();

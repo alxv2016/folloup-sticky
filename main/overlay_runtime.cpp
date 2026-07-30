@@ -24,6 +24,10 @@ enum class CardModalPurpose : uint8_t {
     kShutdownConfirm,
     kStorageNoSdCard,
     kStorageConfirmFormat,
+    kStorageUsbEntering,
+    kStorageUsbActive,
+    kStorageUsbNoCable,
+    kStorageUsbError,
     kStorageFormatting,
     kStorageFormatSuccess,
     kStorageFormatError,
@@ -74,6 +78,31 @@ epaper_ui::CardModalState BuildCardModalState(CardModalPurpose purpose)
             state.title_text = "Format SD card?";
             state.body_text = "Formatting the SD card will erase everything on the card.";
             state.action_labels = {"Cancel", "Format"};
+            break;
+        case CardModalPurpose::kStorageUsbEntering:
+            state.title_text = "Enabling OTG";
+            // No actions: transient, and there is nothing safe to do mid-transition. A card
+            // modal is only dismissed by its own buttons, so this is inherently sticky.
+            state.body_text = "Preparing OTG. Please wait...";
+            state.action_labels = {};
+            break;
+        case CardModalPurpose::kStorageUsbActive:
+            state.title_text = "OTG mode enabled";
+            state.body_text = "Keep the USB cable connected to your computer. The SD card is "
+                              "unavailable to the device until you disable OTG.";
+            // The only way out. Deliberately a single action so the modal cannot be
+            // dismissed while the card still belongs to the host.
+            state.action_labels = {"Disable OTG mode"};
+            break;
+        case CardModalPurpose::kStorageUsbNoCable:
+            state.title_text = "No USB connection";
+            state.body_text = "Connect the USB cable to a computer, then try again.";
+            state.action_labels = {"OK"};
+            break;
+        case CardModalPurpose::kStorageUsbError:
+            state.title_text = "OTG failed";
+            state.body_text = "There was an error and OTG could not be enabled.";
+            state.action_labels = {"OK"};
             break;
         case CardModalPurpose::kStorageFormatting:
             state.title_text = "Formatting SD card";
@@ -510,7 +539,8 @@ esp_err_t ShowCardModal(CardModalPurpose purpose, const char* log_label)
             // ShowStorageModalFormatting did NOT queue any feedback. Every other
             // purpose queues kModalOpen, except the format-error card which
             // queued kError.
-            play_feedback = purpose != CardModalPurpose::kStorageFormatting;
+            play_feedback = purpose != CardModalPurpose::kStorageFormatting &&
+                            purpose != CardModalPurpose::kStorageUsbEntering;
             feedback_cue = purpose == CardModalPurpose::kStorageFormatError
                                ? app_interaction::FeedbackCue::kError
                                : app_interaction::FeedbackCue::kModalOpen;
@@ -583,6 +613,26 @@ esp_err_t ShowStorageModalConfirmFormat()
 esp_err_t ShowStorageModalFormatting()
 {
     return ShowCardModal(CardModalPurpose::kStorageFormatting, "formatting");
+}
+
+esp_err_t ShowStorageModalUsbEntering()
+{
+    return ShowCardModal(CardModalPurpose::kStorageUsbEntering, "usb_entering");
+}
+
+esp_err_t ShowStorageModalUsbActive()
+{
+    return ShowCardModal(CardModalPurpose::kStorageUsbActive, "usb_active");
+}
+
+esp_err_t ShowStorageModalUsbNoCable()
+{
+    return ShowCardModal(CardModalPurpose::kStorageUsbNoCable, "usb_no_cable");
+}
+
+esp_err_t ShowStorageModalUsbError()
+{
+    return ShowCardModal(CardModalPurpose::kStorageUsbError, "usb_error");
 }
 
 esp_err_t ShowStorageModalFormatSuccess()
@@ -953,11 +1003,18 @@ app_interaction::InputResult HandleButtonEvent(const button_service::ButtonEvent
                                     play_click = true;
                                 }
                                 break;
+                            case CardModalPurpose::kStorageUsbActive:
+                                // Sole action: hand the card back to the app.
+                                result.request_exit_usb_mode = true;
+                                break;
                             case CardModalPurpose::kStorageNoSdCard:
                             case CardModalPurpose::kStorageFormatSuccess:
                             case CardModalPurpose::kStorageFormatError:
+                            case CardModalPurpose::kStorageUsbNoCable:
+                            case CardModalPurpose::kStorageUsbError:
                                 play_click = true;
                                 break;
+                            case CardModalPurpose::kStorageUsbEntering:
                             case CardModalPurpose::kStorageFormatting:
                             case CardModalPurpose::kNone:
                             default:
@@ -1036,7 +1093,7 @@ done_locked:
     result.play_feedback = play_click;
     result.feedback_cue = app_interaction::FeedbackCue::kClick;
     if (result.consumed &&
-        (request_refresh || result.request_format_sd_card) &&
+        (request_refresh || result.request_format_sd_card || result.request_exit_usb_mode) &&
         !dismiss_modal && !dismiss_select_modal &&
         !result.select_modal_submitted) {
         ESP_LOGI(kTag, "Card modal button action=%s",

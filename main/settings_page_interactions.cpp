@@ -33,6 +33,14 @@ ActivateResult HandlePrimaryActivate(const SettingsPageCoordinator& coordinator)
         };
     }
     if (coordinator.IsRoleFocused(
+            page_navigation::NavigationItemRole::kSettingsEnableOtgButton)) {
+        return {
+            .intent = ActivateIntent::kEnableOtg,
+            .handled = true,
+            .play_activate_cue = true,
+        };
+    }
+    if (coordinator.IsRoleFocused(
             page_navigation::NavigationItemRole::kSettingsFormatSdButton)) {
         return {
             .intent = ActivateIntent::kShowFormatSdModal,
@@ -88,6 +96,11 @@ void ApplyPrimaryActivateResult(const ActivateResult& result,
         case ActivateIntent::kToggleAccessPoint:
             if (callbacks.toggle_access_point) {
                 callbacks.toggle_access_point();
+            }
+            return;
+        case ActivateIntent::kEnableOtg:
+            if (callbacks.enable_otg) {
+                callbacks.enable_otg();
             }
             return;
         case ActivateIntent::kShowFormatSdModal:

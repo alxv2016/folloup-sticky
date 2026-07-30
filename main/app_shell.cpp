@@ -1054,6 +1054,37 @@ void HandleStorageEvent(const storage_service::Event& event, void*)
         FlushOverlayFeedback();
     }
 
+    // OTG drives its own modal chain: entering -> active, or straight to an error card.
+    // The active card is the only way back out, so it must always be the terminal state of
+    // a successful enter.
+    if (event.snapshot.operation == storage_service::Operation::kEnterUsbMode ||
+        event.snapshot.operation == storage_service::Operation::kExitUsbMode) {
+        const bool entering =
+            event.snapshot.operation == storage_service::Operation::kEnterUsbMode;
+        esp_err_t overlay_err = ESP_OK;
+        switch (event.snapshot.phase) {
+            case storage_service::OperationPhase::kStarted:
+                overlay_err = entering ? overlay_runtime::ShowStorageModalUsbEntering()
+                                       : ESP_OK;
+                break;
+            case storage_service::OperationPhase::kSucceeded:
+                overlay_err = entering ? overlay_runtime::ShowStorageModalUsbActive()
+                                       : overlay_runtime::DismissStorageModal();
+                break;
+            case storage_service::OperationPhase::kFailed:
+                overlay_err = overlay_runtime::ShowStorageModalUsbError();
+                break;
+            case storage_service::OperationPhase::kIdle:
+            default:
+                break;
+        }
+        if (overlay_err != ESP_OK && overlay_err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(kTag, "OTG modal update failed: %s", esp_err_to_name(overlay_err));
+        }
+        FlushOverlayFeedback();
+        (void)SyncSettingsPageState(true);
+    }
+
     const bool formatting_in_progress =
         event.snapshot.operation == storage_service::Operation::kFormatSd &&
         event.snapshot.phase == storage_service::OperationPhase::kStarted;
@@ -1237,6 +1268,12 @@ void HandleDispatchedButtonEvent(const button_service::ButtonEventInfo& event)
                 ESP_LOGW(kTag, "Format SD error modal failed: %s",
                          esp_err_to_name(overlay_err));
             }
+        }
+    }
+    if (overlay_result.request_exit_usb_mode) {
+        const esp_err_t err = storage_service::RequestExitUsbMode();
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(kTag, "Exit USB mode request failed: %s", esp_err_to_name(err));
         }
     }
     if (overlay_result.request_shutdown && s_shutdown_task != nullptr) {

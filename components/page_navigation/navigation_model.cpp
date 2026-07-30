@@ -57,12 +57,16 @@ NavigationModel BuildSettingsPageNavigationModel()
             1);
     AddItem(model,
             NavigationItemSection::kSettingsPageMenu,
-            NavigationItemRole::kSettingsFormatSdButton,
+            NavigationItemRole::kSettingsEnableOtgButton,
             2);
     AddItem(model,
             NavigationItemSection::kSettingsPageMenu,
-            NavigationItemRole::kSettingsManualOnboardingButton,
+            NavigationItemRole::kSettingsFormatSdButton,
             3);
+    AddItem(model,
+            NavigationItemSection::kSettingsPageMenu,
+            NavigationItemRole::kSettingsManualOnboardingButton,
+            4);
     AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterSettings, 1);
     AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterWifi, 2);
     AddItem(model, NavigationItemSection::kFooter, NavigationItemRole::kFooterTime, 3);

@@ -20,6 +20,8 @@ struct InputResult {
     FeedbackCue feedback_cue = FeedbackCue::kNone;
     bool request_shutdown = false;
     bool request_format_sd_card = false;
+    // Set by the OTG modal's single "Disable OTG mode" action.
+    bool request_exit_usb_mode = false;
     bool select_modal_submitted = false;
     int select_modal_selected_index = -1;
 };

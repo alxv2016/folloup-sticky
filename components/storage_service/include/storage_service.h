@@ -10,12 +10,19 @@ namespace storage_service {
 enum class Mode {
     kAppMounted,
     kFormatting,
+    // USB mass-storage ("OTG") mode. While kUsbMounted the SD card belongs to the host
+    // and the app has no filesystem at all -- no recording, no archive reads.
+    kEnteringUsbMode,
+    kUsbMounted,
+    kExitingUsbMode,
     kError,
 };
 
 enum class Operation {
     kNone,
     kFormatSd,
+    kEnterUsbMode,
+    kExitUsbMode,
 };
 
 enum class OperationPhase {
@@ -67,6 +74,16 @@ esp_err_t RunWithMountedFilesystem(MountedFilesystemHandler handler, void* conte
 esp_err_t RecoverAfterLightSleep();
 
 esp_err_t RequestFormatSdCard();
+
+// USB mass-storage mode. Entering unmounts the card app-side and hands it to the host;
+// exiting tears USB down and remounts. Both are queued onto the storage worker and report
+// progress through the normal event/snapshot path.
+//
+// Enter is refused (ESP_ERR_INVALID_STATE) unless the card is mounted and idle, and
+// (ESP_ERR_NOT_FOUND) when no USB cable is attached -- there is no host to hand it to.
+esp_err_t RequestEnterUsbMode();
+esp_err_t RequestExitUsbMode();
+bool IsUsbModeActive();
 const char* MountPoint();
 const char* ModeName(Mode mode);
 const char* OperationName(Operation operation);

@@ -22,6 +22,7 @@ struct Layout {
     UiRect wifi_toggle = {};
     UiRect access_point_toggle = {};
     UiRect storage_status = {};
+    UiRect enable_otg_button = {};
     UiRect format_sd_button = {};
     UiRect manual_onboarding_button = {};
 };
@@ -56,11 +57,17 @@ Layout BuildLayout(int portrait_width, int portrait_height, const SettingsPageSt
                                                  state.storage_status,
                                                  storage_style);
 
+    ButtonStyle otg_button_style = {};
+    otg_button_style.width = page_width;
+    const int button_y = storage_status.bottom() + kStorageButtonTopGap;
+    const UiRect enable_otg_button =
+        ButtonBounds(page_x, button_y, state.enable_otg_button, otg_button_style);
+
     ButtonStyle format_button_style = {};
     format_button_style.width = page_width;
-    const int button_y = storage_status.bottom() + kStorageButtonTopGap;
     const UiRect format_sd_button =
-        ButtonBounds(page_x, button_y, state.format_sd_button, format_button_style);
+        ButtonBounds(page_x, enable_otg_button.bottom() + kButtonStackGap,
+                     state.format_sd_button, format_button_style);
 
     ButtonStyle manual_button_style = {};
     manual_button_style.width = page_width;
@@ -72,6 +79,7 @@ Layout BuildLayout(int portrait_width, int portrait_height, const SettingsPageSt
         .wifi_toggle = wifi_toggle,
         .access_point_toggle = access_point_toggle,
         .storage_status = storage_status,
+        .enable_otg_button = enable_otg_button,
         .format_sd_button = format_sd_button,
         .manual_onboarding_button = manual_onboarding_button,
     };
@@ -90,6 +98,8 @@ UiRect SettingsPageItemBounds(int portrait_width,
             return layout.wifi_toggle;
         case SettingsPageItemId::kAccessPointToggle:
             return layout.access_point_toggle;
+        case SettingsPageItemId::kEnableOtgButton:
+            return layout.enable_otg_button;
         case SettingsPageItemId::kFormatSdButton:
             return layout.format_sd_button;
         case SettingsPageItemId::kManualOnboardingButton:
@@ -122,6 +132,7 @@ bool HitTestSettingsPageItem(int portrait_width,
     constexpr SettingsPageItemId kItems[] = {
         SettingsPageItemId::kWifiToggle,
         SettingsPageItemId::kAccessPointToggle,
+        SettingsPageItemId::kEnableOtgButton,
         SettingsPageItemId::kFormatSdButton,
         SettingsPageItemId::kManualOnboardingButton,
     };
@@ -238,6 +249,20 @@ void DrawSettingsPage(uint8_t* framebuffer,
                  layout.storage_status.y,
                  state.storage_status,
                  storage_style);
+
+    // Outlined, like Manual onboarding: OTG is a mode toggle, not a destructive action, so
+    // it should not compete with Format SD for emphasis.
+    ButtonStyle otg_button_style = {};
+    otg_button_style.width = layout.enable_otg_button.width;
+    DrawButton(framebuffer,
+               raw_width,
+               raw_height,
+               portrait_width,
+               portrait_height,
+               layout.enable_otg_button.x,
+               layout.enable_otg_button.y,
+               state.enable_otg_button,
+               otg_button_style);
 
     ButtonStyle format_button_style = {};
     format_button_style.width = layout.format_sd_button.width;

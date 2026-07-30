@@ -1,5 +1,7 @@
 #include "page_input_runtime.h"
 
+#include "epaper_ui/toast.h"
+
 #include "dashboard_page_interactions.h"
 #include "dashboard_page_runtime.h"
 #include "details_page_interactions.h"
@@ -15,6 +17,7 @@
 #include "todos_page_runtime.h"
 #include "settings_page_interactions.h"
 #include "settings_page_runtime.h"
+#include "recording_session_service.h"
 #include "storage_service.h"
 #include "summarize_page_interactions.h"
 #include "summarize_page_runtime.h"
@@ -274,6 +277,37 @@ ButtonResult ApplySettingsActivateResult(const settings_page_interactions::Activ
             return;
         }
         (void)overlay_runtime::ShowStorageModalConfirmFormat();
+    };
+    callbacks.enable_otg = []() {
+        // The button is a toggle: while OTG is up it exits, otherwise it enters. Entering
+        // hands the SD card to the host, so it is refused mid-recording.
+        if (storage_service::IsUsbModeActive()) {
+            (void)storage_service::RequestExitUsbMode();
+            return;
+        }
+        const recording_session_service::Snapshot session =
+            recording_session_service::GetSnapshot();
+        if (session.phase != recording_session_service::Phase::kIdle &&
+            session.phase != recording_session_service::Phase::kComplete &&
+            session.phase != recording_session_service::Phase::kFailed) {
+            (void)overlay_runtime::ShowToastForDuration(
+                []() {
+                    epaper_ui::ToastState toast = {};
+                    toast.visible = true;
+                    toast.body_text = "Finish the recording first";
+                    return toast;
+                }(),
+                2000);
+            return;
+        }
+        const esp_err_t err = storage_service::RequestEnterUsbMode();
+        if (err == ESP_ERR_INVALID_ARG) {
+            (void)overlay_runtime::ShowStorageModalUsbNoCable();
+        } else if (err == ESP_ERR_NOT_FOUND) {
+            (void)overlay_runtime::ShowStorageModalNoSdCard();
+        } else if (err != ESP_OK) {
+            (void)overlay_runtime::ShowStorageModalUsbError();
+        }
     };
     callbacks.show_onboarding = []() {
         // Deferred so the screen change happens after input dispatch; app_shell polls for it.

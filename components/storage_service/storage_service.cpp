@@ -17,6 +17,7 @@
 #include "freertos/task.h"
 #include "power_service.h"
 #include "sd_card.h"
+#include "usb_storage_backend.h"
 #include "waveshare_board_config.h"
 #include "esp_timer.h"
 
@@ -447,6 +448,107 @@ void HandleFormatRequest()
     }
 }
 
+// OTG enter. The card must leave the app's FATFS mount before TinyUSB can claim raw
+// block access, so a failure after the unmount has to remount or the app is left with no
+// filesystem and no way back.
+void HandleEnterUsbModeRequest()
+{
+    WriteBusyGuard write_busy;
+    SdCard& card = Card();
+    Event event = {};
+    EventHandler handler = nullptr;
+    void* context = nullptr;
+    {
+        std::lock_guard<std::mutex> card_lock(s_card_mutex);
+        std::lock_guard<std::mutex> state_lock(s_state_mutex);
+        s_snapshot.mode = Mode::kEnteringUsbMode;
+        SetOperationLocked(Operation::kEnterUsbMode, OperationPhase::kStarted, ESP_OK);
+        event = BuildEventLocked();
+        handler = s_event_handler;
+        context = s_event_context;
+    }
+    DispatchEvent(event, handler, context);
+
+    esp_err_t err = ESP_OK;
+    bool entered = false;
+    {
+        std::lock_guard<std::mutex> card_lock(s_card_mutex);
+        card.Unmount();
+        err = usb_storage_backend::EnterUsbMode();
+        entered = err == ESP_OK;
+        if (!entered) {
+            ESP_LOGE(kTag, "Enter USB mode failed: %s", esp_err_to_name(err));
+            // Put the card back before reporting, so the error modal is shown by an app
+            // that can still read its own storage.
+            (void)MountCardLocked(card);
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> card_lock(s_card_mutex);
+        std::lock_guard<std::mutex> state_lock(s_state_mutex);
+        if (entered) {
+            s_snapshot.mounted = false;
+            s_snapshot.mode = Mode::kUsbMounted;
+            SetOperationLocked(Operation::kEnterUsbMode, OperationPhase::kSucceeded, ESP_OK);
+        } else {
+            s_snapshot.mounted = card.IsMounted();
+            s_snapshot.mode = card.IsMounted() ? Mode::kAppMounted : Mode::kError;
+            SetOperationLocked(Operation::kEnterUsbMode, OperationPhase::kFailed, err);
+        }
+        event = BuildEventLocked();
+        handler = s_event_handler;
+        context = s_event_context;
+    }
+    DispatchEvent(event, handler, context);
+}
+
+// OTG exit. Always remounts, even if the USB teardown reported an error -- getting the
+// filesystem back matters more than the teardown's return code.
+void HandleExitUsbModeRequest()
+{
+    WriteBusyGuard write_busy;
+    SdCard& card = Card();
+    Event event = {};
+    EventHandler handler = nullptr;
+    void* context = nullptr;
+    {
+        std::lock_guard<std::mutex> card_lock(s_card_mutex);
+        std::lock_guard<std::mutex> state_lock(s_state_mutex);
+        s_snapshot.mode = Mode::kExitingUsbMode;
+        SetOperationLocked(Operation::kExitUsbMode, OperationPhase::kStarted, ESP_OK);
+        event = BuildEventLocked();
+        handler = s_event_handler;
+        context = s_event_context;
+    }
+    DispatchEvent(event, handler, context);
+
+    esp_err_t err = ESP_OK;
+    bool mounted = false;
+    {
+        std::lock_guard<std::mutex> card_lock(s_card_mutex);
+        err = usb_storage_backend::ExitUsbMode();
+        const esp_err_t mount_err = MountCardLocked(card);
+        mounted = card.IsMounted();
+        if (err == ESP_OK && mount_err != ESP_OK) {
+            err = mount_err;
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> card_lock(s_card_mutex);
+        std::lock_guard<std::mutex> state_lock(s_state_mutex);
+        s_snapshot.mounted = mounted;
+        s_snapshot.mode = mounted ? Mode::kAppMounted : Mode::kError;
+        SetOperationLocked(Operation::kExitUsbMode,
+                           mounted ? OperationPhase::kSucceeded : OperationPhase::kFailed, err);
+        event = BuildEventLocked();
+        handler = s_event_handler;
+        context = s_event_context;
+    }
+    DispatchEvent(event, handler, context);
+}
+
 void StorageWorker(void*)
 {
     QueuedRequest request = {};
@@ -458,6 +560,12 @@ void StorageWorker(void*)
         switch (request.operation) {
             case Operation::kFormatSd:
                 HandleFormatRequest();
+                break;
+            case Operation::kEnterUsbMode:
+                HandleEnterUsbModeRequest();
+                break;
+            case Operation::kExitUsbMode:
+                HandleExitUsbModeRequest();
                 break;
             case Operation::kNone:
                 break;
@@ -722,6 +830,47 @@ esp_err_t RequestFormatSdCard()
     return err;
 }
 
+esp_err_t RequestEnterUsbMode()
+{
+    {
+        std::lock_guard<std::mutex> lock(s_state_mutex);
+        if (s_snapshot.mode != Mode::kAppMounted) {
+            ESP_LOGW(kTag, "Enter USB mode ignored while mode=%s", ModeName(s_snapshot.mode));
+            return ESP_ERR_INVALID_STATE;
+        }
+        if (!s_snapshot.mounted) {
+            ESP_LOGW(kTag, "Enter USB mode ignored; no mounted card");
+            return ESP_ERR_NOT_FOUND;
+        }
+        // No host on the other end means the card would be handed to nobody, and the app
+        // would lose its filesystem for nothing.
+        s_snapshot.usb_detected = ReadUsbDetected();
+        if (!s_snapshot.usb_detected) {
+            ESP_LOGW(kTag, "Enter USB mode ignored; no USB cable");
+            return ESP_ERR_INVALID_ARG;
+        }
+    }
+    return QueueRequest(Operation::kEnterUsbMode);
+}
+
+esp_err_t RequestExitUsbMode()
+{
+    {
+        std::lock_guard<std::mutex> lock(s_state_mutex);
+        if (s_snapshot.mode != Mode::kUsbMounted && s_snapshot.mode != Mode::kEnteringUsbMode) {
+            return ESP_ERR_INVALID_STATE;
+        }
+    }
+    return QueueRequest(Operation::kExitUsbMode);
+}
+
+bool IsUsbModeActive()
+{
+    std::lock_guard<std::mutex> lock(s_state_mutex);
+    return s_snapshot.mode == Mode::kUsbMounted || s_snapshot.mode == Mode::kEnteringUsbMode ||
+           s_snapshot.mode == Mode::kExitingUsbMode;
+}
+
 const char* MountPoint()
 {
     return kMountPoint;
@@ -734,6 +883,12 @@ const char* ModeName(Mode mode)
             return "app_mounted";
         case Mode::kFormatting:
             return "formatting";
+        case Mode::kEnteringUsbMode:
+            return "entering_usb_mode";
+        case Mode::kUsbMounted:
+            return "usb_mounted";
+        case Mode::kExitingUsbMode:
+            return "exiting_usb_mode";
         case Mode::kError:
             return "error";
     }
@@ -747,6 +902,10 @@ const char* OperationName(Operation operation)
             return "none";
         case Operation::kFormatSd:
             return "format_sd";
+        case Operation::kEnterUsbMode:
+            return "enter_usb_mode";
+        case Operation::kExitUsbMode:
+            return "exit_usb_mode";
     }
     return "unknown";
 }

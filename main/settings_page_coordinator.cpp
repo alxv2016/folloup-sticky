@@ -94,6 +94,22 @@ epaper_ui::SettingsPageState SettingsPageCoordinator::BuildState(
         state.storage_status.used_percent = storage_stats.used_percent;
     }
 
+    // Label tracks the mode so the button reads correctly if the page is revisited while
+    // OTG is active or mid-transition.
+    std::string_view otg_label = "Enable OTG";
+    if (storage_snapshot.mode == storage_service::Mode::kUsbMounted) {
+        otg_label = "Disable OTG";
+    } else if (storage_snapshot.mode == storage_service::Mode::kEnteringUsbMode) {
+        otg_label = "Enabling OTG";
+    } else if (storage_snapshot.mode == storage_service::Mode::kExitingUsbMode) {
+        otg_label = "Disabling OTG";
+    }
+    state.enable_otg_button = {
+        .label_text = otg_label,
+        .selected =
+            IsRoleFocused(page_navigation::NavigationItemRole::kSettingsEnableOtgButton),
+    };
+
     std::string_view format_label = "Format SD";
     if (storage_snapshot.mode == storage_service::Mode::kFormatting ||
         (storage_snapshot.operation == storage_service::Operation::kFormatSd &&

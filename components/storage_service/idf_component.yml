@@ -1,0 +1,4 @@
+dependencies:
+  # USB mass-storage (OTG) mode, which exposes the SD card to a host over USB.
+  # CONFIG_TINYUSB_MSC_ENABLED is set in sdkconfig.defaults.
+  espressif/esp_tinyusb: "^2.0.0"
