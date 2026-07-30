@@ -8,6 +8,7 @@
 #include "epaper_ui/select_modal.h"
 #include "esp_log.h"
 #include "notes_page_coordinator.h"
+#include "clip_playback_runtime.h"
 #include "overlay_runtime.h"
 #include "page_navigation/page_focus_projection.h"
 #include "recording_archive_service.h"
@@ -21,6 +22,7 @@ constexpr int kItemIndexBits = 16;
 constexpr int32_t kItemIndexMask = (1 << kItemIndexBits) - 1;
 
 enum class ItemAction : uint8_t {
+    kPlayRecording,
     kViewDetails,
     kFollowUp,
     kTurnToTask,
@@ -284,6 +286,12 @@ bool ShowItemActionsModal()
         };
         s_item_actions.clear();
         modal.title_text = "Note";
+        // Only offered when the row actually has audio on the card; a transcript-only
+        // entry would otherwise show an action that silently does nothing.
+        if (!entry->recording_path.empty()) {
+            modal.items.push_back({"Play recording"});
+            s_item_actions.push_back(ItemAction::kPlayRecording);
+        }
         modal.items.push_back({"View details"});
         s_item_actions.push_back(ItemAction::kViewDetails);
         modal.items.push_back({entry->follow_up ? "Remove follow-up" : "Follow up"});
@@ -328,6 +336,11 @@ bool HandleItemActionSelection(int selected_index)
     }
 
     switch (action) {
+        case ItemAction::kPlayRecording:
+            // Streams on a worker; the modal closes immediately rather than blocking the
+            // submit chain for the length of the clip.
+            (void)clip_playback_runtime::PlayFileAsync(entry.recording_path);
+            break;
         case ItemAction::kViewDetails: {
             std::lock_guard<std::mutex> lock(s_mutex);
             s_pending_view_details_id = entry.recording_id;

@@ -1,8 +1,24 @@
-# Folloup Sticky App Architecture
+# Followup App Architecture
 
-This project is an ESP-IDF C++17 firmware port for the Seeed reTerminal Sticky,
-based on the local hardware spec in
-`docs/reTerminal_Sticky_Hardware_Spec_Software_Porting-en.md`.
+This project is an ESP-IDF C++17 firmware application for the
+[Waveshare ESP32-S3-ePaper-3.97](https://docs.waveshare.com/ESP32-S3-ePaper-3.97).
+The board details are in `docs/waveshare-epaper-hardware-spec.md`.
+
+The codebase began as a port targeting the Seeed reTerminal Sticky, and parts of
+this document still describe that lineage where the design rationale carried
+over. Where the two boards differ, this document describes the Waveshare
+hardware, which is the only target the firmware builds for today. The most
+significant differences:
+
+| Area | reTerminal Sticky | Waveshare ESP32-S3-ePaper-3.97 |
+| --- | --- | --- |
+| Input | GT911 capacitive touch + buttons | Buttons only — no touch controller |
+| Microphone | PDM mic (`pdm_mic`, `microphone_service`) | ES8311 codec over I2S (`audio_hal`) |
+| Speaker | none | ES8311 + NS4150B amplifier |
+| Power | BQ27220 fuel gauge + discrete latch | AXP2101 PMIC (rails, charger, power key) |
+| RTC | PCF85063 | PCF85063 |
+| IMU | — | QMI8658 6-axis |
+| Display bus | SPI2 shared with SD | Dedicated SPI3, no bus sharing |
 
 ## Current Scope
 
@@ -10,22 +26,29 @@ The repository is a multi-page ESP-IDF product application (dashboard home,
 onboarding, and a set of feature pages plus overlays) built on:
 
 - ESP32-S3 target configuration.
-- 32 MB QSPI flash configuration.
-- 8 MB octal PSRAM configuration.
+- 16 MB flash configuration.
+- 8 MB PSRAM configuration.
 - OTA-ready partition layout with rollback enabled.
 - A minimal C++ `app_main()`.
-- A ported BQ27220 fuel-gauge driver.
-- A ported PCF8563 RTC driver.
-- A `board` component for Sticky-specific power, charger, ADC, and BQ27220
-  and RTC wiring.
+- An `axp2101` component: the PMIC driver that owns the rails, charger, battery
+  telemetry, and the power-key interrupt stream.
+- A ported PCF85063 RTC driver.
+- A `qmi8658` component for the 6-axis IMU used by motion wake.
+- A `board` component (`waveshare_board`) that owns Waveshare-specific pin
+  mapping, PMIC rail bring-up, the shared sensor I2C bus, and the audio codec
+  instance.
 - A `power_service` component that initializes power hardware and logs a
   diagnostic power/battery/RTC snapshot.
 - A `button_service` component that logs app-facing button events through
   Espressif's managed button component.
-- A `buzzer_service` component that owns PWM buzzer setup and low-level sound
-  patterns.
+- An `audio_hal` component wrapping the ES8311 codec for full-duplex 16 kHz
+  capture and playback, including the NS4150B power-amp enable.
+- A `system_sound_service` component that owns the decoded sound-cue catalog and
+  streams cues to the codec.
 - A `feedback_service` component that owns app-facing interaction feedback
-  policy and maps app events onto buzzer patterns.
+  policy and maps app events onto sound cues.
+- A `playback_service` component that streams a clip to the codec, either from a
+  WAV file on SD or straight from the PSRAM chunks `recording_service` holds.
 - A `design_tokens` component that owns shared product UI constants such as
   spacing, colors, typography roles, and component sizing.
 - An `epaper_ui` component that owns the reusable e-paper presentation
@@ -34,52 +57,50 @@ onboarding, and a set of feature pages plus overlays) built on:
   the many list/menu/input widgets) plus the full page renderers (dashboard,
   onboarding, vibe check, summarize, notes, todos, follow-up, details, settings,
   wifi, time).
-- A ported `sd_card` component for SDSPI/FATFS MicroSD access.
+- A ported `sd_card` component for SDMMC/FATFS MicroSD access.
 - A `storage_service` component that owns app-facing MicroSD mount, format, and
   debug status policy.
 - A `wifi_service` component that owns ESP-IDF Wi-Fi station/AP lifecycle,
   saved credentials, scan state, and the backend HTTP routes for setup/status.
 - A `timezone_service` component that owns timezone settings, SNTP sync,
-  system-time updates, PCF8563 RTC writeback, and backend HTTP routes for time
+  system-time updates, PCF85063 RTC writeback, and backend HTTP routes for time
   settings/runtime state.
 - A `gemini_service` component that owns Gemini API key settings precedence,
   backend HTTP routes, and Gemini authentication readiness state.
-- An input-only `pdm_mic` component that owns ESP-IDF I2S PDM RX capture.
-- A `microphone_service` component that owns Sticky microphone pin mapping,
-  microphone power/read lifecycle, and input-level calculation.
 - A `recording_service` component that owns voice-input recording state,
   pre-roll buffering, PSRAM-backed clips, input-level tracking, and WAV export
   to MicroSD.
 - A `recording_session_service` component that owns the press/hold recording
-  flow, tag selection, and save/transcription orchestration.
+  flow, the start/stop sound cues, the review playback of the take, tag
+  selection, and save/transcription orchestration.
 - A `recording_archive_service` component that owns the SD recording index
   (listing, metadata, follow-up flags) surfaced by the Notes/Todos/Follow-up
   pages and the sticky-note overlay.
 - A `transcription_service` and a `summary_service` component that own the
   Gemini-backed transcription and summary flows respectively (these live in
   their own components, not inside `gemini_service`).
-- A `shared_bus_service` component that serializes the shared SPI2 bus between
-  the SD card and the e-paper panel (`StorageBusGuard` / `DisplayBusGuard`).
-- A ported mono SSD1677 e-paper panel driver.
+- A ported mono SSD1677 e-paper panel driver. On this board the panel owns a
+  dedicated SPI3 bus, so there is no shared-bus serialization to do — the
+  Sticky's `shared_bus_service` has no counterpart here.
 - A `display_service` component that owns app-facing e-paper bring-up, blank
   screen refresh, display sleep, and light-sleep recovery.
 - Staged e-paper asset generation scripts and source PNG/TTF assets for the
-  upcoming app UI.
-- A ported GT911 capacitive touch controller driver.
-- A `touch_service` component that owns app-facing touch bring-up, interrupt
-  servicing, and touch event logging.
-- A ported LSM6DS3 / LSM6DS3TR-C inertial sensor driver.
-- An `imu_service` component that owns app-facing IMU bring-up and direct sample
-  logging for first hardware validation.
+  app UI.
+
+- A ported QMI8658 6-axis inertial sensor driver.
+- An `imu_service` component that owns app-facing IMU bring-up and sample
+  logging, used by motion-based wake.
 - A `device_sleep_service` component that owns auto-sleep policy state,
   inactivity timing, app-level blocker checks, and staged sleep events.
 - A `task_config` component that owns the app-created FreeRTOS task priority
   and core-affinity mapping.
-- A ported SHT40 temperature/humidity sensor driver.
-- An `environment_service` component that owns app-facing ambient
-  temperature/humidity bring-up and sample logging.
+The board carries an SHTC3 temperature/humidity sensor on the shared sensor I2C
+bus. It is not driven by any component today.
 
-The rest of the board peripherals have not been ported yet.
+This board has no touch controller — input is entirely buttons. Some widget code
+still carries `kTouch*` hit-slop constants and a `kTouchContact` feedback cue
+inherited from the Sticky port; they are vestigial and nothing dispatches touch
+events.
 
 ## Project Layout
 
@@ -138,159 +159,36 @@ main/
   app_interaction_result.h
   app_interaction_target.h
 components/
+  audio_hal/
+  axp2101/
   board/
-    include/
-      sticky_board_config.h
-      sticky_board.h
-    sticky_board.cpp
-  power_service/
-    include/
-      power_service.h
-    power_service.cpp
   button_service/
-    include/
-      button_service.h
-    button_service.cpp
-  buzzer_service/
-    include/
-      buzzer_service.h
-    buzzer_service.cpp
-  feedback_service/
-    include/
-      feedback_service.h
-    feedback_service.cpp
   design_tokens/
-    include/
-      design_tokens.h
-  epaper_ui/                      # ~55 primitives + page renderers (not exhaustive here)
-    include/
-      epaper_ui/
-        bitmap_font.h
-        font_renderer.h
-        generated_epaper_fonts.h
-        overlay_geometry.h
-        status_bar.h
-        global_footer.h
-        # overlays: card_modal.h, select_modal.h, toast.h, keyboard*.h, sticky_note.h
-        # primitives: carousel.h, scroll_container.h, timeline_list.h, list_item*.h,
-        #   menu_*.h, tag.h, badge.h, toggle.h, checkbox.h, segment_control.h, *_input.h ...
-        # pages: dashboard_page.h, onboarding_page.h, vibe_check_page.h, summarize_page.h,
-        #   notes_page.h, todos_page.h, follow_up_page.h, details_page.h, settings_page.h,
-        #   wifi_page.h, time_page.h, lock_screen.h
-    bitmap_font.cpp
-    font_renderer.cpp
-    generated_epaper_fonts.cpp
-    status_bar.cpp
-    # ... one .cpp per header above (global_footer.cpp, card_modal.cpp, sticky_note.cpp,
-    #     carousel.cpp, scroll_container.cpp, dashboard_page.cpp, onboarding_page.cpp, ...)
-  project_assets/
-    CMakeLists.txt
-    asset_manifest.h
-    asset_types.h
-    generated_epaper_footer_icons.h
-    generated_epaper_footer_icons.cpp
-    generated_epaper_icons.h
-    generated_epaper_icons.cpp
-    generated_epaper_logos.h
-    generated_epaper_logos.cpp
-    project_assets.h
-    project_assets.cpp
-  storage_service/
-    include/
-      storage_service.h
-    storage_service.cpp
-  gemini_service/
-    include/
-      gemini_service.h
-    gemini_service.cpp
-  wifi_service/
-    include/
-      wifi_service.h
-    wifi_service.cpp
-  timezone_service/
-    include/
-      timezone_service.h
-    timezone_service.cpp
-  pdm_mic/
-    include/
-      pdm_mic.h
-    pdm_mic.cpp
-  microphone_service/
-    include/
-      microphone_service.h
-    microphone_service.cpp
-  recording_service/
-    include/
-      recording_service.h
-    recording_service.cpp
-  recording_session_service/
-  recording_archive_service/
-  transcription_service/
-  summary_service/
-  shared_bus_service/
+  device_sleep_service/
   display_service/
-    include/
-      display_service.h
-    display_service.cpp
-  touch_service/
-    include/
-      touch_service.h
-    touch_service.cpp
-  imu_service/
-    include/
-      imu_service.h
-    imu_service.cpp
-  task_config/
-    include/
-      followup_task_config.h
-  page_navigation/
-    include/
-      page_navigation/
-        navigation_input_controller.h
-        navigation_model.h
-        page_focus_projection.h
-        roving_focus.h
-    navigation_input_controller.cpp
-    navigation_model.cpp
-    page_focus_projection.cpp
-    roving_focus.cpp
-  environment_service/
-    include/
-      environment_service.h
-    environment_service.cpp
-  sd_card/
-    include/
-      sd_card.h
-    sd_card.cpp
   epaper_panel/
-    include/
-      epaper_panel.h
-    epaper_panel.cpp
-    ssd1677_driver.cpp
-  bq27220/
-    include/
-      bq27220.h
-    priv_include/
-      bq27220_reg.h
-    bq27220.cpp
-  pcf8563/
-    include/
-      pcf8563.h
-    pcf8563.cpp
-  gt911/
-    include/
-      gt911.h
-    gt911.cpp
-  lsm6ds3/
-    include/
-      lsm6ds3.h
-    priv_include/
-      lsm6ds3_reg.h
-    lsm6ds3.cpp
-  sht40/
-    include/
-      sht40.h
-    sht40.cpp
+  epaper_ui/
+  feedback_service/
+  gemini_service/
+  i2c_device/
+  imu_service/
+  page_navigation/
+  pcf85063/
+  playback_service/
+  power_service/
+  project_assets/
+  qmi8658/
+  recording_archive_service/
+  recording_service/
+  recording_session_service/
+  sd_card/
+  storage_service/
+  summary_service/
+  system_sound_service/
+  task_config/
+  timezone_service/
+  transcription_service/
+  wifi_service/
 partitions.csv
 sdkconfig
 sdkconfig.defaults
@@ -299,9 +197,7 @@ docs/
   asset-generation.md
   auto-sleep.md
   gemini-service.md
-  gt911-touch-reset-debugging.md
-  reTerminal_Sticky_Hardware_Spec_Software_Porting-en.md
-  shared-spi-bus-contention.md
+  waveshare-epaper-hardware-spec.md
 scripts/
   generate_epaper_assets_common.py
   generate_epaper_footer_icons.py
@@ -521,7 +417,7 @@ The current early startup sequence is:
 
 - Detects whether the running image is `ESP_OTA_IMG_PENDING_VERIFY`.
 - Marks the image valid with `esp_ota_mark_app_valid_cancel_rollback()`.
-- Asserts the Sticky power latch before OTA validation.
+- Brings up the AXP2101 rails before OTA validation.
 - Initializes `power_service`.
 - Logs one power/battery diagnostic snapshot.
 - Initializes `feedback_service` and requests the startup feedback.
@@ -533,15 +429,15 @@ The current early startup sequence is:
   presentation worker.
 - Initializes `overlay_runtime`, which owns global modal/toast overlay state,
   shutdown-confirm focus, and overlay presentation hooks.
-- Initializes `touch_service` and logs app-facing touch events.
 - Initializes `imu_service` and logs three direct IMU samples for bring-up.
-- Initializes `environment_service` and logs three direct SHT40 samples for
-  bring-up.
+- Initializes `power_key_runtime`, attaching the PMIC power-key handler that
+  routes a short press to the lock screen and a long press to the shutdown
+  confirmation.
 - Starts the auto-sleep runtime, which wires `device_sleep_service`, polls IMU
   samples for inactivity, owns the auto-sleep worker task, and handles display
   sleep/light sleep actions.
 - Initializes `timezone_service`, which loads timezone/time-sync state from
-  NVS, applies the configured timezone, and seeds system time from the PCF8563
+  NVS, applies the configured timezone, and seeds system time from the PCF85063
   RTC when available.
 - Initializes `wifi_service`, which loads saved Wi-Fi credentials or built-in
   sdkconfig credentials, starts station mode when credentials exist, or starts
@@ -561,7 +457,7 @@ The current early startup sequence is:
   `timezone_service` so network time sync starts after station connectivity is
   available.
 - Runs a small shutdown task so button callbacks can request shutdown without
-  directly executing the power-latch release sequence.
+  directly executing the PMIC power-off sequence.
 - Seeds the status bar and footer state (no refresh), then renders the first
   screen with a single **full** refresh as the first thing the panel paints, and
   finally sets `s_startup_complete`. On first boot (NVS `app_state`/`onboarded`
@@ -590,25 +486,31 @@ Current app-level button interactions are:
 - `UP` / `DOWN` move roving focus (or scroll an entered control) one step per
   press, with wraparound, on the active screen. Navigation is driven on
   press-down; a plain `UP` / `DOWN` single click (the release event) is inert.
-- `POWER_OK` single click activates / submits the focused item on the active
-  screen (footer target, page control, or modal action).
+- `BOOT` and the rocker's middle key (`FN`) both single-click to activate /
+  submit the focused item on the active screen (footer target, page control, or
+  modal action). `button_service::IsPrimaryButton` is what makes the two
+  equivalent.
 - Pressing and **holding** `DOWN` (a long-press) is the app-wide "exit an entered
   control" gesture, handled per screen: it backs out of a control the user has
   stepped into -- e.g. the Vibe Check card, an entered scroll container /
   timeline item list on the Summarize / Notes / Todos / Follow-up pages, the WiFi
   network list, or the sticky-note transcript scroll. It is a no-op at the app
   level. (This replaced the former `DOWN` double-click exit.)
-- `POWER_OK` double click toggles the lock screen.
-- pressing and holding `POWER_OK` arms then starts the recording-session flow;
-  releasing the button stops recording and opens the select modal when a clip is
-  ready.
-- holding `UP` while pressing `POWER_OK` opens the shutdown confirmation modal.
+- A short press of the `PWR` key toggles the lock screen; a ~1s hold opens the
+  shutdown confirmation modal. `PWR` is not a GPIO button: both arrive as AXP2101
+  interrupts, decoded by `main/power_key_runtime`. A sustained 6s hold bypasses
+  firmware entirely and the PMIC cuts the rails.
+- The rocker middle key has no double-click or long-press action. Lock and
+  shutdown moved to `PWR`; recording is exclusive to `BOOT`.
+- Pressing and holding `BOOT` arms then starts the recording-session flow;
+  releasing stops it. See [Recording Flow](#recording-flow) for what happens
+  between the release and the tag menu.
 - while the select modal is visible, `UP` and `DOWN` press down plus gated
-  hold-repeat move roving focus with wraparound, `POWER_OK` submits the focused
+  hold-repeat move roving focus with wraparound, a primary-button click submits the focused
   item, and touch focuses the touched item on contact before submitting on
   release.
 - while the shutdown modal is visible, `UP` and `DOWN` press down plus gated
-  hold-repeat move roving focus with wraparound, `POWER_OK` activates the
+  hold-repeat move roving focus with wraparound, a primary-button click activates the
   focused action, and touch focuses `Cancel` or `Shut down` on contact before
   activating on release.
 - when no overlay captures input, footer targets participate in the same touch
@@ -618,7 +520,7 @@ Current app-level button interactions are:
   repainted.
 
 Shutdown still runs through the deferred AppShell shutdown task so the
-power-latch release sequence does not execute inside the button callback. The
+PMIC power-off sequence does not execute inside the button callback. The
 shutdown chord now routes through the app-owned input/overlay path first, and
 only a confirmed modal action notifies the task. The task waits briefly before
 calling `power_service::RequestShutdown()` so the analog button/Q2 bootstrap
@@ -736,13 +638,13 @@ The current app-wide interaction feedback lifecycle is:
   app-owned feedback cues
 - shared interaction contracts such as `main/app_interaction_result.h` should
   use app-owned cue enums rather than depending on `feedback_service` or
-  `buzzer_service` types directly
+  `system_sound_service` types directly
 - retained overlay state may queue a pending neutral feedback cue when modal or
-  toast presentation changes, but it should not play buzzer feedback directly
+  toast presentation changes, but it should not play sound feedback directly
 - `main/app_shell.cpp` is the single place that maps neutral app-owned feedback
   cues onto `feedback_service` events and requests actual playback
 
-This keeps interaction ownership local while preventing buzzer policy from
+This keeps interaction ownership local while preventing feedback policy from
 leaking into reusable runtime helpers or shared interaction contracts.
 
 ### Time configuration page
@@ -808,6 +710,48 @@ intentionally not surfaced on this page. It is metadata only (kept in NVS and
 the web portal) and has no effect on timekeeping, which is driven solely by the
 timezone selection plus NTP.
 
+## Recording Flow
+
+`recording_session_service` owns the whole press-and-hold take, from the first
+cue to the tag menu. The phase machine is:
+
+```text
+kIdle -> kArmed -> kStartCue -> kRecording -> kStopCue -> kPlayingBack
+      -> kAwaitingTagSelection -> kSaving -> kTranscribing -> kComplete
+```
+
+- **kArmed** — `BOOT` press-down arms the recorder.
+- **kStartCue** — the hold threshold fires, capture starts, and the start cue
+  (`SoundCue::kSpeaking`) plays. Capture deliberately starts *before* the cue:
+  waiting for the cue to finish would swallow the speaker's first word, so the
+  cue overlaps the opening moments of the take.
+- **kRecording** — entered when the start cue completes. If `BOOT` is released
+  while still in `kStartCue`, the finish is deferred rather than dropped
+  (`s_finish_pending_after_start_cue`); without that, a hold barely longer than
+  the cue would never stop.
+- **kStopCue** — release finishes capture and plays the stop cue
+  (`SoundCue::kInterrupt`). Playback waits for the cue to complete rather than
+  overlapping it, since both share the one codec output.
+- **kPlayingBack** — the take is replayed to the user from the PSRAM chunks, via
+  `playback_service::PlayClip`, on a short-lived worker task. Playback blocks for
+  the length of the clip, so it cannot run on the cue-callback task.
+- **kAwaitingTagSelection** — the tag menu opens. **The clip is still only in
+  PSRAM at this point.** That is the reason playback comes first: the user hears
+  the take, and the menu's `Discard` option throws away a bad one without it ever
+  reaching the SD card. Saving happens in `kSaving`, after a tag is chosen.
+
+Every route out of `kStopCue` converges on `AdvanceToTagSelection` — playback
+finished, playback could not start, or the stop cue itself failed — so a missing
+or broken cue degrades to "no replay" rather than stranding the session.
+
+Cue callbacks carry a token that is bumped on every queued cue and on
+`ResetToIdleLocked`, so a result arriving after a cancel is dropped instead of
+driving a stale transition.
+
+Auto-sleep is blocked while `playback_service::IsPlaying()`, since neither the
+replay nor the Details page's play action touches recording state and the
+inactivity timer would otherwise keep counting through the clip.
+
 ## Task Mapping
 
 App-owned FreeRTOS tasks use the shared mapping in
@@ -818,7 +762,7 @@ around a simple split:
   `esp_timer`, and Wi-Fi driver work there in the current `sdkconfig`, so app
   Wi-Fi/time coordination stays close to that side.
 - CPU1 is the product hardware/UI side. Touch, audio capture, storage work,
-  buzzer feedback, and sleep-driven display transitions are kept away from CPU0
+  sound feedback, and sleep-driven display transitions are kept away from CPU0
   as the app scales.
 
 On single-core builds, the shared task config maps the app core back to CPU0.
@@ -826,15 +770,15 @@ On single-core builds, the shared task config maps the app core back to CPU0.
 | Task | Owner | Priority | Core | Responsibility |
 | --- | --- | ---: | --- | --- |
 | `record_capture` | `recording_service` | 5 | CPU1 | Timing-sensitive microphone capture, pre-roll, and clip buffering. |
-| `touch_service` | `touch_service` | 5 | CPU1 | GT911 interrupt servicing and app-facing touch events. |
+| `axp2101_irq` | `axp2101` | 2 | CPU1 | PMIC interrupt servicing, including power-key short/long press. |
 | `app_sleep` | `device_sleep_runtime` | 4 | CPU1 | Display sleep, light-sleep entry/exit, and wake recovery actions. |
-| `app_shutdown` | `app_shell` | 4 | CPU1 | Deferred power-latch release after POWER_OK long-press release. |
+| `app_shutdown` | `app_shell` | 4 | CPU1 | Deferred PMIC power-off after the shutdown modal is confirmed. |
 | `sleep_motion` | `device_sleep_runtime` | 3 | CPU1 | 200 ms IMU polling and motion/stillness classification. |
 | `wifi_transition` | `wifi_service` | 3 | CPU0 | Wi-Fi station/AP/stop/disconnect transitions. |
 | `wifi_callbacks` | `wifi_service` | 3 | CPU0 | App-facing Wi-Fi event delivery outside ESP event callbacks. |
 | `storage_service` | `storage_service` | 2 | CPU1 | Long-running SD operations such as format. |
 | `timezone_sync` | `timezone_service` | 2 | CPU0 | SNTP sync, system-time update, and RTC writeback. |
-| `buzzer` | `buzzer_service` | 2 | CPU1 | Non-critical PWM tone and pattern playback. |
+| `clip_playback` | `recording_session_service` | 2 | CPU1 | Short-lived worker that replays a just-recorded clip. |
 
 The mapping intentionally keeps long-running SD work below input and audio
 capture. Future tasks should be added to `task_config` first, with a short
@@ -850,7 +794,7 @@ Wi-Fi and time services follow the same boundary:
   `esp_wifi` mode changes, station/AP configuration, NVS credential storage,
   network scans, and the HTTP backend server used during AP setup.
 - `timezone_service` owns timezone catalog/aliases, persisted timezone settings,
-  SNTP setup, system-time updates, PCF8563 RTC read/write through
+  SNTP setup, system-time updates, PCF85063 RTC read/write through
   `power_service`, and backend HTTP routes for time settings.
 - `app_shell` wires the two services together by forwarding Wi-Fi connectivity
   events into `timezone_service::SetNetworkConnected(...)`.
@@ -897,7 +841,7 @@ Auto-sleep is split across a policy component and a product runtime helper:
 state, and transition events, but it does not touch display, GPIO, or ESP sleep
 hardware. `main/device_sleep_runtime.cpp` owns product-specific auto-sleep
 runtime behavior: IMU inactivity polling, the event worker task, display sleep
-commands, ESP light-sleep entry, POWER_OK wake handling, and app-level blocker
+commands, ESP light-sleep entry, wake handling, and app-level blocker
 aggregation. `app_shell` should only provide settings, provide app-owned
 signals such as shutdown-pending state, start the runtime, and forward user
 activity. See `docs/auto-sleep.md` for the stable feature behavior and the
@@ -914,21 +858,21 @@ Current auto-sleep behavior:
   `8 mg`.
 - Display sleep refreshes the e-paper panel to a blank screen and then puts the
   panel to sleep.
-- ESP32-S3 light sleep first configures `PWR_HOLD` / `GPIO45` and `PWR_LOCK` /
-  `GPIO46` to remain driven high during light sleep, waits for `POWER_OK` /
-  `GPIO4` to be released, and arms `POWER_OK` through EXT1 as the active-low
-  wake source. It also arms wake-only `POWER_OK` event suppression before
-  entering ESP light sleep so the wake press cannot become a normal long-press
-  shutdown request. It then refreshes the panel to a blank screen, puts the
-  panel to sleep, and enters
-  `esp_light_sleep_start()`.
+- ESP32-S3 light sleep waits for `ACTION` / `GPIO0` to be released, then arms
+  `ACTION` and the PMIC IRQ / `GPIO38` as active-low `gpio_wakeup_enable`
+  sources. It suspends button polling (light sleep's clock jump would otherwise
+  replay every missed tick on wake and destroy click classification), arms
+  wake-only `ACTION` event suppression so the wake press cannot start a
+  recording, refreshes the panel to a blank screen, puts the panel to sleep, and
+  enters `esp_light_sleep_start()`. There is no power latch to preserve: the
+  AXP2101 holds the rails across sleep.
 - The wake-causing power-button events are consumed as wake-only after light
   sleep, so they do not trigger normal power-button behavior or leave
   `shutdown_pending` set as an auto-sleep blocker.
 - After light-sleep wake, the display is restored to a blank screen with a
-  forced full refresh and `touch_service` recovers the GT911 controller before
-  normal touch input resumes.
+  forced full refresh.
 - Inactivity is blocked while recording is active, armed, saving, or exporting;
+  while a clip is playing back;
   while shutdown is pending; while an e-paper refresh is active; during
   app-declared storage write activity; while AP setup mode is active; and while
   SNTP time sync is in progress.
@@ -940,224 +884,112 @@ SD-card formatting remains exposed through `storage_service`, but no demo
 button path currently invokes it. A future app UI should call the storage API
 through its own action/controller layer.
 
-### `components/bq27220`
+### `components/axp2101`
 
-This is the generic BQ27220 battery fuel-gauge driver ported from:
-
-```text
-/Users/tieuvong/Desktop/folloup/sticky_port/Device_Peripheral_Demo/components/bq27220
-```
-
-The driver should stay board-agnostic. It works from an initialized
-`i2c_master_dev_handle_t` and should not own Sticky-specific GPIO numbers or
-I2C ports.
-
-The driver exposes two usage styles:
-
-- lightweight direct helpers such as `bq27220_probe()` and
-  `bq27220_read_voltage_mv()`
-- profile/configuration handle APIs such as `bq27220_create()`
-
-For early bring-up, prefer the lightweight direct-helper flow used by the
-source demo: create I2C bus, add BQ27220 device, probe, then read telemetry.
-
-### `components/pcf8563`
-
-This is the generic PCF8563 RTC driver ported from:
-
-```text
-/Users/tieuvong/Desktop/folloup/sticky_port/Device_Peripheral_Demo/components/pcf8563
-```
-
-The driver should stay board-agnostic. It works from an initialized
-`i2c_master_dev_handle_t` and should not own Sticky-specific GPIO numbers or
-I2C ports.
+This is the AXP2101 PMIC driver. On this board the PMIC is not optional: it feeds
+every rail, so a missing or unresponsive chip is unrecoverable by design and the
+constructor aborts.
 
 Current scope:
 
-- probe the RTC at address `0x51`
-- disable CLKOUT
-- read and set date/time
-- read, clear, and disable alarm/timer interrupt state
+- own the DC1 / ALDO1-3 rails, the single-cell charger profile, and the
+  system power-down voltage
+- expose battery level, voltage, temperature, charge state, and VBUS presence
+- own the power-key timings: press-to-power-on, the IRQ level time that splits a
+  short press from a long one, and the hardware press-to-power-off hold
+- run a dedicated IRQ task that reads and clears the status register, then hands
+  a decoded `InterruptEvent` to a registered callback in task context
 
-The interrupt helpers are an app-specific extension beyond the source demo's
-basic time read/write helpers. They exist because schematic page 5 ties
-`VDD_3V3_ENn` to `RTC_INTn`, so the shutdown path needs a way to clear an
-asserted RTC interrupt before releasing the latch.
+The driver stays app-agnostic. What a power-key press *means* belongs to
+`main/power_key_runtime`, not here.
+
+### `components/pcf85063`
+
+This is the PCF85063 RTC driver. It shares the sensor I2C bus with the PMIC and
+IMU.
+
+Current scope:
+
+- read and write wall-clock time
+- back the timezone service's RTC writeback path
+- keep timezone policy and SNTP scheduling out of the driver
 
 ### `components/board`
 
-This component centralizes Sticky-specific hardware access for the current power
-scope.
+This component centralizes Waveshare-specific hardware access. It is the only
+place that knows this board's pin mapping; generic drivers stay board-agnostic
+and are composed here.
 
-`sticky_board_config.h` owns:
+`waveshare_board_config.h` owns the pin map:
 
-- power latch data / `PWR_HOLD`: `GPIO_NUM_45`
-- power latch clock / `PWR_LOCK`: `GPIO_NUM_46`
-- power / OK button: `GPIO_NUM_4`
-- up button: `GPIO_NUM_5`
-- down button: `GPIO_NUM_6`
-- buzzer PWM output: `GPIO_NUM_48`
-- PDM microphone clock: `GPIO_NUM_19`
-- PDM microphone data: `GPIO_NUM_20`
-- PDM microphone power enable: `GPIO_NUM_38`, active high
-- MicroSD power enable: `GPIO_NUM_10`
-- MicroSD card detect: `GPIO_NUM_11`
-- MicroSD chip select: `GPIO_NUM_8`
-- MicroSD SPI clock: `GPIO_NUM_13`
-- MicroSD SPI MOSI/CMD: `GPIO_NUM_14`
-- MicroSD SPI MISO/D0: `GPIO_NUM_12`
-- shared SPI host: `SPI2_HOST`
-- shared SPI clock: `GPIO_NUM_13`
-- shared SPI MOSI: `GPIO_NUM_14`
-- shared SPI MISO: `GPIO_NUM_12`
-- e-paper power enable: `GPIO_NUM_47`
-- e-paper busy: `GPIO_NUM_18`
-- e-paper reset: `GPIO_NUM_17`
-- e-paper data/command: `GPIO_NUM_16`
-- e-paper chip select: `GPIO_NUM_15`
-- touch power enable: `GPIO_NUM_42`
-- touch interrupt: `GPIO_NUM_21`
-- touch reset: `GPIO_NUM_41`
-- touch I2C bus port: `I2C_NUM_0`
-- touch I2C SCL: `GPIO_NUM_2`
-- touch I2C SDA: `GPIO_NUM_3`
-- charger enable: `GPIO_NUM_39`, active low
-- charger state: `GPIO_NUM_40`
-- power-input ADC sense: `GPIO_NUM_9`
-- sensor I2C bus port: `I2C_NUM_1`
-- sensor I2C SCL: `GPIO_NUM_0`
-- sensor I2C SDA: `GPIO_NUM_1`
-- BQ27220 I2C address: `0x55`
-- BQ27220 interrupt pin: `GPIO_NUM_7`
-- PCF8563 I2C address: `0x51`
-- LSM6DS3TR-C I2C address: `0x6A`
-- IMU interrupt pin: `GPIO_NUM_7`
-- SHT40 primary I2C address: `0x44`
-- SHT40 alternate I2C address: `0x45`
-- I2C glitch filter and bus speed constants
+- ACTION / BOOT button: `GPIO_NUM_0` (also the light-sleep wake button)
+- rocker up: `GPIO_NUM_4`
+- rocker middle / FN: `GPIO_NUM_5`
+- rocker down: `GPIO_NUM_6`
+- e-paper (SSD1677) on a dedicated SPI3 bus: BUSY `GPIO_NUM_3`, DC `GPIO_NUM_9`,
+  CS `GPIO_NUM_10`, SCK `GPIO_NUM_11`, MOSI `GPIO_NUM_12`, RST `GPIO_NUM_46`,
+  no MISO
+- MicroSD over the SDMMC controller, 4-bit: CLK `GPIO_NUM_16`, CMD `GPIO_NUM_17`,
+  D0 `GPIO_NUM_15`, D1 `GPIO_NUM_7`, D2 `GPIO_NUM_8`, D3 `GPIO_NUM_18`
+- shared sensor I2C: SDA `GPIO_NUM_41`, SCL `GPIO_NUM_42` — carries the AXP2101
+  PMIC (`0x34`), the QMI8658 IMU, the PCF85063 RTC, the ES8311 codec control
+  interface, and an SHTC3 that nothing drives
+- PMIC interrupt: `GPIO_NUM_38`
+- ES8311 audio over I2S0: MCLK `GPIO_NUM_13`, BCLK `GPIO_NUM_14`, WS
+  `GPIO_NUM_47`, DIN `GPIO_NUM_21`, DOUT `GPIO_NUM_48`
+- NS4150B power-amp enable: `GPIO_NUM_39`
+- panel geometry: 800 x 480
 
-`sticky_board.h/.cpp` owns small board helper functions:
+There is no power latch on this board and no shared SPI bus to arbitrate: the
+AXP2101 holds the rails, and the panel owns SPI3 outright. Both were significant
+sources of Sticky-era complexity that simply do not apply here.
 
-- `sticky_board::EnablePowerHold()`
-- `sticky_board::ReleasePowerHold()`
-- `sticky_board::ConfigureChargerPins()`
-- `sticky_board::SetChargerEnabled(...)`
-- `sticky_board::ReadChargeState(...)`
-- `sticky_board::InitPowerInputSense()`
-- `sticky_board::ReadPowerInputSample(...)`
-- `sticky_board::ConfigureBq27220InterruptPin()`
-- `sticky_board::ReadBq27220InterruptLevel(...)`
-- `sticky_board::EnsureSharedSpiBus()`
-- `sticky_board::EnableEpaperPower()`
-- `sticky_board::EnableTouchPower()`
-- `sticky_board::ConfigureTouchInterruptPin(...)`
-- `sticky_board::ReadTouchInterruptLevel(...)`
-- `sticky_board::EnsureSensorI2cBus(...)`
-- `sticky_board::CreateSensorI2cBus(...)`
-- `sticky_board::CreateTouchI2cBus(...)`
-- `sticky_board::AddBq27220Device(...)`
-- `sticky_board::AddPcf8563Device(...)`
-- `sticky_board::AddLsm6ds3Device(...)`
-- `sticky_board::AddSht40Device(...)`
+`waveshare_board.h/.cpp` owns:
 
-Keep this layer focused on raw board mechanics: pins, buses, GPIO polarity, ADC
-setup, and latch timing.
+- `waveshare_board::EnablePowerHold()` — brings up the AXP2101 rails, charger,
+  and power-key behavior, and is the first thing `app_shell::Run()` calls
+- `waveshare_board::GetPmic()` — the shared `Axp2101` instance
+- `waveshare_board::GetAudioCodec()` — the shared `Es8311Codec` instance, created
+  on first use with output (and therefore the PA) enabled for its lifetime
+- `waveshare_board::EnsureSensorI2cBus(...)` — the one shared I2C master bus
 
-The sensor I2C bus is shared by the BQ27220, PCF8563, LSM6DS3TR-C, and SHT40.
-New callers should use `sticky_board::EnsureSensorI2cBus(...)` instead of
-creating their own bus handle. This keeps the ESP-IDF bus object singleton-like
-while allowing each service to add its own device handle.
-
-Power-latch GPIOs are configured as input/output during bring-up so firmware can
-both drive `PWR_HOLD` / `PWR_LOCK` and log the observed pad levels for hardware
-debugging. Startup follows the Seeed peripheral demo behavior and drives both
-`PWR_HOLD` and `PWR_LOCK` high to keep the board alive after the physical power
-button is released. For shutdown testing, the latest Page 6 trace treats
-`PWR_HOLD` as Q2's gate, Q2 as the path that feeds `PWR_EN`, and U3 Q as the
-signal that drives Q7. The current hard-off attempt first pulses `PWR_LOCK` with
-`PWR_HOLD` low to latch U3 Q low and release Q7, then drives `PWR_HOLD` high to
-try to turn Q2 off before falling back to soft-off if the rail remains powered.
-Before each latch sequence, the board layer disables ESP-IDF GPIO hold/deep-sleep
-hold behavior for GPIO45/GPIO46 and resets both pads before reconfiguring them.
-This is intentional because both pins are strapping-sensitive and power-latch
-debugging needs to rule out stale pad or sleep-hold state.
-
-The current schematic trace does not show `VDD_3V3_ENn` routed to an ESP32-S3
-GPIO. Page 5 shows it tied at the top level to `RTC_INTn`, which is powered from
-the always-on RTC rail. Treat hard power-off as latch/RTC-controlled through
-`PWR_HOLD`, `PWR_LOCK`, and the RTC interrupt path unless a future board revision
-or netlist proves a direct buck-boost enable GPIO exists.
-
-Known real power-off issue:
-
-- True rail-cut power-off is not currently working through firmware.
-- Shutdown sequences tested so far include:
-  - `PWR_HOLD=0`, `PWR_LOCK` low-to-high pulse, then `PWR_LOCK=0`
-  - the same pulse sequence after waiting for physical `POWER_OK` release
-  - the same sequence followed by placing GPIO45/GPIO46 in input/no-pull mode
-  - the vendor-demo inverse behavior: drive both `PWR_HOLD=0` and `PWR_LOCK=0`
-    and keep both low
-  - the alternate Page 6 Q2-gate interpretation: keep `PWR_LOCK=0` and hold
-    `PWR_HOLD=1`
-- All tested sequences left firmware running afterward on this board.
-- The current hard-off experiment combines the two Page 6 mechanisms: pulse
-  `PWR_LOCK` while `PWR_HOLD=0`, then hold `PWR_HOLD=1`.
-- The board layer also disables GPIO hold/deep-sleep hold and resets the latch
-  pads before release attempts, so stale ESP-IDF GPIO hold state has been ruled
-  out as the likely cause.
-- The Page 6 trace shows an ungated D2 path from `VIN_5V` to `PWR_EN`, so USB
-  can independently keep `PWR_EN` asserted while plugged in. Battery-only testing
-  still stayed powered, so USB/VBUS backfeed is not the only hard-off blocker.
-- Page 5 ties `VDD_3V3_ENn` to `RTC_INTn`; if the always-on RTC interrupt is
-  asserted low, it may keep or re-enable the main 3.3 V rail. True hard-off work
-  should include clearing/disabling RTC interrupt flags before releasing the
-  latch.
-- Current product behavior is therefore soft-off: attempt the latch release,
-  then enter ESP32 deep sleep if the rail remains alive.
-- To resume true hard power-off work, we need a confirmed schematic netlist,
-  vendor firmware sequence, RTC shutdown sequence, or board-revision note
-  explaining how U3/Q7/PWR_EN/RTC_INTn are intended to collapse `VDD_3V3`.
-
+Audio runs full duplex at a single 16 kHz clock for both capture and playback,
+chosen to match the recording and Gemini pipeline so no resampling is needed
+anywhere in the path. Output volume is set to `WAVESHARE_AUDIO_OUTPUT_VOLUME`
+(full scale) before output is enabled — the NS4150B into a small MX1.25 speaker
+has no headroom to give away, and the codec's own default is well below what is
+audible in the hand.
 ### `components/power_service`
 
 This component is the app-facing power layer. It composes the `board` helpers
-with the BQ27220 and PCF8563 drivers.
+with the AXP2101 PMIC and the PCF85063 RTC.
 
 Current responsibilities:
 
-- expose `power_service::EnablePowerHold()` so `main` can assert power hold as
-  the first application action
-- configure charger pins and enable charging
-- initialize power-input ADC sensing
-- initialize the sensor I2C bus, PCF8563 device, and BQ27220 device
+- expose `power_service::EnablePowerHold()` so `main` can bring up the PMIC rails
+  as the first application action
 - expose `power_service::ReadStatus(...)`
 - log one diagnostic snapshot through `power_service::LogDebugStatus()`
 
 The current diagnostic snapshot includes:
 
 - service initialization state
-- charger enabled state
-- charger GPIO state
-- averaged power-input ADC raw min/max/average plus calibrated sense voltage
-  when ADC calibration is available
-- USB/external-power detection using a conservative sense-pin threshold
-- BQ27220 battery telemetry when the gauge is available
-- BQ27220 full-charge status bit
-- low-battery-at-10-percent status derived from BQ27220 state of charge
-- BQ27220 operation status, BTP thresholds, and initial `BFG_INT` level
-- PCF8563 control/status-2 bits for alarm/timer flags and interrupt enables
+- battery level, voltage, and temperature from the PMIC fuel gauge
+- charge state and full-charge detection
+- VBUS presence and voltage
+- PCF85063 control/status-2 bits for alarm/timer flags and interrupt enables
 
-`power_service::RequestShutdown()` is the app-facing shutdown entry point. It is
-currently called by AppShell after a `POWER_OK` long press. It first clears and
-disables PCF8563 alarm/timer interrupt sources so `RTC_INTn` is not intentionally
-holding `VDD_3V3_ENn` low, then attempts the Sticky hardware latch release. If
-firmware is still running after that release returns, the service enters ESP32
-deep sleep as a soft-off fallback with `POWER_OK` / `GPIO4` configured as an
-active-low wake source. Before arming that wake source, the service waits for
-`POWER_OK` to be high/stable so the device does not immediately wake from an
-already-active button line.
+The AXP2101 owns rails, charging, and battery telemetry, so there are no charger
+GPIOs to configure and no power-input ADC to sense -- both were Sticky-specific
+and have no counterpart here.
 
+`power_service::RequestShutdown()` is the app-facing shutdown entry point,
+reached from the shutdown confirmation modal that a long `PWR` press opens. It
+first clears and disables PCF85063 alarm/timer interrupt sources, then calls
+`Axp2101::PowerOff()`, which cuts every rail. On battery the board goes dark
+there and never returns; while VBUS is present the PMIC keeps the rail fed, so
+the call can return with the board still powered -- the log says as much, and
+unplugging USB completes the power-down.
 ### `components/button_service`
 
 This C++ component owns app-facing button initialization and logging. It uses
@@ -1166,7 +998,7 @@ button-event state machine.
 
 Current scope:
 
-- `POWER_OK` on `GPIO4`
+- `ACTION` / BOOT on `GPIO0`
 - `UP` on `GPIO5`
 - `DOWN` on `GPIO6`
 - active-low GPIO buttons with internal pulls enabled by the managed component
@@ -1179,17 +1011,17 @@ Current app-shell usage on top of those low-level events is:
 
 - `UP` / `DOWN` press down: move roving focus (wraparound), one step per press.
   A plain `UP` / `DOWN` single click (the release) is inert.
-- `POWER_OK` single click: activate / submit the focused item
+- `BOOT` or rocker-middle `FN` single click: activate / submit the focused item
 - hold `DOWN` (long-press): app-wide "exit an entered control" gesture, handled
   per screen (no-op at the app level; replaced the former `DOWN` double-click)
-- `POWER_OK` double click: toggle the lock screen
-- hold `POWER_OK`: arm/start/finish the recording-session flow
-- `UP` held plus `POWER_OK` press down: open the shutdown confirmation modal
+- short `PWR` press: toggle the lock screen (an AXP2101 interrupt, not a GPIO button)
+- ~1s `PWR` hold: open the shutdown confirmation modal
+- hold `BOOT`: arm/start/finish the recording-session flow
 - select modal visible: `UP` and `DOWN` press down plus gated hold-repeat move
-  shared roving focus, `POWER_OK` submits, and touch updates focus then submits
+  shared roving focus, and a primary-button click submits
 - shutdown modal visible: `UP` and `DOWN` press down plus gated hold-repeat
-  move shared roving focus, `POWER_OK` activates the focused action, and touch
-  can directly hit either modal button
+  move shared roving focus, and a primary-button click activates the focused
+  action
 
 The app shell does not own modal focus routing directly. It hands button events
 to `main/input_focus_runtime.cpp`, which gives overlay focus traps first chance
@@ -1198,51 +1030,57 @@ to consume navigation movement, then defers submit/dismiss work to
 home screen and lock screen and only returns a `request_shutdown` intent after
 explicit confirmation.
 
-The auto-sleep runtime preserves `PWR_HOLD` / `GPIO45` and `PWR_LOCK` /
-`GPIO46` as driven-high outputs during ESP light sleep, then arms `POWER_OK` /
-`GPIO4` through EXT1 as the wake source. The managed button component still owns
-normal awake-state debounce and event generation; light-sleep wake setup stays
-in `main/device_sleep_runtime.cpp` so pre-sleep wake-only power-button event
-suppression and immediate display/touch recovery remain part of the auto-sleep
+The auto-sleep runtime arms `ACTION` / `GPIO0` and the PMIC IRQ / `GPIO38` as
+light-sleep GPIO wake sources. The managed button component still owns normal
+awake-state debounce and event generation; light-sleep wake setup stays in
+`main/device_sleep_runtime.cpp` so pre-sleep wake-only event suppression, button
+poller suspend/resume, and immediate display recovery remain part of the auto-sleep
 policy.
 
-### `components/buzzer_service`
+### `components/audio_hal`
 
-This C++ component owns low-level buzzer playback. It uses ESP-IDF LEDC PWM on
-the Sticky buzzer pin and hides timer/channel/duty details from app-facing
-services.
+This is the ES8311 codec layer. It replaces the Sticky's PDM-input-only path:
+this board has both a microphone and a speaker (ES8311 plus an NS4150B power
+amp), so the codec is full duplex.
 
 Current scope:
 
-- `BUZZER_PWM` on `GPIO48`
-- LEDC low-speed mode
-- LEDC timer 0 and channel 0
-- 10-bit duty resolution
-- asynchronous command queue and worker task
-- `PlayTone(...)`, `PlayPattern(...)`, and `Stop()`
-- named startup, lock, unlock, click, long-click, double-click, error, and
-  shutdown patterns
+- configure I2S0 for full-duplex 16 kHz mono 16-bit PCM, matching the recording
+  and Gemini pipeline so nothing has to resample
+- own the NS4150B power-amp enable pin alongside codec output enable
+- expose `OutputData(...)` for playback and the capture side for recording
+- expose output volume control
 
-The service drives tones at a 50 percent PWM duty cycle, which is the loudest
-useful square-wave drive for this passive PWM buzzer. A 100 percent duty cycle
-would be DC and would not produce the intended tone.
+The board keeps codec output (and therefore the PA) enabled for the codec's
+lifetime. Per-event PA toggling was rejected: cues and clip playback share the
+output, and toggling clipped whichever stream started second.
 
-App-facing code should normally call `feedback_service`, not this component
-directly. This keeps product feedback policy separate from PWM details.
+### `components/system_sound_service`
+
+This component owns the decoded sound-cue catalog and streams cues to the codec.
+
+Current scope:
+
+- decode and cache the built-in cue set
+- play a cue, optionally with a completion callback reporting whether the cue
+  completed, was debounced, superseded, interrupted, or failed
+- serialize cue playback so two cues cannot interleave on the output
+
+The completion callback is what lets `recording_session_service` sequence the
+stop cue and the review playback without them overlapping.
 
 ### `components/feedback_service`
 
 This C++ component owns app-facing haptic/audio feedback policy. It maps product
-events onto buzzer patterns without exposing buzzer hardware details to
+events onto sound cues without exposing codec details to
 `app_shell`.
 
 Current scope:
 
-- initializes `buzzer_service`
+- initializes `system_sound_service` with the board's audio codec
 - maps startup, lock, unlock, button click, button double-click,
-  button long-press, touch contact, shutdown, and error feedback onto buzzer
-  patterns
-- keeps app-level feedback names separate from low-level tone/pattern names
+  button long-press, shutdown, and error feedback onto sound cues
+- keeps app-level feedback names separate from low-level cue names
 
 `feedback_service` is intentionally an app-shell dependency, not a runtime-helper
 dependency. App-owned helpers under `main/` such as `overlay_runtime`,
@@ -1254,7 +1092,7 @@ cues and let `app_shell` map those cues onto `feedback_service` events.
 double-click, non-power long-press-start, lock, unlock, touch contact, modal
 open, startup, shutdown, and other product-level interaction outcomes. It
 should not know about LEDC timer numbers, PWM duty values, GPIO setup, or exact
-buzzer pattern composition.
+sound-cue catalog composition.
 
 ### `components/sd_card`
 
@@ -1311,12 +1149,9 @@ MicroSD shares SPI lines with the e-paper path:
 - `SD_CLK/SCK` / `EP_SCK`: `GPIO13`
 - `SD_CMD/MOSI` / `EP_SDI`: `GPIO14`
 - `SD_D0/MISO`: `GPIO12`
-- SD card chip select: `GPIO8`
-- e-paper chip select: `GPIO15`
-
-`storage_service` must call `sticky_board::EnsureSharedSpiBus()` before mounting
-the SD card. Shared SPI bus ownership belongs in `board`, not in `sd_card`,
-`epaper_panel`, `storage_service`, or `display_service`.
+On this board the SD card uses the SDMMC controller and the panel owns SPI3, so
+there is no shared bus to arbitrate and no bus guard to acquire. The Sticky's
+shared-SPI ordering rules do not apply here.
 
 During runtime SD format on Sticky, the storage path should minimize shared-SPI
 display activity. The current product policy is to show the formatting overlay
@@ -1332,51 +1167,32 @@ afterward. Tearing the card back down after boot caused the panel to log a
 refresh without visibly updating the screen. Treat "SD first, then display, and
 keep SD mounted" as a required startup policy on this hardware revision.
 
-### `components/pdm_mic`
+### `components/playback_service`
 
-This is the input-only PDM microphone driver adapted from:
-
-```text
-/Users/tieuvong/Desktop/folloup/sticky_port/Device_Peripheral_Demo 7.38.00 AM/components/pdm_mic
-```
-
-The source demo modeled the microphone as an `AudioCodec`, but Sticky has no
-speaker/playback path in current product scope. This port intentionally keeps
-only the ESP-IDF I2S PDM RX side and omits output volume, mute, TX channels,
-duplex behavior, and playback state.
+This component streams a clip to the codec. It is deliberately dumb: no policy,
+no task ownership, no state beyond "am I playing".
 
 Current scope:
 
-- initialize ESP-IDF I2S PDM RX with 16 kHz, mono, signed 16-bit PCM output
-- use bounded `i2s_channel_read(...)` calls for PCM capture
-- leave recording policy, buffering, voice activity, and file output to
-  higher-level services
+- `PlayFile(path)` streams a 16 kHz mono 16-bit PCM WAV from SD
+- `PlayClip(clip)` streams the PSRAM chunks `recording_service` already holds,
+  with no SD round-trip
+- `IsPlaying()` / `Stop()` for callers that need to interrupt
 
-### `components/microphone_service`
-
-This is the app-facing microphone hardware layer. It composes Sticky board pin
-definitions with the input-only `pdm_mic` driver.
-
-Current scope:
-
-- configure `PDM_CLK` on `GPIO19` and `PDM_DATA` on `GPIO20`
-- control microphone power with `PDM_EN` on `GPIO38`, active high
-- initialize, enable, disable, and read PCM samples from the PDM mic driver
-- expose the 16 kHz sample rate used by voice recording
-- calculate and retain a simple input-level percentage from captured PCM chunks
-- keep recording policy, pre-roll, clip ownership, VAD, and WAV output out of
-  the microphone hardware layer
+Both entry points block for the length of the clip, so callers run them on a
+short-lived worker task. `PlayClip` exists for the review step after recording:
+at that point the take has deliberately not been written to SD yet, so a clip the
+user discards never touches the card.
 
 ### `components/recording_service`
 
-This is the app-facing voice-input recording layer. It composes the input-only
-`microphone_service` with app policy for pre-roll, recording state, clip
+This is the app-facing voice-input recording layer. It composes the `audio_hal`
+codec capture side with app policy for pre-roll, recording state, clip
 ownership, input-level telemetry, and WAV file output.
 
 Current scope:
 
-- create a dedicated capture task that reads short PCM chunks from
-  `microphone_service`
+- create a dedicated capture task that reads short PCM chunks from the codec
 - keep a one-second PSRAM-backed pre-roll ring buffer while armed
 - support starting a recording with or without pre-roll
 - store the active clip in PSRAM-backed chunks with a 10-second max duration
@@ -1385,9 +1201,14 @@ Current scope:
   `GetRecordedClip()`
 - save the latest clip as a mono 16-bit PCM WAV file on MicroSD
 
-The service does not implement playback. Future voice-product work should build
-VAD, upload/transcription, and display status on top of this service rather
-than adding those policies to `pdm_mic`.
+The service does not implement playback. It owns the clip and hands it out via
+`GetRecordedClip()`; `playback_service` is what streams one to the codec. That
+split is deliberate — the recording layer should not grow an output path, and
+`playback_service` should not know how a clip was produced.
+
+Future voice-product work should build VAD, upload/transcription, and display
+status on top of this service rather than pushing those policies down into
+`audio_hal`.
 
 ### `components/epaper_panel`
 
@@ -1436,9 +1257,9 @@ sleep/timeout, or after the partial-refresh limit, the driver falls back to
 > applies a Y gate-line mapping fix (`window_y = height-1-raw_y`) and removes the
 > per-partial hardware reset (the datasheet resets only at power-on).
 
-The driver can initialize its own SPI bus for standalone reuse, but Sticky code
-must pass `external_spi_bus=true` after `sticky_board::EnsureSharedSpiBus()` has
-initialized the shared `SPI2_HOST` bus.
+The driver can initialize its own SPI bus, which is what this board does: the
+panel is given `external_spi_bus=false` and manages `SPI3_HOST` itself, write-only
+with no MISO.
 
 Not yet ported from Folloup:
 
@@ -1457,8 +1278,8 @@ power helpers with the `epaper_panel` raw driver.
 
 Current scope:
 
-- initialize the shared SPI bus through `sticky_board::EnsureSharedSpiBus()`
-- enable e-paper panel power through `sticky_board::EnableEpaperPower()`
+- initialize the raw panel on its dedicated SPI3 bus (the panel is fed by the
+  AXP2101 rails, so there is no GPIO power-enable to assert)
 - initialize the raw SSD1677 panel driver
 - render the startup splash with `RefreshFullBase()`
 - own the current portrait framebuffer surface and its refresh policy
@@ -1573,227 +1394,72 @@ Port validation notes still pending on hardware:
 - overlay, footer, and future page precedence logs should match the touched
   surface during on-device validation
 
-### `components/gt911`
+### `components/qmi8658`
 
-This is the generic GT911 capacitive touch driver ported from:
-
-```text
-/Users/tieuvong/Desktop/folloup/sticky_port/Device_Peripheral_Demo 7.38.00 AM/components/gt911
-```
-
-The driver should stay board-agnostic. It receives an initialized
-`i2c_master_bus_handle_t`, the GT911 interrupt/reset pins, and the logical
-coordinate size from its caller. It should not own Sticky-specific GPIO numbers,
-I2C ports, power-enable behavior, or app policy.
+This is the QMI8658 6-axis IMU driver (3-axis accelerometer plus 3-axis
+gyroscope), on the shared sensor I2C bus.
 
 Current scope:
 
-- select and probe GT911 address `0x14` / `0x5D`
-- perform the Goodix reset sequence, including the post-reset INT-low sync pulse
-  needed for reliable scan startup
-- read product ID and sensor resolution
-- read up to five touch points from `0x8150`
-- clear the status register after each ready report
-- map raw sensor coordinates into caller-provided logical dimensions
-- expose a simple callback/polling API
-
-For bring-up, a readable product ID is not sufficient proof that touch is
-working. If the resolution reads as zero or remains at the driver's fallback
-`2048x2048`, inspect the reset/INT sync sequence before chasing unrelated
-peripherals or config blobs. See `docs/gt911-touch-reset-debugging.md`.
-
-Important: the post-reset INT-low sync pulse in `components/gt911/gt911.cpp`
-must be preserved. It was added from the debugging work documented in
-`docs/gt911-touch-reset-debugging.md`: without that pulse, this board's GT911
-can respond to I2C product-ID reads while failing to report the real `480 x 800`
-resolution or any usable touch points.
-
-### `components/touch_service`
-
-This is the app-facing touch layer. It composes `board` pin definitions, touch
-power control, the dedicated touch I2C bus, the GT911 driver, and the
-`TOUCH_INT` interrupt.
-
-Current scope:
-
-- enable `TP_PWR_EN`
-- initialize the dedicated touch I2C bus on `I2C_NUM_0`
-- initialize GT911 with logical portrait coordinates `480 x 800`
-- recover GT911 after ESP light sleep by resetting/reinitializing the controller
-  before normal touch input resumes
-- attach a negative-edge ISR to `TP_INT`
-- wake a touch worker task from the ISR
-- service the GT911 outside interrupt context
-- log bring-up details, interrupt servicing, and mapped touch points
-- expose a typed event callback API for app-level routing in `app_shell`
-
-The light-sleep recovery path is required on this board. After ESP light sleep,
-the GT911 can stop reporting touches unless the service runs the reset/begin
-sequence again and reattaches `TP_INT`. The GPIO ISR service itself is global
-and may already be installed; recovery should handle that as an already-ready
-state instead of logging it as an error.
-
-The service intentionally does not draw directly to e-paper. Touch gestures and
-points are app intents; display drawing remains owned by `display_service`.
-
-### `components/lsm6ds3`
-
-This is the generic LSM6DS3 / LSM6DS3TR-C inertial sensor driver ported from:
-
-```text
-/Users/tieuvong/Desktop/folloup/sticky_port/Device_Peripheral_Demo 7.38.00 AM/components/lsm6ds3
-```
-
-The driver should stay board-agnostic. It receives an initialized
-`i2c_master_dev_handle_t` or `spi_device_handle_t` from its caller and exposes
-register reads, register writes, accelerometer, gyro, temperature, and FIFO
-helpers. It should not own Sticky-specific GPIO numbers, I2C ports, interrupt
-policy, sleep policy, or app-level inactivity decisions.
-
-Current scope:
-
-- probe WHO_AM_I register `0x0F`
-- accept `0x6A` for LSM6DS3TR-C and `0x69` for LSM6DS3
-- configure direct accelerometer and gyro sampling for bring-up
-- expose temperature, acceleration, gyro, and FIFO helper APIs from the source
-  driver
+- bring-up and configuration
+- read accelerometer samples used by `device_sleep_service` for motion wake
+- keep sleep policy and thresholds out of the driver
 
 ### `components/imu_service`
 
-This is the app-facing IMU layer. It composes `board` sensor-bus helpers with
-the generic LSM6DS3 driver.
+This is the app-facing IMU layer. It composes `board` I2C access with the
+generic QMI8658 driver.
 
 Current scope:
 
-- initialize the shared sensor I2C bus on `I2C_NUM_1`
-- add the LSM6DS3TR-C at address `0x6A`
-- verify WHO_AM_I before marking the service initialized
-- configure the same first-pass settings as the source demo: accelerometer
-  `4g` / `104Hz` / `100Hz BW`, gyro `245dps` / `104Hz` / `100Hz BW`
-- log three direct sample reads at startup for hardware validation
-- expose `imu_service::ReadSample(...)` for direct temperature, acceleration,
-  and gyro reads
+- add the QMI8658 on the shared sensor I2C bus
+- configure the accelerometer and read samples
+- expose samples to `device_sleep_runtime`, which owns motion/still
+  classification and the inactivity thresholds
 
-The first port intentionally does not enable FIFO streaming or claim the IMU
-interrupt on `GPIO7`. FIFO and interrupt-driven wake/sleep policy should be
-added only after direct samples are verified on hardware and the shared
-`GPIO7` ownership with the BQ27220 interrupt path is designed explicitly.
-
-The current auto-sleep implementation uses direct 200 ms polling through
-`imu_service::ReadSample(...)`. Hardware validation showed this is responsive
-enough for pickup/display wake behavior, so FIFO-backed sampling and IMU
-interrupt handling are deferred. The IMU service must not attach a `GPIO7` ISR
-or configure IMU interrupt routing until a measured power or responsiveness
-problem justifies that optimization.
-
-If a future milestone enables the IMU interrupt path, `GPIO7` must be owned by
-one shared-line runtime instead of by `power_service` or `imu_service`
-independently. That owner should keep the ISR minimal, defer all I2C work to a
-task, preserve the existing BQ27220 `BFG_INT` level/status diagnostics, and then
-query the IMU interrupt status or FIFO state. Logs should identify which source
-asserted the shared line so battery diagnostics and inactivity wake behavior
-remain debuggable together.
-
-### `components/sht40`
-
-This is the generic SHT40 temperature/humidity sensor driver ported from:
-
-```text
-/Users/tieuvong/Desktop/folloup/sticky_port/Device_Peripheral_Demo 7.38.00 AM/components/sht40
-```
-
-The driver should stay board-agnostic. It receives an initialized
-`i2c_master_dev_handle_t` from its caller and exposes soft reset, serial-number
-read, and temperature/humidity measurement helpers. It should not own
-Sticky-specific GPIO numbers, I2C ports, address fallback policy, or app-level
-environment display/logging policy.
-
-Current scope:
-
-- soft reset with command `0x94`
-- read serial number with command `0x89`
-- read high/medium/low precision temperature and humidity measurements
-- validate SHT40 CRC bytes before accepting serial or measurement data
-- convert raw values to degrees Celsius and relative humidity percent
-
-### `components/environment_service`
-
-This is the app-facing ambient environment layer. It composes `board`
-sensor-bus helpers with the generic SHT40 driver.
-
-Current scope:
-
-- initialize the shared sensor I2C bus on `I2C_NUM_1`
-- try SHT40 primary address `0x44`
-- fall back to SHT40 alternate address `0x45` when the primary probe fails
-- read the sensor serial number before marking the service initialized
-- reset the shared sensor I2C bus after failed SHT40 serial/measurement
-  transactions so a bad probe does not poison later shared-bus users
-- log three high-precision temperature/humidity samples at startup for hardware
-  validation
-- expose `environment_service::ReadSample(...)` for direct app-facing reads
-
-The first port intentionally does not create a background sampling task or draw
-environment values to e-paper. Product policy for sampling cadence, smoothing,
-weather UI, and persistence should be layered above this service later.
+The IMU shares the sensor I2C bus with the PMIC and RTC. Auto-sleep
+intentionally polls rather than attaching an interrupt, so there is no shared
+interrupt line to coordinate.
 
 ## Hardware Notes
 
-- Main controller: `ESP32-S3R8`.
-- External flash: 256 Mbit / 32 MB QSPI flash.
-- PSRAM: 8 MB octal PSRAM.
-- BQ27220 address: `0x55`.
-- PCF8563 address: `0x51`.
-- LSM6DS3TR-C address: `0x6A`.
-- SHT40 address: primary `0x44`, fallback `0x45`.
-- Buzzer PWM output: `GPIO48`.
-- PDM microphone uses `PDM_CLK` on `GPIO19`, `PDM_DATA` on `GPIO20`, and
-  `PDM_EN` on `GPIO38`.
-- MicroSD uses SDSPI mode only: `SD_CLK/SCK` on `GPIO13`, `SD_CMD/MOSI` on
-  `GPIO14`, `SD_D0/MISO` on `GPIO12`, `SD_D3/CS` on `GPIO8`, `SD_PWR_EN` on
-  `GPIO10`, and `SD_DETECT` on `GPIO11`. `SD_D1` and `SD_D2` are not connected.
-- The SSD1677 e-paper panel shares `SPI2_HOST` with MicroSD: `EP_SCK` on
-  `GPIO13`, `EP_SDI/MOSI` on `GPIO14`, `EP_SDO/MISO` on `GPIO12`, `EP_CS` on
-  `GPIO15`, `EP_DC` on `GPIO16`, `EP_RST` on `GPIO17`, `EP_BUSY` on `GPIO18`,
-  and `EP_PWR_EN` on `GPIO47`.
-- Hardware bring-up confirmed a board-specific shared-bus rule: with an SD card
-  inserted, the firmware must initialize MicroSD first and keep it mounted
-  before bringing up the e-paper panel. If the card is removed, display init
-  behaves normally without that constraint.
-- Because the e-paper panel and MicroSD share `SPI2_HOST`, all access to that bus
-  must be serialized through `shared_bus_service` (`StorageBusGuard` /
-  `DisplayBusGuard`). SD I/O that runs concurrently with a display refresh
-  corrupts the refresh and causes e-paper ghosting. See
-  [shared-spi-bus-contention.md](shared-spi-bus-contention.md) for the failure
-  we hit, the root cause, and the rule for adding new shared-bus peripherals.
-- The e-paper panel is 800 x 480 raw landscape pixels. The bring-up
-  `display_service` draws portrait content by mapping logical 480 x 800
-  coordinates into the raw SSD1677 framebuffer.
-- GT911 touch uses a separate I2C bus: `TP_I2C_SCL` on `GPIO2`,
-  `TP_I2C_SDA` on `GPIO3`, `TP_PWR_EN` on `GPIO42`, `TP_INT` on `GPIO21`, and
-  `TP_RSTn` on `GPIO41`. The app-facing touch coordinate space is currently
-  logical portrait `480 x 800` to match `display_service`.
-- Power latch uses `PWR_HOLD` on `GPIO45` as U3 D and `PWR_LOCK` on `GPIO46`
-  as U3 CP. Firmware sets the desired D value and pulses CP to latch it.
-- `VDD_3V3_ENn` is not currently mapped to a firmware GPIO, so there is no
-  confirmed independent software kill pin for the 3.3 V buck-boost rail. Page 5
-  ties it to `RTC_INTn`, so the RTC interrupt state is part of the hard-off path.
-- Charger enable is active low on `GPIO39`.
-- Charger state is read from `GPIO40`; the reference demo treats low as
-  charging.
-- Power-input voltage is sensed on `GPIO9`. The service currently logs ADC pin
-  millivolts, not reconstructed VIN, because the divider ratio has not been
-  confirmed in this project.
-- BQ27220, PCF8563, LSM6DS3TR-C, and SHT40 share the sensor I2C bus.
-- Sensor I2C uses `GPIO0` for SCL and `GPIO1` for SDA.
-- `GPIO0` is also an ESP32-S3 boot strapping/download pin. Create the sensor
-  I2C bus only after boot has completed and startup pin levels are no longer
-  part of the boot-mode decision.
-- `GPIO7` is shared by the BQ27220 interrupt line and the IMU interrupt path.
-  The first IMU port does not attach an ISR or configure IMU interrupt routing.
-  Current auto-sleep behavior intentionally keeps using IMU polling. Future
-  inactivity/sleep work must coordinate this shared line through one deferred
-  interrupt owner instead of letting either service claim GPIO7 independently.
+- Main controller: `ESP32-S3R8`, dual-core Xtensa LX7 up to 240 MHz.
+- External flash: 16 MB. PSRAM: 8 MB.
+- Shared sensor I2C on `GPIO41` (SDA) / `GPIO42` (SCL), carrying:
+  - AXP2101 PMIC at `0x34`, interrupt on `GPIO38`
+  - PCF85063 RTC at `0x51`
+  - QMI8658 IMU
+  - ES8311 codec control interface
+  - SHTC3 temperature/humidity, present but not driven by any component
+- Neither I2C pin is a strapping pin, so the bus can be created during early
+  startup without affecting boot mode.
+- Buttons are all active-low to GND: `ACTION`/BOOT on `GPIO0`, rocker up on
+  `GPIO4`, rocker middle/`FN` on `GPIO5`, rocker down on `GPIO6`. `GPIO0` is the
+  boot/download strap, so it must read high at reset and is only ever pulled low
+  by a press.
+- The `PWR` key is not a GPIO. It is wired to the AXP2101 and surfaces as
+  interrupts: a short-press IRQ, a long-press IRQ once held past `IrqLevelTime`,
+  and a hardware rail cut at a sustained 6 s hold.
+- MicroSD uses the ESP32-S3 SDMMC controller in 4-bit mode: `CLK` on `GPIO16`,
+  `CMD` on `GPIO17`, `D0` on `GPIO15`, `D1` on `GPIO7`, `D2` on `GPIO8`, `D3` on
+  `GPIO18`. There is no card-detect or power-enable pin.
+- The SSD1677 e-paper panel owns a dedicated `SPI3_HOST`, write-only with no
+  MISO: `BUSY` on `GPIO3`, `DC` on `GPIO9`, `CS` on `GPIO10`, `SCK` on `GPIO11`,
+  `MOSI` on `GPIO12`, `RST` on `GPIO46`. The panel is fed by the AXP2101 rails,
+  so there is no GPIO power-enable.
+- Because the panel does not share a bus with MicroSD, none of the Sticky's
+  shared-SPI serialization applies here: there is no bus guard, and no ordering
+  requirement between mounting SD and bringing up the display.
+- The e-paper panel is 800 x 480 raw landscape pixels. `display_service` draws
+  portrait content by mapping logical 480 x 800 coordinates into the raw
+  framebuffer. Note that portrait `x` maps onto the panel's gate line
+  (`raw_y = height - 1 - x`), which is why a large fill with a gate-periodic
+  dither pattern produces visible banding on a partial refresh.
+- ES8311 audio streams over I2S0 at 16 kHz full duplex: `MCLK` on `GPIO13`,
+  `BCLK` on `GPIO14`, `WS` on `GPIO47`, `DIN` on `GPIO21`, `DOUT` on `GPIO48`.
+  The NS4150B power-amp enable is on `GPIO39`.
+- There is no power latch, no charger-enable GPIO, and no ADC power-input sense.
+  The AXP2101 owns rails, charging, and battery telemetry over I2C.
 
 ## Configuration
 
@@ -1828,34 +1494,41 @@ Use this dependency direction:
 app / integration code
   -> power_service
        -> board -> ESP-IDF drivers
-       -> bq27220 -> ESP-IDF I2C driver
-       -> pcf8563 -> ESP-IDF I2C driver
+       -> axp2101 -> ESP-IDF I2C/GPIO drivers
+       -> pcf85063 -> ESP-IDF I2C driver
+  -> power_key_runtime (main/)
+       -> board (GetPmic)
+       -> axp2101
+       -> device_sleep_service / device_sleep_runtime
   -> button_service -> espressif/button
   -> feedback_service
-       -> buzzer_service -> board -> ESP-IDF LEDC driver
+       -> system_sound_service -> audio_hal -> ESP-IDF I2S driver
   -> device_sleep_service
   -> storage_service
-       -> board
-       -> sd_card -> ESP-IDF SDSPI/FATFS/SDMMC drivers
+       -> sd_card -> ESP-IDF SDMMC/FATFS drivers
   -> recording_service
-       -> microphone_service
-            -> board
-            -> pdm_mic -> ESP-IDF I2S/GPIO drivers
+       -> board (GetAudioCodec)
+       -> audio_hal -> ESP-IDF I2S/I2C drivers
+  -> playback_service
+       -> board (GetAudioCodec)
+       -> audio_hal
+       -> recording_service (RecordedClip only)
+  -> recording_session_service
+       -> recording_service
+       -> playback_service
+       -> system_sound_service
   -> display_service
-       -> board
        -> epaper_panel -> ESP-IDF SPI/GPIO drivers
-  -> touch_service
-       -> board
-       -> gt911 -> ESP-IDF I2C/GPIO drivers
   -> imu_service
-       -> board
-       -> lsm6ds3 -> ESP-IDF I2C/SPI drivers
-  -> environment_service
-       -> board
-       -> sht40 -> ESP-IDF I2C driver
+       -> qmi8658 -> ESP-IDF I2C driver
 ```
 
-Avoid making `bq27220`, `pcf8563`, `sd_card`, `pdm_mic`, `epaper_panel`,
-`gt911`, `lsm6ds3`, or `sht40` depend on `board`; that would make generic
-drivers board-specific. `microphone_service` is allowed to depend on `board`
-because it is the Sticky-specific app-facing microphone layer.
+Avoid making `axp2101`, `pcf85063`, `sd_card`, `epaper_panel`, `qmi8658`, or
+`audio_hal` depend on `board`; that would make generic drivers board-specific.
+`board` composes them with Waveshare pin mapping, and app-facing services reach
+the hardware through `board` accessors such as `GetPmic()` and
+`GetAudioCodec()`.
+
+`playback_service` depends on `recording_service` only for the `RecordedClip`
+type it streams. The reverse edge must not exist: `recording_service` owns
+capture and clip ownership, and does not gain an output path.

@@ -1,6 +1,6 @@
 # Gemini Service
 
-This document describes the current Gemini integration used by the Sticky
+This document describes the current Gemini integration used by the Followup
 firmware.
 
 `components/gemini_service/` currently owns:
@@ -40,7 +40,7 @@ Current runtime split:
   - reflects Gemini-ready state into `epaper_ui::StatusBarState`
 - `components/epaper_ui/`
   - renders the Gemini-ready star icon in the status bar
-- `feedback_service` / `buzzer_service`
+- `feedback_service` / `system_sound_service`
   - play a dedicated Gemini-connected cue when readiness transitions from false
     to true
 
@@ -50,7 +50,7 @@ product-facing reactions.
 
 ## Internal Layout
 
-Sticky currently uses a single-file Gemini service implementation:
+Followup currently uses a single-file Gemini service implementation:
 
 - [`components/gemini_service/include/gemini_service.h`](/Users/tieuvong/Development/folloup-sticky/components/gemini_service/include/gemini_service.h)
 - [`components/gemini_service/gemini_service.cpp`](/Users/tieuvong/Development/folloup-sticky/components/gemini_service/gemini_service.cpp)
@@ -64,7 +64,7 @@ Current internal responsibilities inside that component:
 - auth task lifecycle and stale-result protection
 - backend JSON request/response handling
 
-Sticky does not yet split this into separate `client`, `worker`, and
+Followup does not yet split this into separate `client`, `worker`, and
 `settings_storage` files the way Followup does.
 
 ## API Key Sources
@@ -119,14 +119,14 @@ Authentication is skipped when:
 - Wi-Fi is not connected
 - Wi-Fi is in access-point mode
 
-Sticky currently treats `ready` as:
+Followup currently treats `ready` as:
 
 - `configured == true`
 - `authenticated == true`
 
 ## Transport Details
 
-The current Sticky auth path is intentionally minimal:
+The current auth path is intentionally minimal:
 
 - request type: HTTP `GET`
 - endpoint: `v1beta/<model>`
@@ -136,7 +136,7 @@ The current Sticky auth path is intentionally minimal:
 The current implementation uses ESP-IDF's `esp_http_client` with the CRT bundle
 for TLS validation.
 
-Sticky does not yet implement:
+Followup does not yet implement:
 
 - Gemini file upload
 - transcription prompts
@@ -179,7 +179,7 @@ Current fields:
 - `last_error_message`
 
 `supports_audio_understanding` and `supports_structured_output` currently remain
-`false` because Sticky has not yet ported those provider capabilities.
+`false` because This firmware has not yet ported those provider capabilities.
 
 ### `gemini_service::Snapshot`
 
@@ -314,7 +314,7 @@ Common current error codes:
 
 ## UI Integration
 
-Sticky currently uses Gemini readiness in two product-facing ways:
+Followup currently uses Gemini readiness in two product-facing ways:
 
 - the status bar shows the star icon when Wi-Fi is connected and Gemini is
   authenticated
@@ -322,7 +322,7 @@ Sticky currently uses Gemini readiness in two product-facing ways:
   transitions from false to true
 
 The current status-bar icon is the star asset already present in
-`project_assets`. Sticky is not yet using the broader Followup Gemini-specific
+`project_assets`. This firmware is not yet using the broader upstream Gemini-specific
 page/UI flows.
 
 ## Logging
@@ -343,7 +343,7 @@ the larger Gemini feature set is ported.
 
 ## Deferred Followup Features
 
-Followup's Gemini stack is broader than Sticky's current implementation.
+The upstream Followup Gemini stack is broader than this implementation.
 
 Not yet ported:
 
@@ -355,5 +355,5 @@ Not yet ported:
 - frontend portal UI for Gemini settings
 
 When those features are ported, this document should be expanded rather than
-replaced so it remains accurate for Sticky's actual runtime behavior at each
+replaced so it remains accurate for this firmware's actual runtime behavior at each
 stage.

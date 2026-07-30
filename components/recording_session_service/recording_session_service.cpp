@@ -2,12 +2,19 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <memory>
 #include <mutex>
 #include <string>
 
 #include "esp_log.h"
+#include "followup_task_config.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "gemini_service.h"
+#include "playback_service.h"
 #include "storage_service.h"
+#include "system_sound_service.h"
 
 namespace recording_session_service {
 namespace {
@@ -16,6 +23,9 @@ constexpr const char* kTag = "RecordingSession";
 constexpr const char* kIdleStatus = "Hold POWER to record";
 constexpr const char* kArmedStatus = "Keep holding to record";
 constexpr const char* kRecordingStatus = "Recording";
+constexpr const char* kStartCueStatus = "Starting recording";
+constexpr const char* kStopCueStatus = "Finishing recording";
+constexpr const char* kPlayingBackStatus = "Playing back";
 constexpr const char* kChooseTagStatus = "Choose recording type";
 constexpr const char* kSavingStatus = "Saving recording";
 constexpr const char* kTranscribingStatus = "Transcribing recording";
@@ -47,6 +57,14 @@ void* s_event_context = nullptr;
 bool s_initialized = false;
 Snapshot s_snapshot = {};
 std::string s_pending_recording_id = {};
+
+// Cue tokens make a late callback harmless: every cue we queue bumps the token, so a
+// result that arrives after the session has moved on (cancel, failure, a new recording)
+// no longer matches and is dropped instead of driving a stale transition.
+uint32_t s_cue_token = 0;
+std::atomic<bool> s_playback_worker_active{false};
+// Set when BOOT is released before the start cue finishes; consumed by HandleStartCueResult.
+bool s_finish_pending_after_start_cue = false;
 
 uint32_t ResolveClipDurationMs(const recording_service::RecordedClip& clip, uint32_t duration_ms)
 {
@@ -193,6 +211,10 @@ void ResetToIdleLocked()
     s_snapshot.last_error_message.clear();
     s_snapshot.last_status_message = kIdleStatus;
     s_pending_recording_id.clear();
+    // Invalidate any cue callback still in flight, so a late result cannot resurrect a
+    // session that was just cancelled.
+    ++s_cue_token;
+    s_finish_pending_after_start_cue = false;
 }
 
 void SyncRecordingStateLocked(const recording_service::UiState& state)
@@ -218,6 +240,130 @@ void NotifyLocked()
         .snapshot = s_snapshot,
     };
     handler(event, context);
+}
+
+// Playback blocks for the length of the clip, so it cannot run on the sound-cue callback
+// task. This mirrors the details page's short-lived worker: the shared_ptr keeps the PSRAM
+// clip alive for the duration even though nothing else references it yet.
+constexpr uint32_t kPlaybackWorkerStackWords = 4096;
+
+void AdvanceToTagSelection(const char* reason);
+
+void PlaybackWorker(void* arg)
+{
+    std::unique_ptr<recording_service::RecordedClipPtr> clip(
+        static_cast<recording_service::RecordedClipPtr*>(arg));
+    if (clip != nullptr && *clip != nullptr) {
+        const esp_err_t err = playback_service::PlayClip(*clip);
+        if (err != ESP_OK) {
+            ESP_LOGW(kTag, "Clip playback failed: %s", esp_err_to_name(err));
+        }
+    }
+    s_playback_worker_active.store(false, std::memory_order_release);
+    AdvanceToTagSelection("playback finished");
+    vTaskDelete(nullptr);
+}
+
+// Every route out of the stop cue lands here: playback done, playback refused to start, or
+// the stop cue itself failed. The clip is still unsaved, so the tag menu's Discard option
+// is what throws away a bad take.
+void AdvanceToTagSelection(const char* reason)
+{
+    std::lock_guard<std::mutex> lock(s_mutex);
+    if (s_snapshot.phase != Phase::kStopCue && s_snapshot.phase != Phase::kPlayingBack) {
+        return;
+    }
+    ESP_LOGI(kTag, "Advancing to tag selection (%s)", reason);
+    s_snapshot.phase = Phase::kAwaitingTagSelection;
+    s_snapshot.last_status_message = kChooseTagStatus;
+    s_snapshot.last_error_code.clear();
+    s_snapshot.last_error_message.clear();
+    NotifyLocked();
+}
+
+// Replays the take the user just recorded. Returns false when playback could not be
+// started, so the caller can fall through to tag selection rather than stranding the
+// session in kStopCue.
+bool StartClipPlayback(const recording_service::RecordedClipPtr& clip)
+{
+    if (clip == nullptr || clip->empty()) {
+        return false;
+    }
+    bool expected = false;
+    if (!s_playback_worker_active.compare_exchange_strong(expected, true)) {
+        return false;
+    }
+
+    // Publish kPlayingBack before the worker can exist. The worker advances to tag
+    // selection the moment it finishes, and a very short clip would otherwise beat this
+    // update -- leaving the phase stuck on kPlayingBack after the menu had already opened.
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        s_snapshot.phase = Phase::kPlayingBack;
+        s_snapshot.last_status_message = kPlayingBackStatus;
+        NotifyLocked();
+    }
+
+    auto* clip_copy = new recording_service::RecordedClipPtr(clip);
+    if (xTaskCreate(&PlaybackWorker, "clip_playback", kPlaybackWorkerStackWords, clip_copy,
+                    followup_task_config::kPriorityStorage, nullptr) != pdPASS) {
+        delete clip_copy;
+        s_playback_worker_active.store(false, std::memory_order_release);
+        ESP_LOGW(kTag, "Failed to start clip playback worker");
+        // Phase is kPlayingBack here, which AdvanceToTagSelection accepts, so the caller's
+        // fallback still lands correctly.
+        return false;
+    }
+    return true;
+}
+
+// Fires once the stop cue has finished (or failed). Playing the clip under the cue would
+// overlap two streams on the same codec output, so the replay waits for it.
+void HandleStopCueResult(uint32_t token, SoundCuePlaybackResult result)
+{
+    recording_service::RecordedClipPtr clip = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        if (token != s_cue_token || s_snapshot.phase != Phase::kStopCue) {
+            return;
+        }
+    }
+    if (result != SoundCuePlaybackResult::kCompleted) {
+        AdvanceToTagSelection("stop cue did not complete");
+        return;
+    }
+
+    clip = recording_service::GetRecordedClip();
+    if (!StartClipPlayback(clip)) {
+        AdvanceToTagSelection("playback unavailable");
+    }
+}
+
+void HandleStartCueResult(uint32_t token, SoundCuePlaybackResult)
+{
+    bool finish_now = false;
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        // The cue is cosmetic: capture is already running underneath it, so even a failed
+        // cue just moves the UI on rather than aborting the take.
+        if (token != s_cue_token || s_snapshot.phase != Phase::kStartCue) {
+            return;
+        }
+        finish_now = s_finish_pending_after_start_cue;
+        s_finish_pending_after_start_cue = false;
+        if (finish_now) {
+            s_snapshot.phase = Phase::kSaving;
+            s_snapshot.last_status_message = "Preparing recording";
+        } else {
+            s_snapshot.phase = Phase::kRecording;
+            s_snapshot.last_status_message = kRecordingStatus;
+        }
+        NotifyLocked();
+    }
+
+    if (finish_now) {
+        (void)recording_service::Finish();
+    }
 }
 
 void MarkBlockedLocked(BlockedReason reason)
@@ -328,7 +474,10 @@ bool HandlePowerPressDown(const Context& context)
 
     {
         std::lock_guard<std::mutex> lock(s_mutex);
-        if (s_snapshot.phase == Phase::kAwaitingTagSelection ||
+        // No new take while the previous one is still being cued, replayed, or resolved.
+        if (s_snapshot.phase == Phase::kStartCue || s_snapshot.phase == Phase::kStopCue ||
+            s_snapshot.phase == Phase::kPlayingBack ||
+            s_snapshot.phase == Phase::kAwaitingTagSelection ||
             s_snapshot.phase == Phase::kTranscribing) {
             return false;
         }
@@ -381,22 +530,33 @@ bool HandlePowerLongPressStart(const Context& context)
         }
     }
 
+    // Capture starts before the cue, not after it: waiting for the cue to finish would
+    // swallow the first word. The cue overlaps the opening moments of the take.
     const esp_err_t err = recording_service::Start(recording_service::StartMode::kFresh);
-    std::lock_guard<std::mutex> lock(s_mutex);
-    if (err != ESP_OK) {
-        s_snapshot.phase = Phase::kFailed;
-        s_snapshot.last_status_message = "Recording failed to start";
-        s_snapshot.last_error_code = "record_start_failed";
-        s_snapshot.last_error_message = esp_err_to_name(err);
+    uint32_t cue_token = 0;
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        if (err != ESP_OK) {
+            s_snapshot.phase = Phase::kFailed;
+            s_snapshot.last_status_message = "Recording failed to start";
+            s_snapshot.last_error_code = "record_start_failed";
+            s_snapshot.last_error_message = esp_err_to_name(err);
+            NotifyLocked();
+            return false;
+        }
+
+        cue_token = ++s_cue_token;
+        s_snapshot.phase = Phase::kStartCue;
+        s_snapshot.last_status_message = kStartCueStatus;
+        s_snapshot.last_error_code.clear();
+        s_snapshot.last_error_message.clear();
         NotifyLocked();
-        return false;
     }
 
-    s_snapshot.phase = Phase::kRecording;
-    s_snapshot.last_status_message = kRecordingStatus;
-    s_snapshot.last_error_code.clear();
-    s_snapshot.last_error_message.clear();
-    NotifyLocked();
+    SystemSoundService::GetInstance().PlayCue(
+        SoundCue::kSpeaking, [cue_token](SoundCuePlaybackResult result) {
+            HandleStartCueResult(cue_token, result);
+        });
     return true;
 }
 
@@ -417,6 +577,15 @@ bool HandlePowerPressUp(const Context&)
         std::lock_guard<std::mutex> lock(s_mutex);
         ResetToIdleLocked();
         NotifyLocked();
+        return true;
+    }
+
+    // Released while the start cue is still playing: capture is already running, but the
+    // cue owns the transition out of kStartCue. Defer the finish rather than dropping it,
+    // otherwise a hold barely longer than the cue would record forever.
+    if (phase == Phase::kStartCue) {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        s_finish_pending_after_start_cue = true;
         return true;
     }
 
@@ -579,6 +748,8 @@ void HandleRecordingEvent(const recording_service::Event& event)
     bool should_show_tag_selection = false;
     GuardrailResult guardrail = {};
     bool discard_invalid_clip = false;
+    bool queue_stop_cue = false;
+    uint32_t cue_token = 0;
 
     if (event.state == recording_service::State::kClipReady && event.ui_state.has_clip) {
         clip = recording_service::GetRecordedClip();
@@ -597,12 +768,21 @@ void HandleRecordingEvent(const recording_service::Event& event)
             s_snapshot.phase = Phase::kArmed;
             s_snapshot.last_status_message = kArmedStatus;
         } else if (event.state == recording_service::State::kRecording) {
-            s_snapshot.phase = Phase::kRecording;
-            s_snapshot.last_status_message = kRecordingStatus;
+            // Leave kStartCue alone -- HandleStartCueResult owns that transition, and
+            // overwriting it here would drop the cue phase the moment capture engages.
+            if (s_snapshot.phase != Phase::kStartCue) {
+                s_snapshot.phase = Phase::kRecording;
+                s_snapshot.last_status_message = kRecordingStatus;
+            }
         } else if (event.state == recording_service::State::kClipReady) {
             if (should_show_tag_selection) {
-                s_snapshot.phase = Phase::kAwaitingTagSelection;
-                s_snapshot.last_status_message = kChooseTagStatus;
+                // Stop cue first, then playback, then the tag menu. HandleStopCueResult
+                // drives the rest; queue_stop_cue defers the PlayCue call until the lock
+                // is released so the callback cannot deadlock on a fast cue.
+                cue_token = ++s_cue_token;
+                queue_stop_cue = true;
+                s_snapshot.phase = Phase::kStopCue;
+                s_snapshot.last_status_message = kStopCueStatus;
                 s_snapshot.last_error_code.clear();
                 s_snapshot.last_error_message.clear();
             } else {
@@ -619,6 +799,12 @@ void HandleRecordingEvent(const recording_service::Event& event)
     }
     if (discard_invalid_clip) {
         recording_service::DiscardClip();
+    }
+    if (queue_stop_cue) {
+        SystemSoundService::GetInstance().PlayCue(
+            SoundCue::kInterrupt, [cue_token](SoundCuePlaybackResult result) {
+                HandleStopCueResult(cue_token, result);
+            });
     }
 }
 
@@ -696,8 +882,14 @@ const char* PhaseName(Phase phase)
     switch (phase) {
         case Phase::kArmed:
             return "armed";
+        case Phase::kStartCue:
+            return "start_cue";
         case Phase::kRecording:
             return "recording";
+        case Phase::kStopCue:
+            return "stop_cue";
+        case Phase::kPlayingBack:
+            return "playing_back";
         case Phase::kAwaitingTagSelection:
             return "awaiting_tag_selection";
         case Phase::kSaving:

@@ -1,5 +1,6 @@
 #include "playback_service.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -28,6 +29,32 @@ bool ValidateWavHeader(const uint8_t* header)
            std::memcmp(header + 8, "WAVE", 4) == 0;
 }
 
+// Claims the playback slot and resolves the codec. Returns nullptr (without claiming) if
+// playback is already running or the codec is missing; the caller owns clearing s_playing
+// via PlayingGuard.
+AudioCodec* BeginPlayback(const char* what)
+{
+    bool expected = false;
+    if (!s_playing.compare_exchange_strong(expected, true)) {
+        ESP_LOGW(kTag, "Playback already in progress; ignoring %s", what);
+        return nullptr;
+    }
+    s_stop_requested.store(false, std::memory_order_relaxed);
+
+    AudioCodec* codec = waveshare_board::GetAudioCodec();
+    if (codec == nullptr) {
+        ESP_LOGE(kTag, "Audio codec unavailable; cannot play %s", what);
+        s_playing.store(false, std::memory_order_relaxed);
+        return nullptr;
+    }
+    return codec;
+}
+
+// Clears the playback flag on every return path once BeginPlayback has succeeded.
+struct PlayingGuard {
+    ~PlayingGuard() { s_playing.store(false, std::memory_order_relaxed); }
+};
+
 }  // namespace
 
 bool IsPlaying()
@@ -48,23 +75,11 @@ esp_err_t PlayFile(const char* path)
         return ESP_ERR_INVALID_ARG;
     }
 
-    bool expected = false;
-    if (!s_playing.compare_exchange_strong(expected, true)) {
-        ESP_LOGW(kTag, "Playback already in progress; ignoring %s", path);
-        return ESP_ERR_INVALID_STATE;
-    }
-    s_stop_requested.store(false, std::memory_order_relaxed);
-
-    // Ensure the flag is cleared on every return path.
-    struct PlayingGuard {
-        ~PlayingGuard() { s_playing.store(false, std::memory_order_relaxed); }
-    } playing_guard;
-
-    AudioCodec* codec = waveshare_board::GetAudioCodec();
+    AudioCodec* codec = BeginPlayback(path);
     if (codec == nullptr) {
-        ESP_LOGE(kTag, "Audio codec unavailable; cannot play %s", path);
         return ESP_ERR_INVALID_STATE;
     }
+    PlayingGuard playing_guard;
 
     FILE* file = fopen(path, "rb");
     if (file == nullptr) {
@@ -105,6 +120,52 @@ esp_err_t PlayFile(const char* path)
     fclose(file);
     ESP_LOGI(kTag, "Playback finished: %s samples=%u stopped=%d",
              path, static_cast<unsigned>(total_samples),
+             s_stop_requested.load(std::memory_order_relaxed) ? 1 : 0);
+    return result;
+}
+
+esp_err_t PlayClip(const recording_service::RecordedClipPtr& clip)
+{
+    if (clip == nullptr || clip->empty()) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    AudioCodec* codec = BeginPlayback("in-memory clip");
+    if (codec == nullptr) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    PlayingGuard playing_guard;
+
+    ESP_LOGI(kTag, "Clip playback started: %u samples (%u ms)",
+             static_cast<unsigned>(clip->sample_count()),
+             static_cast<unsigned>(clip->duration_ms()));
+
+    // ForEachChunk has no way to break out, so once stopped or failed the remaining
+    // chunks fall through as no-ops rather than being written to the codec.
+    esp_err_t result = ESP_OK;
+    size_t total_samples = 0;
+    clip->ForEachChunk([&](const int16_t* samples, size_t count) {
+        if (result != ESP_OK || samples == nullptr) {
+            return;
+        }
+        // Match PlayFile's write size rather than handing the codec whole capture
+        // chunks, whose length is set by the recorder, not by what the codec wants.
+        for (size_t offset = 0; offset < count; offset += kChunkSamples) {
+            if (s_stop_requested.load(std::memory_order_relaxed)) {
+                return;
+            }
+            const size_t batch = std::min(kChunkSamples, count - offset);
+            if (!codec->OutputData(samples + offset, batch)) {
+                ESP_LOGW(kTag, "Codec output failed during clip playback");
+                result = ESP_FAIL;
+                return;
+            }
+            total_samples += batch;
+        }
+    });
+
+    ESP_LOGI(kTag, "Clip playback finished: samples=%u stopped=%d",
+             static_cast<unsigned>(total_samples),
              s_stop_requested.load(std::memory_order_relaxed) ? 1 : 0);
     return result;
 }

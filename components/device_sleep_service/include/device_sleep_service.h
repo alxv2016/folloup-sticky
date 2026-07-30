@@ -39,6 +39,7 @@ enum class BlockerReason : uint8_t {
     kNone,
     kRecordingActive,
     kRecordingSaving,
+    kAudioPlayback,
     kShutdownPending,
     kDisplayRefresh,
     kStorageWrite,

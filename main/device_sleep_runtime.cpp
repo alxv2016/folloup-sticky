@@ -22,6 +22,7 @@
 #include "recording_service.h"
 #include "status_bar_runtime.h"
 #include "waveshare_board_config.h"
+#include "playback_service.h"
 #include "storage_service.h"
 #include "timezone_service.h"
 #include "wifi_service.h"
@@ -142,6 +143,13 @@ device_sleep_service::BlockerReason GetAutoSleepBlocker(void*)
         if (recording_state.armed || recording_state.recording) {
             return device_sleep_service::BlockerReason::kRecordingActive;
         }
+    }
+
+    // Clip playback runs with no user input for up to the clip's length -- both the
+    // review-after-recording replay and the Details page's play action. Neither touches
+    // recording state, so without this the sleep timer would keep counting through it.
+    if (playback_service::IsPlaying()) {
+        return device_sleep_service::BlockerReason::kAudioPlayback;
     }
 
     if (storage_service::IsWriteBusy()) {

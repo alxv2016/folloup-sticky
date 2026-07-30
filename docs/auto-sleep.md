@@ -1,8 +1,8 @@
 # Auto Sleep
 
-Auto sleep uses the LSM6DS3TR-C IMU to detect inactivity, enters e-paper display
+Auto sleep uses the QMI8658 IMU to detect inactivity, enters e-paper display
 sleep first, and later enters ESP32-S3 light sleep. The current implementation is
-proven on reTerminal Sticky hardware and intentionally uses direct IMU polling
+proven on this hardware and intentionally uses direct IMU polling
 instead of FIFO or IMU interrupts.
 
 ## Runtime Ownership
@@ -12,8 +12,8 @@ Auto sleep is split between policy and hardware runtime code:
 - `device_sleep_service` owns the sleep state machine, inactivity timers,
   timeout validation, blocker state, and transition events.
 - `main/device_sleep_runtime.cpp` owns product-specific hardware behavior:
-  IMU polling, display sleep commands, ESP light-sleep entry, `POWER_OK` wake
-  setup, touch recovery after light sleep, and blocker aggregation.
+  IMU polling, display sleep commands, ESP light-sleep entry, `ACTION` wake
+  setup and blocker aggregation.
 - `app_shell` remains an orchestrator. It provides settings, forwards user
   activity, supplies app-owned blocker state, and starts the runtime.
 
@@ -28,7 +28,7 @@ The device moves through three stages:
   panel sleep, and the ESP32-S3 has entered `esp_light_sleep_start()`.
 
 Motion or user interaction wakes the display from `display_sleeping`.
-`POWER_OK` / `GPIO4` wakes the ESP32-S3 from `light_sleeping`.
+`ACTION` / `GPIO0` or the PMIC interrupt wakes the ESP32-S3 from `light_sleeping`.
 
 ## IMU Inactivity Detection
 
@@ -68,47 +68,43 @@ with a full refresh.
 After the configured light-sleep timeout has elapsed during the same no-motion
 period, the runtime enters ESP32-S3 light sleep.
 
-The Sticky power path needs two board-specific protections during light sleep:
+There is no power latch to protect on this board -- the AXP2101 holds the rails
+across light sleep on its own, which removes the Sticky's whole `PWR_HOLD` /
+`PWR_LOCK` sleep-GPIO problem.
 
-- `PWR_HOLD` / `GPIO45` and `PWR_LOCK` / `GPIO46` must remain driven high while
-  the ESP32-S3 sleeps. Without an explicit sleep GPIO configuration, ESP-IDF's
-  automatic sleep GPIO handling can let the latch pins stop holding the board in
-  the same powered state. USB power can mask this on the bench, but battery-only
-  light sleep depends on the latch pins staying asserted.
-- `POWER_OK` / `GPIO4` is both the active-low light-sleep wake source and the
-  normal app power button. The runtime arms wake-only suppression before calling
-  `esp_light_sleep_start()` so the wake-causing press cannot leak into
-  `app_shell` as a normal power-button interaction such as a lock-screen toggle
-  gesture. The suppression is cleared by the matching release/click event after
-  wake.
+One protection does carry over: `ACTION` / `GPIO0` is both a light-sleep wake
+source and the app's record button. The runtime arms wake-only suppression before
+calling `esp_light_sleep_start()` so the wake-causing press cannot leak into
+`app_shell` and arm a recording. The suppression is cleared by the matching
+release/click event after wake, or by a timeout if that event never arrives.
+
+The AXP2101 interrupt line (`GPIO38`) is the second wake source, which is how a
+`PWR` press wakes the board.
 
 The light-sleep sequence is:
 
-1. Configure `PWR_HOLD` / `GPIO45` and `PWR_LOCK` / `GPIO46` to remain driven
-   high during light sleep.
-2. Configure `POWER_OK` / `GPIO4` as an input with pull-up.
-3. Wait for `POWER_OK` / `GPIO4` to be released/high.
-4. Arm `POWER_OK` / `GPIO4` through EXT1 as an active-low light-sleep wake source.
-5. Arm wake-only `POWER_OK` event suppression.
+1. Configure `ACTION` / `GPIO0` as an input with pull-up.
+2. Wait for `ACTION` / `GPIO0` to be released/high.
+3. Arm `ACTION` / `GPIO0` and the PMIC IRQ / `GPIO38` as active-low
+   `gpio_wakeup_enable` light-sleep wake sources (not EXT1: this board uses the
+   light-sleep GPIO-wake path, which leaves the pads on the digital peripheral).
+4. Suspend the button-service polling timer, so light sleep's clock jump cannot
+   replay a burst of missed ticks and destroy click classification on wake.
+5. Arm wake-only `ACTION` event suppression.
 6. Refresh the e-paper panel to a blank screen.
 7. Wait for the e-paper refresh to finish and put the panel into sleep.
 8. Call `esp_light_sleep_start()`.
-9. On wake, disable the EXT1 wake source and restore GPIO4 to digital input mode.
+9. On wake, disarm the GPIO wake sources, restore the `ACTION` pad, and resume
+   button polling before anything slow runs.
 10. Commit the wake transition immediately, without queueing a second wake event.
 11. Consume the wake-causing power-button event as wake-only.
 12. Restore the display with a forced full refresh, even if software state has
     already moved back to awake.
-13. Recover the GT911 touch controller before normal touch input resumes.
-
-GT911 recovery is required after ESP light sleep on this hardware. The touch
-controller can remain unresponsive after the ESP32-S3 wakes unless
-`touch_service` resets/reinitializes the GT911 and reattaches the `TP_INT`
-handler. This is part of the light-sleep wake path, not an optional diagnostic
-step.
 
 Normal awake-state power-button interactions remain available outside the
-light-sleep wake path. Today that means `POWER_OK` double click toggles the
-lock screen, while shutdown starts with the `UP` hold plus `POWER_OK` press
+light-sleep wake path. Today that means a short press of the
+`PWR` key toggles the lock screen, while a ~1s `PWR` hold opens the shutdown
+confirmation. Both arrive as AXP2101 interrupts rather than GPIO button events
 chord and then requires explicit confirmation through the global shutdown
 modal.
 
@@ -133,7 +129,7 @@ Plain USB power does not block auto sleep.
 During SD format, `storage_service::IsWriteBusy()` raises the `storage_write`
 blocker. That keeps the sleep state machine from entering display sleep or
 light sleep in the middle of the format operation. IMU motion polling still
-continues during that time, but it reads the LSM6DS3 over the separate sensor
+continues during that time, but it reads the QMI8658 over the shared sensor
 I2C bus and does not directly contend with the shared SPI bus used by MicroSD
 and the e-paper panel. Motion logs during formatting are therefore expected and
 are not, by themselves, evidence that the SD format path is being interrupted.
@@ -158,7 +154,7 @@ timeout.
 
 The runtime logs the resolved auto-sleep settings at startup, motion and
 no-motion detection, blocker changes, stage transitions, display sleep/wake
-actions, light-sleep entry, light-sleep wake cause, and touch recovery after
+actions, light-sleep entry, and light-sleep wake cause after
 light sleep. These logs were used for on-device validation and should stay
 stable enough for future hardware testing.
 
@@ -183,14 +179,14 @@ IMU interrupt handling should be revisited only if one of these becomes true:
 - another feature needs IMU activity, inactivity, FIFO watermark, orientation,
   tap, or data-ready interrupts
 
-`GPIO7` is shared by BQ27220 `BFG_INT` and the IMU interrupt path. If the IMU
+The QMI8658 IMU shares the sensor I2C bus with the PMIC and RTC. If the IMU
 interrupt path is added later, neither `power_service` nor `imu_service` should
 claim `GPIO7` independently. Add one shared-line owner that:
 
 - owns the `GPIO7` ISR
 - keeps the ISR minimal
 - defers all I2C work to a task
-- checks and logs BQ27220 interrupt state without losing existing diagnostics
+- checks and logs PMIC interrupt state without losing existing diagnostics
 - checks and logs IMU interrupt source or FIFO state
 - identifies which source asserted the shared line
 - preserves current auto-sleep behavior until the new interrupt path is proven

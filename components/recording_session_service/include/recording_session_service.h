@@ -14,10 +14,16 @@
 
 namespace recording_session_service {
 
+// kStartCue/kStopCue bracket the capture with an audible cue, and kPlayingBack replays the
+// take before the user is asked to tag it -- the clip is still only in PSRAM at that point,
+// so a bad take can be discarded from the tag menu without ever reaching the SD card.
 enum class Phase : uint8_t {
     kIdle = 0,
     kArmed,
+    kStartCue,
     kRecording,
+    kStopCue,
+    kPlayingBack,
     kAwaitingTagSelection,
     kSaving,
     kTranscribing,

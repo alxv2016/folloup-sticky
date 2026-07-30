@@ -891,10 +891,6 @@ void HandleRecordingSessionEvent(const recording_session_service::Event& event, 
     }
 
     switch (event.snapshot.phase) {
-        case recording_session_service::Phase::kRecording:
-            PlayInteractionFeedback(
-                MakeFeedbackResult(app_interaction::FeedbackCue::kRecordingStart));
-            break;
         case recording_session_service::Phase::kAwaitingTagSelection: {
             time_page_runtime::ClearPendingSelectModal();
             const esp_err_t err =
@@ -954,6 +950,13 @@ void HandleRecordingSessionEvent(const recording_session_service::Event& event, 
             }
             break;
         }
+        // kStartCue/kStopCue own their own audio, and kRecording is now reached only after
+        // the start cue has finished -- emitting kRecordingStart here as well would put two
+        // sounds back to back on every take. kPlayingBack is the clip itself.
+        case recording_session_service::Phase::kStartCue:
+        case recording_session_service::Phase::kRecording:
+        case recording_session_service::Phase::kStopCue:
+        case recording_session_service::Phase::kPlayingBack:
         case recording_session_service::Phase::kIdle:
         case recording_session_service::Phase::kArmed:
         case recording_session_service::Phase::kSaving:

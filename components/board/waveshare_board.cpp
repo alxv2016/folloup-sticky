@@ -133,12 +133,16 @@ AudioCodec* GetAudioCodec()
         WAVESHARE_AUDIO_I2S_MCLK, WAVESHARE_AUDIO_I2S_BCLK, WAVESHARE_AUDIO_I2S_WS,
         WAVESHARE_AUDIO_I2S_DOUT, WAVESHARE_AUDIO_I2S_DIN, WAVESHARE_AUDIO_PA_PIN,
         ES8311_CODEC_DEFAULT_ADDR);
+    // Set the volume before enabling output: EnableOutput is what opens the codec
+    // device, and it applies whatever output_volume_ holds at that moment. Setting it
+    // after would work too, but this way there is never a window at the default.
+    s_audio_codec->SetOutputVolume(WAVESHARE_AUDIO_OUTPUT_VOLUME);
     // Keep the output path (and PA) enabled for the codec's lifetime so system
     // sound cues and clip playback can write to it without per-event PA toggling
     // (input is enabled on demand by the recording service).
     s_audio_codec->EnableOutput(true);
-    ESP_LOGI(kTag, "ES8311 audio codec created (%d Hz duplex, output enabled)",
-             WAVESHARE_AUDIO_SAMPLE_RATE_HZ);
+    ESP_LOGI(kTag, "ES8311 audio codec created (%d Hz duplex, output enabled, volume %d)",
+             WAVESHARE_AUDIO_SAMPLE_RATE_HZ, WAVESHARE_AUDIO_OUTPUT_VOLUME);
     return s_audio_codec.get();
 }
 
