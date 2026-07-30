@@ -20,7 +20,9 @@ struct SelectListState {
 };
 
 struct SelectListStyle {
-    uint8_t panel_background_color = design::color::kGrayLight;
+    // White for the same reason as network_list's panel: this is a content-sized container
+    // surface, and a large kGrayLight fill is a periodic dither that a partial refresh bands.
+    uint8_t panel_background_color = design::color::kWhite;
     uint8_t panel_border_color = design::color::kBlack;
     uint8_t focus_ring_color = design::color::kBlack;
     uint8_t focus_gap_color = design::color::kWhite;

@@ -129,6 +129,20 @@ const char* SurfaceNameForIndex(size_t index)
             return "time_page";
         case 7:
             return "dashboard_page";
+        case 8:
+            return "vibe_check_page";
+        case 9:
+            return "summarize_page";
+        case 10:
+            return "notes_page";
+        case 11:
+            return "todos_page";
+        case 12:
+            return "follow_up_page";
+        case 13:
+            return "details_page";
+        case 14:
+            return "onboarding_page";
         default:
             return "unknown";
     }

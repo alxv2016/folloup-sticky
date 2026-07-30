@@ -528,13 +528,7 @@ esp_err_t ShowWifiScreen(display_service::RefreshMode refresh_mode)
     // when it completes wifi_service fires an event -> HandleWifiEvent -> the page
     // re-syncs with the results. Safe to call unconditionally: StartNetworkScan is a
     // no-op when WiFi is disabled or a scan is already running.
-    // DIAGNOSTIC -- TEMPORARY, REVERT AFTER TESTING.
-    // Entering this page bands the display. Disabling the entry scan splits the two
-    // possibilities that reading the code cannot: if the banding persists with no scan,
-    // Wi-Fi timing is irrelevant and the fault is in this page's render or state; if it
-    // stops, the fault is the scan overlapping the refresh. The Scan button still works,
-    // so the list can be populated manually while testing.
-    // (void)wifi_service::StartNetworkScan();
+    (void)wifi_service::StartNetworkScan();
     return display_service::SetCurrentScreen(display_service::ScreenId::kWifi, refresh_mode,
                                              "show_wifi_screen");
 }

@@ -128,7 +128,18 @@ bool ShouldDrawBlackForTone(int x, int y, uint8_t tone)
         return ((x + y) & 1) == 0;
     }
     if (tone < design::color::kGray4) {
-        return (x % 2 == 0) && (y % 2 == 0);
+        // 25% coverage, dispersed diagonally rather than as a (x%2==0 && y%2==0) lattice.
+        //
+        // DrawPortraitPixel maps portrait x onto the panel's gate line (raw_y). Under the old
+        // lattice every odd gate line was left completely empty while even ones carried 50%
+        // black, so a large fill drove the panel with a gate-periodic pattern that the partial
+        // waveform could not settle evenly -- that was the WiFi page banding. It is also why an
+        // isolated sparse-dither glyph would not develop until a later refresh (see the
+        // carousel::kDisabledControlColor note in design_tokens.h).
+        //
+        // (x + y) % 4 gives every gate line and every source line exactly 25% coverage, just
+        // phase-shifted, so no line is starved and nothing aligns with the drive axes.
+        return ((x + y) & 3) == 0;
     }
     return false;
 }

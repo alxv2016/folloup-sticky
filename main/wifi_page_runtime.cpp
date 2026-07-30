@@ -327,29 +327,6 @@ void ResetFocus()
     {
         std::lock_guard<std::mutex> lock(s_mutex);
         s_coordinator.Show();
-        // DIAGNOSTIC -- TEMPORARY. Show() is what is meant to clear per-visit state on
-        // entry. The banding photo shows the password input rendered on a fresh entry from
-        // the dashboard, where nothing should be entering a password -- so dump what
-        // survived Show(). Anything non-default here is stale state from a previous visit.
-        {
-            const epaper_ui::WifiPageState debug_state = BuildStateLocked();
-            ESP_LOGW(kTag,
-                     "ENTRY STATE: focus=%d pw{active=%d focused=%d cursor=%d chars=%u} "
-                     "list{status=%d nets=%u focused=%d selected=%d active=%d} "
-                     "btn{scan=%d connect=%d}",
-                     debug_state.navigation_focus_index,
-                     debug_state.password_input.active ? 1 : 0,
-                     debug_state.password_input.focused ? 1 : 0,
-                     debug_state.password_input.cursor_index,
-                     static_cast<unsigned>(debug_state.password_input.value_text.size()),
-                     static_cast<int>(debug_state.network_list.status),
-                     static_cast<unsigned>(debug_state.network_list.networks.size()),
-                     debug_state.network_list.focused_network_index,
-                     debug_state.network_list.selected_network_index,
-                     debug_state.network_list.active ? 1 : 0,
-                     debug_state.scan_button.selected ? 1 : 0,
-                     debug_state.connect_button.selected ? 1 : 0);
-        }
         AdvanceInteractionGenerationLocked();
         projection = BuildFooterProjectionStateLocked();
     }

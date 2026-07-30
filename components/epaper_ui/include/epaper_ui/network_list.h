@@ -33,7 +33,13 @@ struct NetworkListState {
 struct NetworkListStyle {
     design::TypographyRole empty_state_role = design::TypographyRole::kLabelSmall;
     design::TypographyRole status_role = design::TypographyRole::kLabelSmall;
-    uint8_t panel_background_color = design::color::kGrayLight;
+    // White, not kGrayLight. This panel grows to fill whatever vertical space the page has
+    // left, and ShouldDrawBlackForTone renders kGrayLight as a strict 25% dot-screen lattice
+    // (x%2==0 && y%2==0). A partial refresh cannot settle that large a periodic lattice
+    // uniformly, which showed up as horizontal banding across the WiFi page. Small kGrayLight
+    // regions are fine -- the scrollbar thumb below is one, and scroll_container has used the
+    // same pairing (white panel, gray thumb) cleanly all along.
+    uint8_t panel_background_color = design::color::kWhite;
     uint8_t panel_border_color = design::color::kBlack;
     uint8_t empty_state_text_color = design::color::kBlack;
     uint8_t empty_state_icon_color = design::color::kBlack;

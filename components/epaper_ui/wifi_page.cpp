@@ -4,12 +4,6 @@
 
 #include "render_utils.h"
 
-// DIAGNOSTIC -- TEMPORARY. Flip a flag to 1 and re-flash to skip that widget. These three
-// are the only draw calls unique to this page; every other widget it uses is shared with
-// pages that render cleanly, so the banding has to come from one of them or its state.
-#define WIFI_DEBUG_SKIP_PASSWORD_INPUT 0
-#define WIFI_DEBUG_SKIP_BUTTONS 0
-
 namespace epaper_ui {
 namespace {
 
@@ -300,7 +294,6 @@ void DrawWifiPage(uint8_t* framebuffer,
 
     PasswordInputStyle password_style = {};
     password_style.width = layout.password_input.width;
-#if !WIFI_DEBUG_SKIP_PASSWORD_INPUT
     DrawPasswordInput(framebuffer,
                       raw_width,
                       raw_height,
@@ -310,12 +303,10 @@ void DrawWifiPage(uint8_t* framebuffer,
                       layout.password_input.y,
                       state.password_input,
                       password_style);
-#endif
 
     ButtonStyle action_style = {};
     action_style.width = layout.scan_button.width;
     action_style.center_label = true;
-#if !WIFI_DEBUG_SKIP_BUTTONS
     DrawButton(framebuffer,
                raw_width,
                raw_height,
@@ -336,7 +327,6 @@ void DrawWifiPage(uint8_t* framebuffer,
                {.variant = ButtonVariant::kPrimary,
                 .width = layout.connect_button.width,
                 .center_label = true});
-#endif
 
     DrawGlobalFooter(framebuffer,
                      raw_width,
