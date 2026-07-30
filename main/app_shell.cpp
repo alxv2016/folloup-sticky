@@ -28,6 +28,7 @@
 #include "lock_screen_runtime.h"
 #include "overlay_runtime.h"
 #include "page_input_runtime.h"
+#include "power_key_runtime.h"
 #include "power_service.h"
 #include "project_assets.h"
 #include "recording_session_service.h"
@@ -1264,31 +1265,6 @@ void HandleDispatchedButtonEvent(const button_service::ButtonEventInfo& event)
         return;
     }
 
-    // FN long-press opens the shutdown confirmation. This is the only entry point to
-    // the software shutdown path (clean RTC-interrupt clear, then AXP2101 PowerOff);
-    // the AXP2101's own power key still hard-cuts the rails without it. Handled here
-    // rather than in the switch below because per-screen page input consumes primary
-    // long-press without acting on it.
-    if (event.button == button_service::ButtonId::kFunction &&
-        event.event == button_service::ButtonEvent::kLongPressStart) {
-        if constexpr (!kEnablePowerButtonShutdown) {
-            ESP_LOGW(kTag, "FN long-press shutdown requested but shutdown is disabled");
-            return;
-        }
-        if (s_shutdown_task == nullptr) {
-            ESP_LOGW(kTag, "FN long-press shutdown requested but shutdown task unavailable");
-            return;
-        }
-
-        ESP_LOGI(kTag, "FN long-press: showing shutdown confirmation");
-        const esp_err_t err = overlay_runtime::ShowShutdownModal();
-        FlushOverlayFeedback();
-        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-            ESP_LOGW(kTag, "Show shutdown modal failed: %s", esp_err_to_name(err));
-        }
-        return;
-    }
-
     // The ACTION press/hold gesture (arm on press-down, start on long-press,
     // stop/cancel on release) is a global recording control, so it must be
     // evaluated before per-screen page input. Taps (single/double click) fall
@@ -1340,25 +1316,16 @@ void HandleDispatchedButtonEvent(const button_service::ButtonEventInfo& event)
             // lock-screen refresh, making the keys feel live behind the lock.
             break;
         case button_service::ButtonEvent::kDoubleClick:
-            // FN double-click toggles the lock screen. DOWN double-click is reserved as
-            // the app-wide "exit an entered UI" gesture and is handled by the per-screen page
-            // input (WiFi network list, Vibe Check card, ...); it is intentionally a no-op at
-            // this level. Any other button just plays the double-click cue.
-            if (event.button == button_service::ButtonId::kFunction) {
-                const bool was_active = lock_screen_runtime::IsActive();
-                const esp_err_t err = lock_screen_runtime::Toggle();
-                if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-                    ESP_LOGW(kTag, "Power button lock toggle failed: %s",
-                             esp_err_to_name(err));
-                } else {
-                    PlayFeedback(was_active ? feedback_service::FeedbackEvent::kUnlock
-                                            : feedback_service::FeedbackEvent::kLock);
-                }
-            } else if (event.button != button_service::ButtonId::kDown) {
+            // FN has no double-click action: lock/unlock moved to the PMIC power key
+            // (HandlePowerKeyInterrupt). DOWN is excluded because holding it is the
+            // app-wide "exit an entered UI" gesture and the per-screen page input owns
+            // its cue. Everything else just plays the double-click cue.
+            if (event.button != button_service::ButtonId::kDown) {
                 PlayFeedback(feedback_service::FeedbackEvent::kButtonDoubleClick);
             }
             break;
         case button_service::ButtonEvent::kLongPressStart:
+            // FN has no long-press action either -- shutdown moved to the power key.
             // ACTION's long press starts a recording and plays its own cue.
             if (event.button != button_service::ButtonId::kAction) {
                 PlayFeedback(feedback_service::FeedbackEvent::kButtonLongPress);
@@ -1368,6 +1335,48 @@ void HandleDispatchedButtonEvent(const button_service::ButtonEventInfo& event)
             break;
     }
 
+}
+
+// Power-key policy: what each press does. power_key_runtime owns the PMIC plumbing and
+// hands us a decoded press.
+void HandlePowerKeyPress(power_key_runtime::Press press, void*)
+{
+    if (press == power_key_runtime::Press::kLong) {
+        if constexpr (!kEnablePowerButtonShutdown) {
+            ESP_LOGW(kTag, "Power key long press ignored; shutdown is disabled");
+            return;
+        }
+        if (s_shutdown_task == nullptr) {
+            ESP_LOGW(kTag, "Power key long press ignored; shutdown task unavailable");
+            return;
+        }
+
+        const esp_err_t err = overlay_runtime::ShowShutdownModal();
+        FlushOverlayFeedback();
+        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+            ESP_LOGW(kTag, "Show shutdown modal failed: %s", esp_err_to_name(err));
+        }
+        return;
+    }
+
+    // Don't toggle the lock underneath a shutdown confirmation the user is answering.
+    if (overlay_runtime::IsShutdownModalVisible()) {
+        return;
+    }
+
+    // Clear any overlay that captures input first, so unlocking never lands the user back
+    // in a keyboard or select list whose context is long gone.
+    (void)overlay_runtime::DismissSelectModal();
+    (void)overlay_runtime::DismissKeyboard();
+
+    const bool was_active = lock_screen_runtime::IsActive();
+    const esp_err_t err = lock_screen_runtime::Toggle();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(kTag, "Power key lock toggle failed: %s", esp_err_to_name(err));
+        return;
+    }
+    PlayFeedback(was_active ? feedback_service::FeedbackEvent::kUnlock
+                            : feedback_service::FeedbackEvent::kLock);
 }
 
 void HandleButtonEvent(const button_service::ButtonEventInfo& event, void*)
@@ -1627,6 +1636,17 @@ void InitFooterRuntime()
     }
 }
 
+// Must run after the display, lock screen and shutdown task exist, since a press can reach
+// all three immediately.
+void InitPowerKeyRuntime()
+{
+    power_key_runtime::SetPressHandler(&HandlePowerKeyPress, nullptr);
+    const esp_err_t err = power_key_runtime::Init();
+    if (err != ESP_OK) {
+        ESP_LOGW(kTag, "Power key runtime init failed: %s", esp_err_to_name(err));
+    }
+}
+
 void InitImuService()
 {
     const esp_err_t err = imu_service::Init();
@@ -1694,6 +1714,7 @@ void Run()
     InitRecordingSessionService();
     InitFooterRuntime();
     StartShutdownTask();
+    InitPowerKeyRuntime();
     InitButtonService();
     const esp_err_t status_bar_err = status_bar_runtime::UpdateDisplayState();
     if (status_bar_err != ESP_OK && status_bar_err != ESP_ERR_INVALID_STATE) {

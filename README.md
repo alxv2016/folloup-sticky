@@ -2,7 +2,7 @@
 
 Followup is a place to capture your thoughts — whether it's an idea, a to-do, or just a note. Record what's on your mind at that light-bulb moment, before it slips away, and Followup helps you organize it afterward. With Gemini, your recordings are transcribed and summarized automatically. Everything is stored on your SD card.
 
-It runs on the reTerminal Sticky, a magnetic ePaper terminal, so your thoughts live on a quiet, always-on screen you can place anywhere — a constant, low-interruption reminder instead of one more notification buried in your phone.
+It runs on the [Waveshare ESP32-S3-ePaper-3.97](https://docs.waveshare.com/ESP32-S3-ePaper-3.97), so your thoughts live on a quiet, always-on screen you can place anywhere — a constant, low-interruption reminder instead of one more notification buried in your phone.
 
 ## One-Sentence Positioning
 
@@ -57,23 +57,41 @@ Pin your follow-ups to the ePaper display as sticky notes. Because the screen is
 
 ## Brief Specifications
 
-Followup runs on the reTerminal Sticky hardware.
+Followup runs on the [Waveshare ESP32-S3-ePaper-3.97](https://docs.waveshare.com/ESP32-S3-ePaper-3.97).
 
 | Item | Information |
 | --- | --- |
-| Product Name | Followup (on reTerminal Sticky) |
-| Product Type | Voice-capture notes app on a magnetic ePaper terminal |
-| Screen | 3.97-inch black-and-white ePaper display, 800 x 480 resolution |
-| Touch | Capacitive touch screen |
-| Connectivity | 2.4GHz Wi-Fi, BLE 5.0 |
-| Interaction | Touch, record/AI button, page-up / page-down buttons |
-| Sensors | Temperature and humidity sensor, three-axis accelerometer, microphone |
+| Product Name | Followup (on ESP32-S3-ePaper-3.97) |
+| Product Type | Voice-capture notes app on an ePaper terminal |
+| MCU | ESP32-S3R8, dual-core Xtensa LX7 up to 240MHz |
+| Memory | 8MB PSRAM, 16MB flash |
+| Screen | 3.97-inch black-and-white ePaper, 800 x 480, SSD1677 controller |
+| Interaction | Buttons only — this board has no touchscreen (see [Controls](#controls)) |
+| Connectivity | 2.4GHz Wi-Fi (802.11 b/g/n), Bluetooth 5 (LE) |
+| Audio | ES8311 codec, onboard microphone, NS4150B amplifier, speaker header |
+| Sensors | QMI8658 6-axis IMU, PCF85063 real-time clock |
+| Power | AXP2101 PMIC, 3.7V lithium battery (MX1.25 connector), USB-C charging |
 | Storage | microSD card (recordings, transcripts, summaries) |
 | AI | Gemini (cloud) transcription and summarization, over Wi-Fi |
-| Battery | 750mAh lithium battery |
-| Charging | USB-C |
-| Dimensions | 106mm x 65.5mm x 7.3mm |
-| Weight | 70g |
+
+The board also carries an SHTC3 temperature/humidity sensor on the shared I2C bus. Followup does not currently read it.
+
+## Controls
+
+Followup is driven entirely by the three physical controls: a rocker, the BOOT button, and the PWR button.
+
+| Control | Action |
+| --- | --- |
+| Rocker up / down | Move the selection; hold to repeat |
+| Rocker down, held | Back out of a list or card you have entered |
+| Rocker middle | Select / confirm |
+| BOOT, tap | Select / confirm |
+| BOOT, press and hold | Record — recording starts on the hold and stops when you let go |
+| PWR, tap | Lock the screen, or unlock it |
+| PWR, hold ~1s | Open the shutdown confirmation |
+| PWR, hold 6s | Hardware power-off, straight from the PMIC |
+
+Recording is exclusive to BOOT, so no other control can start or stop a capture by accident. The 6-second PWR hold bypasses the firmware entirely and always cuts power.
 
 ## Product Value Summary
 
