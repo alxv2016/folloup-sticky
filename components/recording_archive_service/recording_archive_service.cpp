@@ -78,14 +78,13 @@ static_assert(sizeof(WavHeader) == 44, "WAV header must be 44 bytes");
 // the archive counts both derive from it, so a newly added tag can never fall
 // through and be silently uncounted (Idea previously hit the counting switch's
 // default and never surfaced under Notes despite being saved).
+// There is deliberately no matching IsNotesRecordingTag(). Callers branch on this one
+// predicate with a plain `else`, which makes the split exhaustive by construction: a newly
+// added tag lands under Notes rather than falling through uncounted. A second predicate
+// would let the two drift apart and reintroduce exactly that gap.
 bool IsTodoRecordingTag(RecordingTag tag)
 {
     return tag == RecordingTag::kTask;
-}
-
-bool IsNotesRecordingTag(RecordingTag tag)
-{
-    return !IsTodoRecordingTag(tag);
 }
 
 const char* ArchiveSubdirectory(RecordingTag tag)
