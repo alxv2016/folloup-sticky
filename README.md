@@ -2,7 +2,7 @@
 
 Followup is a place to capture your thoughts — whether it's an idea, a to-do, or just a note. Record what's on your mind at that light-bulb moment, before it slips away, and Followup helps you organize it afterward. With Gemini, your recordings are transcribed and summarized automatically. Everything is stored on your SD card.
 
-It runs on the reTerminal Sticky, a magnetic ePaper terminal, so your thoughts live on a quiet, always-on screen you can place anywhere — a constant, low-interruption reminder instead of one more notification buried in your phone.
+It runs on the [reTerminal Sticky](https://www.seeedstudio.com/sticky/), a magnetic ePaper terminal, so your thoughts live on a quiet, always-on screen you can place anywhere — a constant, low-interruption reminder instead of one more notification buried in your phone.
 
 ## One-Sentence Positioning
 
