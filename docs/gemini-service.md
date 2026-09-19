@@ -130,7 +130,7 @@ The current auth path is intentionally minimal:
 
 - request type: HTTP `GET`
 - endpoint: `v1beta/<model>`
-- default model: `models/gemini-2.5-flash-lite`
+- default model: `models/gemini-3.5-flash-lite`
 - auth header: `x-goog-api-key: <api_key>`
 
 The current implementation uses ESP-IDF's `esp_http_client` with the CRT bundle
@@ -262,7 +262,7 @@ Current response shape:
     "has_sdkconfig_api_key": true,
     "api_key_source": "sdkconfig",
     "api_key_last4": "1234",
-    "model_name": "models/gemini-2.5-flash-lite"
+    "model_name": "models/gemini-3.5-flash-lite"
   },
   "runtime": {
     "initialized": true,
@@ -273,9 +273,9 @@ Current response shape:
     "supports_audio_understanding": false,
     "supports_structured_output": false,
     "last_http_status": 200,
-    "last_status_message": "Authenticated with Gemini 2.5 Flash-Lite",
-    "last_model_resource_name": "models/gemini-2.5-flash-lite",
-    "last_model_display_name": "Gemini 2.5 Flash-Lite",
+    "last_status_message": "Authenticated with Gemini 3.5 Flash Lite",
+    "last_model_resource_name": "models/gemini-3.5-flash-lite",
+    "last_model_display_name": "Gemini 3.5 Flash Lite",
     "last_error_code": "",
     "last_error_message": ""
   }

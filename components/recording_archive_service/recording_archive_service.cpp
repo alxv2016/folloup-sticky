@@ -14,7 +14,9 @@
 #include <unistd.h>
 
 #include "cJSON.h"
+#include "esp_cpu.h"
 #include "esp_log.h"
+#include "esp_memory_utils.h"
 #include "esp_timer.h"
 #include "followup_task_config.h"
 #include "freertos/FreeRTOS.h"
@@ -1011,8 +1013,20 @@ bool LoadSnapshotFromNvs(Snapshot* out)
     return true;
 }
 
+// Flash writes assert unless the caller's stack is in internal RAM, and the Gemini workers
+// (transcription, summary) run with PSRAM stacks and reach this through Refresh(). For them
+// the write is deferred to the next save from an internal-stack caller; the NVS copy is only
+// a boot-time cache of the counts, so a late write is harmless.
+std::atomic<bool> s_snapshot_nvs_write_pending = false;
+
 void SaveSnapshotToNvs(const Snapshot& snapshot)
 {
+    if (!esp_ptr_in_dram(reinterpret_cast<const void*>(esp_cpu_get_sp()))) {
+        s_snapshot_nvs_write_pending.store(true);
+        return;
+    }
+    s_snapshot_nvs_write_pending.store(false);
+
     nvs_handle_t handle = 0;
     if (nvs_open(kSnapshotNvsNamespace, NVS_READWRITE, &handle) != ESP_OK) {
         return;
@@ -1054,7 +1068,7 @@ bool ScanAndApply(bool force_notify)
         changed = !s_snapshot.initialized || !SnapshotCountsEqual(s_snapshot, scanned);
         s_snapshot = scanned;
     }
-    if (changed) {
+    if (changed || s_snapshot_nvs_write_pending.load()) {
         SaveSnapshotToNvs(scanned);
     }
     if (changed || force_notify) {

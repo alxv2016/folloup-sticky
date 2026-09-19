@@ -64,6 +64,7 @@ EventHandler s_event_handler = nullptr;
 void* s_event_context = nullptr;
 Snapshot s_snapshot = {};
 QueueHandle_t s_queue = nullptr;
+StaticTask_t s_worker_task_buffer;
 
 // --- small helpers ---------------------------------------------------------
 
@@ -978,9 +979,12 @@ esp_err_t Init()
                 ESP_LOGE(kTag, "Failed to create summary queue");
                 return ESP_ERR_NO_MEM;
             }
-            if (xTaskCreatePinnedToCore(WorkerTask, "summary_service", kWorkerTaskStackWords, nullptr,
-                                        followup_task_config::kPriorityGemini, nullptr,
-                                        followup_task_config::kSystemCore) != pdPASS) {
+            // PSRAM stack: internal RAM cannot spare 8 KB. The worker loops forever and its
+            // path writes only the SD card, as CreatePsramStackTask requires.
+            if (followup_task_config::CreatePsramStackTask(
+                    WorkerTask, "summary_service", kWorkerTaskStackWords, nullptr,
+                    followup_task_config::kPriorityGemini, &s_worker_task_buffer,
+                    followup_task_config::kSystemCore) == nullptr) {
                 ESP_LOGE(kTag, "Failed to start summary worker");
                 vQueueDelete(s_queue);
                 s_queue = nullptr;

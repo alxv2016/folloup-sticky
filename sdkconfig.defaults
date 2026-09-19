@@ -8,6 +8,9 @@ CONFIG_SPIRAM_USE_MALLOC=y
 CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=2048
 CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=98304
+# TLS buffers and handshake state (~20+ KB per connection) go to PSRAM; internal RAM is
+# too tight for them once Wi-Fi, audio, and the app tasks are up, so Gemini HTTPS fails.
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 
 # Waveshare board: 16 MB QIO flash.
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
@@ -34,6 +37,20 @@ CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y
 # Auto-sleep demo defaults for hardware validation.
 CONFIG_FOLLOWUP_AUTO_SLEEP_DISPLAY_SLEEP_TIMEOUT_SECONDS=180
 CONFIG_FOLLOWUP_AUTO_SLEEP_LIGHT_SLEEP_TIMEOUT_SECONDS=1800
+
+# Internal RAM is tight on this board once Wi-Fi, the audio pipeline, and the
+# recording/button/shutdown tasks are all live at boot; the Wi-Fi static RX
+# buffer pool is the single largest easily-tunable internal-RAM consumer, so
+# trim it (and RX_BA_WIN, which must stay <= 2x this value) from the stock
+# defaults (10 / 6) to leave headroom for task creation later in startup.
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6
+CONFIG_ESP_WIFI_RX_BA_WIN=6
+# Keep Wi-Fi code in flash rather than IRAM. On the S3, IRAM and DRAM share one SRAM pool,
+# so this returns ~27 KB to the internal heap. With it, only ~16 KB was free when a
+# transcription upload started, and hardware AES could not get its DMA buffers. The Wi-Fi
+# throughput cost does not matter for this app's small uploads.
+CONFIG_ESP_WIFI_IRAM_OPT=n
+CONFIG_ESP_WIFI_RX_IRAM_OPT=n
 
 # Wi-Fi and clock-sync demo defaults. Runtime NVS settings take precedence over
 # these built-in station credentials.

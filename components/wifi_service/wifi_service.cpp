@@ -60,14 +60,15 @@ constexpr const char* kPortalIndexJsUri = "/index.js";
 constexpr const char* kPortalIndexCssUri = "/index.css";
 
 // Captive-portal frontend, embedded from components/wifi_service/portal/ (built by the Vite app in
-// //webserver; run `npm run build` there and copy dist/* into portal/). EMBED_FILES generates the
-// _binary_<basename>_{start,end} symbols; the asm labels bind these declarations to them.
-extern const uint8_t kIndexHtmlStart[] asm("_binary_index_html_start");
-extern const uint8_t kIndexHtmlEnd[] asm("_binary_index_html_end");
-extern const uint8_t kIndexJsStart[] asm("_binary_index_js_start");
-extern const uint8_t kIndexJsEnd[] asm("_binary_index_js_end");
-extern const uint8_t kIndexCssStart[] asm("_binary_index_css_start");
-extern const uint8_t kIndexCssEnd[] asm("_binary_index_css_end");
+// //webserver; run `npm run build` there and copy dist/* into portal/). CMakeLists.txt gzips each
+// file at build time and embeds the result, generating _binary_<basename>_gz_{start,end} symbols;
+// the asm labels bind these declarations to them.
+extern const uint8_t kIndexHtmlStart[] asm("_binary_index_html_gz_start");
+extern const uint8_t kIndexHtmlEnd[] asm("_binary_index_html_gz_end");
+extern const uint8_t kIndexJsStart[] asm("_binary_index_js_gz_start");
+extern const uint8_t kIndexJsEnd[] asm("_binary_index_js_gz_end");
+extern const uint8_t kIndexCssStart[] asm("_binary_index_css_gz_start");
+extern const uint8_t kIndexCssEnd[] asm("_binary_index_css_gz_end");
 
 enum class TransitionRequest : uint8_t {
     kStart,
@@ -719,6 +720,8 @@ esp_err_t SendEmbeddedAsset(httpd_req_t* request, const uint8_t* start, const ui
 {
     httpd_resp_set_status(request, HTTPD_200);
     httpd_resp_set_type(request, content_type);
+    // Every embedded portal asset is stored gzipped (see CMakeLists.txt).
+    httpd_resp_set_hdr(request, "Content-Encoding", "gzip");
     const ssize_t length = end - start;
     return httpd_resp_send(request, reinterpret_cast<const char*>(start),
                            length > 0 ? length : 0);
@@ -872,6 +875,9 @@ void StartConfigPortal()
     // the timezone_service and gemini_service portal routes registered via the registrar below.
     config.max_uri_handlers = 24;
     config.lru_purge_enable = true;
+    // Internal RAM is tight in AP mode, so lwIP can stall briefly waiting for TX buffers; the
+    // 5s default aborted portal asset sends mid-transfer.
+    config.send_wait_timeout = 15;
 
     esp_err_t err = httpd_start(&s_portal_server, &config);
     if (err != ESP_OK) {

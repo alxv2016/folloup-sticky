@@ -20,6 +20,7 @@
 #include "esp_timer.h"
 #include "followup_task_config.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "freertos/task.h"
 #include "nvs.h"
 #include "recording_service.h"
@@ -32,7 +33,7 @@ constexpr const char* kTag = "GeminiService";
 constexpr const char* kSettingsTag = "GeminiSettings";
 constexpr const char* kStorageNamespace = "gemini";
 constexpr const char* kStorageApiKey = "api_key";
-constexpr const char* kDefaultModelName = "models/gemini-2.5-flash-lite";
+constexpr const char* kDefaultModelName = "models/gemini-3.5-flash-lite";
 constexpr const char* kGeminiApiBaseUrl = "https://generativelanguage.googleapis.com/v1beta/";
 constexpr const char* kPortalApiSettingsGeminiUri = "/api/settings/gemini";
 constexpr const char* kPortalApiSettingsGeminiResetUri = "/api/settings/gemini/reset";
@@ -74,6 +75,13 @@ struct AuthTaskContext {
     std::string model_name;
     uint32_t generation = 0;
 };
+
+// Authentication runs on one long-lived worker with a PSRAM stack (see
+// followup_task_config::CreatePsramStackTask): internal RAM is too scarce on this board to
+// create an 8 KB stack per request. Nothing on the auth completion path writes flash.
+std::once_flag s_auth_worker_once;
+QueueHandle_t s_auth_queue = nullptr;  // AuthTaskContext*, owned by the receiver
+StaticTask_t s_auth_task_buffer;
 
 std::mutex s_mutex;
 EventHandler s_event_handler = nullptr;
@@ -486,25 +494,44 @@ void CompleteAuthentication(uint32_t generation, const AuthResult& result)
     Notify();
 }
 
-void AuthenticationTask(void* arg)
+void AuthWorkerTask(void*)
 {
-    std::unique_ptr<AuthTaskContext> context(static_cast<AuthTaskContext*>(arg));
-    if (context == nullptr) {
-        CompleteAuthentication(0, AuthResult{
-            .success = false,
-            .http_status = 0,
-            .model_resource_name = {},
-            .model_display_name = {},
-            .error_code = "task_context_missing",
-            .error_message = "Gemini authentication task context missing",
-        });
-        vTaskDelete(nullptr);
-        return;
+    while (true) {
+        AuthTaskContext* raw_context = nullptr;
+        if (xQueueReceive(s_auth_queue, &raw_context, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+        std::unique_ptr<AuthTaskContext> context(raw_context);
+        const AuthResult result = Authenticate(context->api_key, context->model_name);
+        CompleteAuthentication(context->generation, result);
     }
+}
 
-    const AuthResult result = Authenticate(context->api_key, context->model_name);
-    CompleteAuthentication(context->generation, result);
-    vTaskDelete(nullptr);
+// Creates the auth worker on first use. Returns false if it could not be started; the
+// next attempt does not retry, since a failure here means PSRAM or the queue is unavailable.
+bool EnsureAuthWorkerStarted()
+{
+    std::call_once(s_auth_worker_once, [] {
+        QueueHandle_t queue = xQueueCreate(1, sizeof(AuthTaskContext*));
+        if (queue == nullptr) {
+            ESP_LOGE(kTag, "Gemini auth worker queue allocation failed");
+            return;
+        }
+        s_auth_queue = queue;
+        if (followup_task_config::CreatePsramStackTask(AuthWorkerTask,
+                                                       "gemini_auth",
+                                                       kAuthTaskStackWords,
+                                                       nullptr,
+                                                       followup_task_config::kPriorityGemini,
+                                                       &s_auth_task_buffer,
+                                                       followup_task_config::kSystemCore) ==
+            nullptr) {
+            ESP_LOGE(kTag, "Gemini auth worker task create failed");
+            s_auth_queue = nullptr;
+            vQueueDelete(queue);
+        }
+    });
+    return s_auth_queue != nullptr;
 }
 
 void MaybeBeginAuthentication()
@@ -1545,16 +1572,10 @@ bool BeginAuthentication()
     if (context == nullptr) {
         task_alloc_failed = true;
     } else {
-        TaskHandle_t task_handle = nullptr;
-        const BaseType_t created = xTaskCreatePinnedToCore(
-            AuthenticationTask,
-            "gemini_auth",
-            kAuthTaskStackWords,
-            context.get(),
-            followup_task_config::kPriorityGemini,
-            &task_handle,
-            followup_task_config::kSystemCore);
-        if (created != pdPASS || task_handle == nullptr) {
+        AuthTaskContext* raw_context = context.get();
+        // s_request_in_flight admits one request at a time, so the one-slot queue is free.
+        if (!EnsureAuthWorkerStarted() ||
+            xQueueSend(s_auth_queue, &raw_context, 0) != pdTRUE) {
             task_start_failed = true;
         } else {
             context.release();
