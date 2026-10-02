@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -17,6 +19,13 @@ constexpr const char* kTag = "PlaybackService";
 constexpr size_t kWavHeaderBytes = 44;
 constexpr size_t kChunkSamples = 512;
 
+// Recordings keep plenty of headroom, so played back as-is they come out far quieter
+// than the sound cues on the same output. Each clip is normalized to a fixed peak
+// instead, with the boost capped so a near-silent take doesn't become amplified noise.
+constexpr int32_t kTargetPeak = 29000;  // about -1 dBFS
+constexpr int32_t kGainOne = 256;       // gains are Q8 fixed point
+constexpr int32_t kMaxGain = 8 * kGainOne;  // at most +18 dB
+
 std::atomic<bool> s_playing{false};
 std::atomic<bool> s_stop_requested{false};
 
@@ -27,6 +36,29 @@ bool ValidateWavHeader(const uint8_t* header)
 {
     return std::memcmp(header, "RIFF", 4) == 0 &&
            std::memcmp(header + 8, "WAVE", 4) == 0;
+}
+
+void TrackPeak(const int16_t* samples, size_t count, int32_t* peak)
+{
+    for (size_t i = 0; i < count; ++i) {
+        *peak = std::max(*peak, std::abs(static_cast<int32_t>(samples[i])));
+    }
+}
+
+int32_t GainForPeak(int32_t peak)
+{
+    if (peak <= 0) {
+        return kGainOne;
+    }
+    return std::clamp(kTargetPeak * kGainOne / peak, kGainOne, kMaxGain);
+}
+
+void ApplyGain(const int16_t* in, int16_t* out, size_t count, int32_t gain)
+{
+    for (size_t i = 0; i < count; ++i) {
+        const int32_t scaled = (static_cast<int32_t>(in[i]) * gain) / kGainOne;
+        out[i] = static_cast<int16_t>(std::clamp<int32_t>(scaled, INT16_MIN, INT16_MAX));
+    }
 }
 
 // Claims the playback slot and resolves the codec. Returns nullptr (without claiming) if
@@ -98,17 +130,26 @@ esp_err_t PlayFile(const char* path)
     // The board keeps the codec output (and PA) enabled for its lifetime, so we
     // only stream data here — never toggle EnableOutput, or system sound cues that
     // share the output would be cut off.
-    ESP_LOGI(kTag, "Playback started: %s", path);
-
     std::vector<int16_t> chunk(kChunkSamples, 0);
+    int32_t peak = 0;
+    size_t samples_read = 0;
+    while ((samples_read = fread(chunk.data(), sizeof(int16_t), chunk.size(), file)) > 0) {
+        TrackPeak(chunk.data(), samples_read, &peak);
+    }
+    const int32_t gain = GainForPeak(peak);
+    fseek(file, kWavHeaderBytes, SEEK_SET);
+    ESP_LOGI(kTag, "Playback started: %s peak=%d gain=%d.%02dx", path, static_cast<int>(peak),
+             static_cast<int>(gain / kGainOne), static_cast<int>((gain % kGainOne) * 100 / kGainOne));
+
     esp_err_t result = ESP_OK;
     size_t total_samples = 0;
     while (!s_stop_requested.load(std::memory_order_relaxed)) {
-        const size_t samples_read =
+        samples_read =
             fread(chunk.data(), sizeof(int16_t), chunk.size(), file);
         if (samples_read == 0) {
             break;  // End of clip.
         }
+        ApplyGain(chunk.data(), chunk.data(), samples_read, gain);
         if (!codec->OutputData(chunk.data(), samples_read)) {
             ESP_LOGW(kTag, "Codec output failed during playback of %s", path);
             result = ESP_FAIL;
@@ -136,9 +177,19 @@ esp_err_t PlayClip(const recording_service::RecordedClipPtr& clip)
     }
     PlayingGuard playing_guard;
 
-    ESP_LOGI(kTag, "Clip playback started: %u samples (%u ms)",
+    int32_t peak = 0;
+    clip->ForEachChunk([&](const int16_t* samples, size_t count) {
+        if (samples != nullptr) {
+            TrackPeak(samples, count, &peak);
+        }
+    });
+    const int32_t gain = GainForPeak(peak);
+    std::vector<int16_t> scaled(kChunkSamples, 0);
+
+    ESP_LOGI(kTag, "Clip playback started: %u samples (%u ms) peak=%d gain=%d.%02dx",
              static_cast<unsigned>(clip->sample_count()),
-             static_cast<unsigned>(clip->duration_ms()));
+             static_cast<unsigned>(clip->duration_ms()), static_cast<int>(peak),
+             static_cast<int>(gain / kGainOne), static_cast<int>((gain % kGainOne) * 100 / kGainOne));
 
     // ForEachChunk has no way to break out, so once stopped or failed the remaining
     // chunks fall through as no-ops rather than being written to the codec.
@@ -155,7 +206,8 @@ esp_err_t PlayClip(const recording_service::RecordedClipPtr& clip)
                 return;
             }
             const size_t batch = std::min(kChunkSamples, count - offset);
-            if (!codec->OutputData(samples + offset, batch)) {
+            ApplyGain(samples + offset, scaled.data(), batch, gain);
+            if (!codec->OutputData(scaled.data(), batch)) {
                 ESP_LOGW(kTag, "Codec output failed during clip playback");
                 result = ESP_FAIL;
                 return;
