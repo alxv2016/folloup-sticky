@@ -67,6 +67,38 @@
           </ui-button>
         </ui-bottom-sheet>
 
+        <ui-card id="savedNetworksCard" title="Saved Networks">
+            <p class="form-helper-text">
+              Followup tries these in order and switches to the next one when a network
+              is out of range &mdash; e.g. your home WiFi first, then your phone hotspot.
+              Only 2.4&nbsp;GHz networks work.
+            </p>
+            <ul id="savedNetworksList" class="saved-networks" aria-label="Saved networks"></ul>
+            <ui-input
+              id="savedNetworkSsidInput"
+              label="Network Name (SSID)"
+              placeholder="e.g. My Phone Hotspot"
+              autocomplete="off"
+              maxlength="32"
+            ></ui-input>
+            <ui-input
+              id="savedNetworkPasswordInput"
+              variant="password"
+              label="Password"
+              placeholder="Leave empty for an open network"
+              autocomplete="off"
+              maxlength="64"
+            ></ui-input>
+
+            <ui-button
+              slot="footer"
+              id="savedNetworkAddBtn"
+              variant="primary"
+            >
+              Save Network
+            </ui-button>
+        </ui-card>
+
         <ui-card id="geminiCard" title="Gemini API Key">
             <ui-input
               id="geminiApiKeyInput"

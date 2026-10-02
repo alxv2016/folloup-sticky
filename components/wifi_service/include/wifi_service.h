@@ -83,6 +83,17 @@ bool ConnectToNetwork(const std::string& ssid, const std::string& password,
 bool DisconnectFromNetwork(bool clear_saved_credentials = true);
 bool StartNetworkScan();
 bool ClearSavedCredentials();
+
+// Known networks, in priority order (slot 0 is tried first after boot). When a connect
+// attempt to one of them fails -- not found, wrong password, timeout -- the reconnect
+// loop moves on to the next, so e.g. a home network and a phone hotspot can both be
+// saved and the device joins whichever is in range.
+constexpr size_t kMaxSavedNetworks = 5;
+std::vector<std::string> GetSavedNetworkSsids();
+// Saves (or updates the password of) a network without connecting to it. When the list
+// is full, the lowest-priority entry is replaced.
+bool AddSavedNetwork(const std::string& ssid, const std::string& password);
+bool RemoveSavedNetwork(const std::string& ssid);
 void RecoverAfterLightSleep();
 
 UiState GetUiState();

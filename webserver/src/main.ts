@@ -57,6 +57,7 @@ import {
 } from './portal/uiHelpers';
 import { parseClockTimeInputValue } from './portal/duration';
 import { createProviderKeysController } from './portal/providerKeys';
+import { createSavedNetworksController } from './portal/savedNetworks';
 import { createTimeController } from './portal/time';
 import { createWiFiController } from './portal/wifi';
 import { bindPortalEvents } from './portal/events';
@@ -83,6 +84,7 @@ const dom = createPortalDom();
 
 const setNotification = createLiveRegionNotifier(dom.wifiSettingsNotification);
 const setGeminiNotification = createCardNotifier(dom.geminiCard);
+const setSavedNetworksNotification = createCardNotifier(dom.savedNetworksCard);
 const setTimezoneLocationNotification = createCardNotifier(dom.timezoneLocationCard);
 
 // Detached stand-ins for the byte90-only "talking clock" time controls, which Followup does not
@@ -152,11 +154,29 @@ const timeController = createTimeController({
   wakeupTimeInput: stubWakeupTimeInput,
 });
 
+const savedNetworksController = createSavedNetworksController({
+  clearFieldError,
+  fetchPortalJson,
+  list: dom.savedNetworksList,
+  notify: setSavedNetworksNotification,
+  passwordInput: dom.savedNetworkPasswordInput,
+  setFieldError,
+  ssidInput: dom.savedNetworkSsidInput,
+});
+
+// Every Wi-Fi status/scan response carries the saved-network list, so connecting from the
+// scan list (which saves the network on success) refreshes the Saved Networks card too.
+async function fetchPortalJsonWithSavedNetworks(path: string, init?: RequestInit) {
+  const data = await fetchPortalJson(path, init);
+  savedNetworksController.apply(data);
+  return data;
+}
+
 const wifiController = createWiFiController({
   checkIcon,
   clearFieldError,
   delayMs,
-  fetchPortalJson,
+  fetchPortalJson: fetchPortalJsonWithSavedNetworks,
   networkList: dom.networkList,
   notify: setNotification,
   onConnectionStateChange: ({ wasConnected, isCurrentlyConnected }) => {
@@ -198,10 +218,15 @@ function updatePageFade() {
 function initialize() {
   setIcon(dom.followupLogoEl, followupLogo, 'followup-logo');
   dom.wifiStatusCard.iconSvg = wifiIcon;
+  dom.savedNetworksCard.iconSvg = wifiIcon;
   dom.geminiCard.iconSvg = apiKeyIcon;
   dom.timezoneLocationCard.iconSvg = clockIcon;
 
   wifiController.renderNetworkList();
+  savedNetworksController.render();
+  dom.savedNetworkAddBtn.addEventListener('click', () => {
+    void savedNetworksController.add();
+  });
 
   if (document.body) {
     pageFade = createGradualBlur({

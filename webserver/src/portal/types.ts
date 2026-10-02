@@ -15,6 +15,8 @@ export interface PortalResponse {
   connected?: boolean;
   scan_in_progress?: boolean;
   networks?: Network[];
+  saved_networks?: string[];
+  max_saved_networks?: number;
 }
 
 export interface TimezoneListResponse {

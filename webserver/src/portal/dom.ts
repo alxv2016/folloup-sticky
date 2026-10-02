@@ -26,6 +26,12 @@ export interface PortalDom {
   passwordInput: ValidatableField;
   scanBtn: HTMLButtonElement;
   connectBtn: HTMLButtonElement;
+  // Saved networks
+  savedNetworksCard: CardField;
+  savedNetworksList: HTMLUListElement;
+  savedNetworkSsidInput: ValidatableField;
+  savedNetworkPasswordInput: ValidatableField;
+  savedNetworkAddBtn: HTMLButtonElement;
   // Gemini API key
   geminiCard: CardField;
   geminiApiKeyInput: ValidatableField & { readOnly: boolean };
@@ -52,6 +58,12 @@ export function createPortalDom(): PortalDom {
     passwordInput: getRequiredElement<ValidatableField>('password'),
     scanBtn: getRequiredElement<HTMLButtonElement>('scanBtn'),
     connectBtn: getRequiredElement<HTMLButtonElement>('connectBtn'),
+
+    savedNetworksCard: getRequiredElement<CardField>('savedNetworksCard'),
+    savedNetworksList: getRequiredElement<HTMLUListElement>('savedNetworksList'),
+    savedNetworkSsidInput: getRequiredElement<ValidatableField>('savedNetworkSsidInput'),
+    savedNetworkPasswordInput: getRequiredElement<ValidatableField>('savedNetworkPasswordInput'),
+    savedNetworkAddBtn: getRequiredElement<HTMLButtonElement>('savedNetworkAddBtn'),
 
     geminiCard: getRequiredElement<CardField>('geminiCard'),
     geminiApiKeyInput: getRequiredElement<ValidatableField & { readOnly: boolean }>(
