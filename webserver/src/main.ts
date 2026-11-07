@@ -42,6 +42,7 @@ import {
   TIME_SETTINGS_API,
 } from './portal/constants';
 import { createPortalDom } from './portal/dom';
+import { createGeminiModelController } from './portal/geminiModel';
 import {
   buildTimezoneLabelMap,
   createCardNotifier,
@@ -82,6 +83,7 @@ let pageFade: ReturnType<typeof createGradualBlur> | null = null;
 const dom = createPortalDom();
 
 const setNotification = createLiveRegionNotifier(dom.wifiSettingsNotification);
+const geminiModel = createGeminiModelController(dom);
 const setGeminiNotification = createCardNotifier(dom.geminiCard);
 const setTimezoneLocationNotification = createCardNotifier(dom.timezoneLocationCard);
 
@@ -269,6 +271,7 @@ async function loadGeminiSettings() {
   try {
     const data = await fetchGeminiModuleJson('/api/settings/gemini');
     geminiController.applyGeminiSettings(data.settings);
+    geminiModel.apply(data.settings?.model_name);
   } catch (error) {
     console.error('Gemini settings status failed:', error);
   } finally {

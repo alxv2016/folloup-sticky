@@ -28,6 +28,11 @@ export interface PortalDom {
   connectBtn: HTMLButtonElement;
   // Gemini API key
   geminiCard: CardField;
+  geminiModelCard: CardField;
+  geminiModelSelect: ValidatableField;
+  geminiCustomModelField: HTMLElement;
+  geminiCustomModel: ValidatableField;
+  geminiModelSaveBtn: HTMLButtonElement;
   geminiApiKeyInput: ValidatableField & { readOnly: boolean };
   geminiClearBtn: HTMLButtonElement;
   geminiSaveBtn: HTMLButtonElement;
@@ -54,6 +59,11 @@ export function createPortalDom(): PortalDom {
     connectBtn: getRequiredElement<HTMLButtonElement>('connectBtn'),
 
     geminiCard: getRequiredElement<CardField>('geminiCard'),
+    geminiModelCard: getRequiredElement<CardField>('geminiModelCard'),
+    geminiModelSelect: getRequiredElement<ValidatableField>('geminiModelSelect'),
+    geminiCustomModelField: getRequiredElement<HTMLElement>('geminiCustomModelField'),
+    geminiCustomModel: getRequiredElement<ValidatableField>('geminiCustomModel'),
+    geminiModelSaveBtn: getRequiredElement<HTMLButtonElement>('geminiModelSaveBtn'),
     geminiApiKeyInput: getRequiredElement<ValidatableField & { readOnly: boolean }>(
       'geminiApiKeyInput'
     ),

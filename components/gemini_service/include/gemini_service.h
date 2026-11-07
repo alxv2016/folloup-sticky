@@ -56,6 +56,8 @@ struct Event {
 struct SettingsPatch {
     bool has_api_key = false;
     std::string api_key;
+    bool has_model_name = false;
+    std::string model_name;
 };
 
 struct Result {

@@ -90,6 +90,22 @@
             </ui-button>
         </ui-card>
 
+        <ui-card id="geminiModelCard" title="Gemini Model">
+          <ui-select id="geminiModelSelect" disabled label="Model" aria-label="Gemini model">
+            <option value="models/gemini-3.5-flash-lite">Gemini 3.5 Flash-Lite (default)</option>
+            <option value="models/gemini-3.8-flash">Gemini 3.8 Flash</option>
+            <option value="models/gemini-2.5-flash-lite">Gemini 2.5 Flash-Lite (prior access)</option>
+            <option value="custom">Custom model ID</option>
+          </ui-select>
+          <div id="geminiCustomModelField" hidden>
+            <ui-input id="geminiCustomModel" label="Custom model ID"
+              placeholder="gemini-…" autocomplete="off"></ui-input>
+          </div>
+          <ui-button slot="footer" id="geminiModelSaveBtn" variant="primary" disabled>
+            Save model
+          </ui-button>
+        </ui-card>
+
         <ui-card id="timezoneLocationCard" title="Time Configuration">
             <ui-select
               id="timezoneSelect"

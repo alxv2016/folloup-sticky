@@ -132,6 +132,9 @@ export interface ModuleRoutes {
 }
 
 export interface GeminiModuleSettings {
+  has_stored_api_key?: boolean;
+  api_key_last4?: string;
+  model_name?: string;
   has_key?: boolean;
   last4?: string;
 }

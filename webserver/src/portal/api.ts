@@ -67,8 +67,14 @@ export const fetchEffectsJson = (path: string, init?: RequestInit) =>
   fetchApiJson<EffectsStatusResponse>(path, init);
 export const fetchTalkingClockModuleJson = (path: string, init?: RequestInit) =>
   fetchApiJson<TalkingClockModuleResponse>(path, init);
-export const fetchGeminiModuleJson = (path: string, init?: RequestInit) =>
-  fetchApiJson<GeminiModuleResponse>(path, init);
+export async function fetchGeminiModuleJson(path: string, init?: RequestInit) {
+  const data = await fetchApiJson<GeminiModuleResponse>(path, init);
+  if (data.settings) {
+    data.settings.has_key = data.settings.has_stored_api_key ?? data.settings.has_key;
+    data.settings.last4 = data.settings.api_key_last4 ?? data.settings.last4;
+  }
+  return data;
+}
 export const fetchOpenAiModuleJson = (path: string, init?: RequestInit) =>
   fetchApiJson<OpenAiModuleResponse>(path, init);
 export const fetchXiaozhiModuleJson = (path: string, init?: RequestInit) =>

@@ -32,7 +32,8 @@ constexpr const char* kTag = "GeminiService";
 constexpr const char* kSettingsTag = "GeminiSettings";
 constexpr const char* kStorageNamespace = "gemini";
 constexpr const char* kStorageApiKey = "api_key";
-constexpr const char* kDefaultModelName = "models/gemini-2.5-flash-lite";
+constexpr const char* kStorageModelName = "model_name";
+constexpr const char* kDefaultModelName = "models/gemini-3.5-flash-lite";
 constexpr const char* kGeminiApiBaseUrl = "https://generativelanguage.googleapis.com/v1beta/";
 constexpr const char* kPortalApiSettingsGeminiUri = "/api/settings/gemini";
 constexpr const char* kPortalApiSettingsGeminiResetUri = "/api/settings/gemini/reset";
@@ -87,6 +88,7 @@ bool s_authenticated = false;
 uint32_t s_auth_generation = 0;
 int s_last_http_status = 0;
 std::string s_stored_api_key;
+std::string s_model_name = kDefaultModelName;
 std::string s_last_status_message;
 std::string s_last_model_resource_name;
 std::string s_last_model_display_name;
@@ -130,24 +132,38 @@ std::string ReadNvsString(nvs_handle_t handle, const char* key)
     return value;
 }
 
-std::string LoadStoredApiKey()
+std::string NormalizeModelName(const std::string& value)
+{
+    std::string id = TrimCopy(value);
+    if (id.compare(0, 7, "models/") == 0) {
+        id.erase(0, 7);
+    }
+    if (id.compare(0, 7, "gemini-") != 0 || id.size() <= 7 || id.size() > 100 ||
+        id.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789.-") != std::string::npos) {
+        return {};
+    }
+    return "models/" + id;
+}
+
+void LoadStoredSettingsLocked()
 {
     nvs_handle_t handle = 0;
     esp_err_t err = nvs_open(kStorageNamespace, NVS_READONLY, &handle);
     if (err == ESP_ERR_NVS_NOT_FOUND) {
-        return {};
+        return;
     }
     if (err != ESP_OK) {
         ESP_LOGW(kSettingsTag, "Failed to open Gemini NVS namespace: %s", esp_err_to_name(err));
-        return {};
+        return;
     }
 
-    const std::string api_key = TrimCopy(ReadNvsString(handle, kStorageApiKey));
+    s_stored_api_key = TrimCopy(ReadNvsString(handle, kStorageApiKey));
+    const std::string model_name = NormalizeModelName(ReadNvsString(handle, kStorageModelName));
+    s_model_name = model_name.empty() ? kDefaultModelName : model_name;
     nvs_close(handle);
-    return api_key;
 }
 
-bool SaveStoredApiKey(const std::string& api_key)
+bool SaveStoredSetting(const char* key, const std::string& value)
 {
     nvs_handle_t handle = 0;
     esp_err_t err = nvs_open(kStorageNamespace, NVS_READWRITE, &handle);
@@ -157,14 +173,14 @@ bool SaveStoredApiKey(const std::string& api_key)
         return false;
     }
 
-    err = nvs_set_str(handle, kStorageApiKey, api_key.c_str());
+    err = nvs_set_str(handle, key, value.c_str());
     if (err == ESP_OK) {
         err = nvs_commit(handle);
     }
     nvs_close(handle);
 
     if (err != ESP_OK) {
-        ESP_LOGE(kSettingsTag, "Failed to save Gemini API key: %s", esp_err_to_name(err));
+        ESP_LOGE(kSettingsTag, "Failed to save Gemini setting %s: %s", key, esp_err_to_name(err));
         return false;
     }
     return true;
@@ -216,6 +232,12 @@ std::string GetEffectiveApiKeyLocked()
     return GetSdkConfigApiKey();
 }
 
+std::pair<std::string, std::string> GetRequestSettings()
+{
+    std::lock_guard<std::mutex> lock(s_mutex);
+    return {GetEffectiveApiKeyLocked(), s_model_name};
+}
+
 ApiKeySource GetApiKeySourceLocked()
 {
     if (!s_stored_api_key.empty()) {
@@ -259,7 +281,7 @@ Snapshot BuildSnapshotLocked()
     snapshot.settings.has_sdkconfig_api_key = !sdkconfig_api_key.empty();
     snapshot.settings.api_key_source = GetApiKeySourceLocked();
     snapshot.settings.api_key_last4 = GetApiKeyLast4Locked();
-    snapshot.settings.model_name = kDefaultModelName;
+    snapshot.settings.model_name = s_model_name;
 
     snapshot.runtime.initialized = s_initialized;
     snapshot.runtime.ready = configured && s_authenticated;
@@ -647,6 +669,19 @@ bool ParsePatchBody(const std::string& body, SettingsPatch* patch, std::string* 
         return false;
     }
 
+    cJSON* model_name = cJSON_GetObjectItemCaseSensitive(root, "model_name");
+    if (model_name != nullptr) {
+        if (!cJSON_IsString(model_name) || model_name->valuestring == nullptr) {
+            if (error != nullptr) {
+                *error = "Invalid model_name";
+            }
+            cJSON_Delete(root);
+            return false;
+        }
+        patch->has_model_name = true;
+        patch->model_name = model_name->valuestring;
+    }
+
     cJSON_Delete(root);
     return true;
 }
@@ -708,7 +743,7 @@ esp_err_t HandlePortalSettingsPatch(httpd_req_t* request)
     }
 
     cJSON* root = cJSON_CreateObject();
-    AppendSnapshot(root, GetSnapshot(), "Gemini API key stored");
+    AppendSnapshot(root, GetSnapshot(), result.message.c_str());
     return SendJsonResponse(request, 200, root);
 }
 
@@ -800,7 +835,7 @@ std::string BuildTextRequestBody(const std::string& prompt, bool include_generat
     return body;
 }
 
-// Concatenate the text of every part in candidates[0].content.parts[].
+// Concatenate final answer text from candidates[0].content.parts[].
 std::string ExtractCandidateText(cJSON* root)
 {
     if (root == nullptr) {
@@ -826,6 +861,9 @@ std::string ExtractCandidateText(cJSON* root)
     cJSON* part = nullptr;
     cJSON_ArrayForEach(part, parts)
     {
+        if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(part, "thought"))) {
+            continue;
+        }
         const std::string part_text = JsonStringField(part, "text");
         text += part_text;
     }
@@ -1099,7 +1137,7 @@ esp_err_t Init()
             return ESP_OK;
         }
 
-        s_stored_api_key = LoadStoredApiKey();
+        LoadStoredSettingsLocked();
         s_last_status_message =
             GetEffectiveApiKeyLocked().empty()
                 ? "No Gemini API key configured"
@@ -1135,79 +1173,63 @@ Snapshot GetSnapshot()
 
 Result ApplySettingsPatch(const SettingsPatch& patch)
 {
-    bool should_start_auth = false;
-    bool save_failed = false;
-    {
-        std::lock_guard<std::mutex> lock(s_mutex);
-        if (!s_initialized) {
-            s_stored_api_key = LoadStoredApiKey();
-            s_initialized = true;
-        }
-
-        if (!patch.has_api_key) {
-            return {
-                .success = false,
-                .validation_error = true,
-                .status_code = 400,
-                .field = "api_key",
-                .error_code = "missing_api_key",
-                .message = "Gemini API key is required",
-            };
-        }
-
-        const std::string trimmed = TrimCopy(patch.api_key);
-        if (trimmed.empty()) {
-            return {
-                .success = false,
-                .validation_error = true,
-                .status_code = 400,
-                .field = "api_key",
-                .error_code = "invalid_api_key",
-                .message = "Gemini API key is required",
-            };
-        }
-
-        if (!SaveStoredApiKey(trimmed)) {
-            SetLastErrorLocked("nvs_write_failed", "Failed to store Gemini API key");
-            save_failed = true;
-        } else {
-            s_stored_api_key = trimmed;
-            ++s_auth_generation;
-            s_request_in_flight = false;
-            s_auth_checked = false;
-            s_authenticated = false;
-            s_last_http_status = 0;
-            s_last_status_message = "Gemini API key stored";
-            s_last_model_resource_name.clear();
-            s_last_model_display_name.clear();
-            ClearLastErrorLocked();
-            should_start_auth = ShouldStartAuthenticationLocked();
-        }
-    }
-
-    if (save_failed) {
-        Notify();
+    if (patch.has_api_key == patch.has_model_name) {
         return {
-            .success = false,
-            .validation_error = false,
-            .status_code = 500,
-            .field = "api_key",
-            .error_code = "nvs_write_failed",
-            .message = "Failed to store Gemini API key",
+            .validation_error = true,
+            .status_code = 400,
+            .error_code = "invalid_settings_patch",
+            .message = "Send exactly one of api_key or model_name",
         };
     }
 
-    Notify();
-    if (should_start_auth) {
-        (void)BeginAuthentication();
+    const char* field = patch.has_model_name ? "model_name" : "api_key";
+    const char* saved_message = patch.has_model_name ? "Gemini model stored" : "Gemini API key stored";
+    const std::string value =
+        patch.has_model_name ? NormalizeModelName(patch.model_name) : TrimCopy(patch.api_key);
+    if (value.empty()) {
+        return {
+            .validation_error = true,
+            .status_code = 400,
+            .field = field,
+            .error_code = patch.has_model_name ? "invalid_model_name" : "invalid_api_key",
+            .message = patch.has_model_name ? "Enter a valid Gemini model ID"
+                                            : "Gemini API key is required",
+        };
     }
+
+    {
+        std::lock_guard<std::mutex> lock(s_mutex);
+        if (!s_initialized) {
+            LoadStoredSettingsLocked();
+            s_initialized = true;
+        }
+
+        if (!SaveStoredSetting(patch.has_model_name ? kStorageModelName : kStorageApiKey, value)) {
+            return {
+                .status_code = 500,
+                .field = field,
+                .error_code = "nvs_write_failed",
+                .message = "Failed to store Gemini setting",
+            };
+        }
+        (patch.has_model_name ? s_model_name : s_stored_api_key) = value;
+        ++s_auth_generation;
+        s_request_in_flight = false;
+        s_auth_checked = false;
+        s_authenticated = false;
+        s_last_http_status = 0;
+        s_last_status_message = saved_message;
+        s_last_model_resource_name.clear();
+        s_last_model_display_name.clear();
+        ClearLastErrorLocked();
+    }
+
+    Notify();
+    MaybeBeginAuthentication();
     return {
         .success = true,
-        .validation_error = false,
         .status_code = 200,
-        .field = {},
-        .error_code = {},
-        .message = "Gemini API key stored",
+        .message = saved_message,
     };
 }
 
@@ -1218,7 +1240,7 @@ Result ClearStoredApiKey()
     {
         std::lock_guard<std::mutex> lock(s_mutex);
         if (!s_initialized) {
-            s_stored_api_key = LoadStoredApiKey();
+            LoadStoredSettingsLocked();
             s_initialized = true;
         }
 
@@ -1279,14 +1301,14 @@ std::string GetEffectiveApiKey()
 
 std::string GetEffectiveModelName()
 {
-    return kDefaultModelName;
+    std::lock_guard<std::mutex> lock(s_mutex);
+    return s_model_name;
 }
 
 TextResult GenerateText(const std::string& prompt)
 {
     TextResult result = {};
-    const std::string api_key = GetEffectiveApiKey();
-    const std::string model_name = GetEffectiveModelName();
+    const auto [api_key, model_name] = GetRequestSettings();
     if (api_key.empty() || model_name.empty()) {
         result.error_code = "not_configured";
         result.error_message = "No Gemini API key configured";
@@ -1336,8 +1358,7 @@ TextResult GenerateText(const std::string& prompt)
 TokenCountResult CountTokens(const std::string& prompt)
 {
     TokenCountResult result = {};
-    const std::string api_key = GetEffectiveApiKey();
-    const std::string model_name = GetEffectiveModelName();
+    const auto [api_key, model_name] = GetRequestSettings();
     if (api_key.empty() || model_name.empty()) {
         result.error_code = "not_configured";
         result.error_message = "No Gemini API key configured";
@@ -1390,8 +1411,7 @@ TranscriptionResult Transcribe(const recording_service::RecordedClip& clip)
     result.wav_bytes = clip.wav_byte_count();
     result.upload_chunk_count = ResolveUploadChunkCount(clip);
 
-    const std::string api_key = GetEffectiveApiKey();
-    const std::string model_name = GetEffectiveModelName();
+    const auto [api_key, model_name] = GetRequestSettings();
     if (api_key.empty() || model_name.empty()) {
         result.error_code = "not_configured";
         result.error_message = "No Gemini API key configured";
@@ -1417,6 +1437,7 @@ TranscriptionResult Transcribe(const recording_service::RecordedClip& clip)
                 ? upload_start.error_message
                 : (!upload_start.body.empty() ? upload_start.body
                                               : "Failed to start Gemini file upload"));
+        ESP_LOGW(kTag, "Gemini upload_start failed: http=%d", result.http_status);
         return result;
     }
 
@@ -1435,6 +1456,7 @@ TranscriptionResult Transcribe(const recording_service::RecordedClip& clip)
                 ? upload_finalize.error_message
                 : (!upload_finalize.body.empty() ? upload_finalize.body
                                                  : "Failed to upload Gemini audio file"));
+        ESP_LOGW(kTag, "Gemini upload_finalize failed: http=%d", result.http_status);
         return result;
     }
 
@@ -1454,6 +1476,10 @@ TranscriptionResult Transcribe(const recording_service::RecordedClip& clip)
     HttpResponse http =
         PerformGenerateContentWithBody(api_key, model_name, BuildTranscriptRequestJson(file_uri));
     result.http_status = http.status_code;
+    if (!http.error_code.empty() || http.status_code < 200 || http.status_code >= 300) {
+        ESP_LOGW(kTag, "Gemini transcription generateContent failed: model=%s http=%d",
+                 model_name.c_str(), http.status_code);
+    }
     result.total_elapsed_ms =
         static_cast<uint64_t>((esp_timer_get_time() - task_started_us) / 1000ULL);
     if (!http.error_code.empty()) {
@@ -1492,7 +1518,7 @@ bool BeginAuthentication()
     {
         std::lock_guard<std::mutex> lock(s_mutex);
         if (!s_initialized) {
-            s_stored_api_key = LoadStoredApiKey();
+            LoadStoredSettingsLocked();
             s_initialized = true;
         }
         if (s_request_in_flight) {
@@ -1523,7 +1549,7 @@ bool BeginAuthentication()
             s_last_model_resource_name.clear();
             s_last_model_display_name.clear();
             ClearLastErrorLocked();
-            model_name = GetEffectiveModelName();
+            model_name = s_model_name;
             api_key_source = GetApiKeySourceLocked();
             api_key_last4 = GetApiKeyLast4Locked();
             auth_generation = ++s_auth_generation;
@@ -1564,6 +1590,9 @@ bool BeginAuthentication()
     if (task_alloc_failed || task_start_failed) {
         {
             std::lock_guard<std::mutex> lock(s_mutex);
+            if (auth_generation != s_auth_generation) {
+                return false;
+            }
             s_request_in_flight = false;
             s_last_status_message = "Failed to start Gemini authentication";
             SetLastErrorLocked(task_alloc_failed ? "task_alloc_failed" : "task_start_failed",

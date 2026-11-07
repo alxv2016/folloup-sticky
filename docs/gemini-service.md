@@ -5,23 +5,15 @@ firmware.
 
 `components/gemini_service/` currently owns:
 
-- Gemini API key storage precedence
+- Gemini model selection and API key storage precedence
 - Gemini authentication state
 - backend HTTP routes for Gemini settings and runtime state
 - Wi-Fi-driven Gemini readiness
 - Gemini-ready status consumed by the status bar
 
-It does not own:
-
-- transcription requests — owned by the `transcription_service` component
-- summary generation — owned by the `summary_service` component
-- archived recording enrichment / indexing — owned by
-  `recording_archive_service`
-- a frontend portal UI
-
-`transcription_service` and `summary_service` call the Gemini API directly; they
-were split into their own components rather than living inside `gemini_service`,
-which remains focused on key/settings precedence, auth readiness, and status.
+The service also owns Gemini HTTP requests for transcription, text generation,
+and token counting. The transcription and summary components manage their
+respective workflows and call the service for provider requests.
 
 ## Ownership
 
@@ -75,8 +67,8 @@ Current API key precedence:
 2. built-in `CONFIG_FOLLOWUP_GEMINI_API_KEY`
 3. no key configured
 
-Resetting Gemini settings clears only the stored NVS key. It does not clear the
-built-in sdkconfig fallback key.
+Clearing the API key removes the NVS key and preserves the selected model and
+any built-in fallback key.
 
 ## Build-Time Configuration
 
@@ -130,18 +122,41 @@ The current Sticky auth path is intentionally minimal:
 
 - request type: HTTP `GET`
 - endpoint: `v1beta/<model>`
-- default model: `models/gemini-2.5-flash-lite`
+- default model: `models/gemini-3.5-flash-lite`
 - auth header: `x-goog-api-key: <api_key>`
 
 The current implementation uses ESP-IDF's `esp_http_client` with the CRT bundle
 for TLS validation.
 
-Sticky does not yet implement:
+Transcription starts a resumable upload through the
+[Files API](https://ai.google.dev/api/files), streams and finalizes a PCM WAV
+(`audio/wav`), then sends the returned file URI as `fileData` to the selected
+model's [generateContent endpoint](https://ai.google.dev/api/generate-content).
+Summaries use the same model for text generation and token counting.
 
-- Gemini file upload
-- transcription prompts
-- text generation
-- token counting
+## Model selection and 404 diagnostics
+
+Open the Sticky setup portal at `http://192.168.4.1/` while connected to its
+setup Wi-Fi. Under **Gemini Model**, choose a preset or enter a custom model ID,
+then select **Save model**. The model is stored in the `gemini` NVS namespace
+under `model_name`. Upgraded devices with no stored model use Gemini 3.5
+Flash-Lite. Changing the model refreshes the device's metadata check when
+internet is available.
+
+Google documents [Gemini 3.5 Flash-Lite](https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite)
+and [Gemini 3.8 Flash](https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash)
+as audio-capable models with text output. Google restricts the 2.5 family to
+projects with prior usage. The old hardcoded 2.5 Flash-Lite ID is therefore a
+likely cause of a generation 404. [Google's model catalog](https://ai.google.dev/gemini-api/docs/models)
+and [project eligibility explanation](https://discuss.ai.google.dev/t/gemini-2-5-flash-metadata-succeeds-but-generatecontent-returned-http-404-request-for-project-eligibility-clarification/197853/2)
+describe the restriction.
+
+The readiness icon follows a successful model metadata GET. Verify generation
+by recording a short clip and checking for a transcript. Serial logs identify
+upload start, upload finalization, or `generateContent` failures. A 404 during
+upload points to the upload endpoint or session, while a 404 during generation
+can refer to the model or the uploaded file. Use the accompanying provider
+error to distinguish those cases.
 
 ## Public C++ Snapshot Shapes
 
@@ -194,6 +209,8 @@ Current fields:
 
 - `has_api_key`
 - `api_key`
+- `has_model_name`
+- `model_name`
 
 ### `gemini_service::Result`
 
@@ -236,10 +253,18 @@ Current request shape:
 }
 ```
 
-Current validation rules:
+Alternatively, send a model-only patch:
 
-- `api_key` must be present
-- `api_key` must be a non-empty string after trimming
+```json
+{
+  "model_name": "gemini-3.8-flash"
+}
+```
+
+Each patch updates one setting. API keys must be nonempty after trimming.
+Model IDs may include the `models/` prefix and are returned with that prefix.
+The firmware validates the ID syntax when saving. A recording verifies model
+access and audio support.
 
 ### Snapshot Responses
 
@@ -262,7 +287,7 @@ Current response shape:
     "has_sdkconfig_api_key": true,
     "api_key_source": "sdkconfig",
     "api_key_last4": "1234",
-    "model_name": "models/gemini-2.5-flash-lite"
+    "model_name": "models/gemini-3.5-flash-lite"
   },
   "runtime": {
     "initialized": true,
@@ -273,9 +298,9 @@ Current response shape:
     "supports_audio_understanding": false,
     "supports_structured_output": false,
     "last_http_status": 200,
-    "last_status_message": "Authenticated with Gemini 2.5 Flash-Lite",
-    "last_model_resource_name": "models/gemini-2.5-flash-lite",
-    "last_model_display_name": "Gemini 2.5 Flash-Lite",
+    "last_status_message": "Authenticated with Gemini 3.5 Flash-Lite",
+    "last_model_resource_name": "models/gemini-3.5-flash-lite",
+    "last_model_display_name": "Gemini 3.5 Flash-Lite",
     "last_error_code": "",
     "last_error_message": ""
   }
@@ -357,3 +382,43 @@ Not yet ported:
 When those features are ported, this document should be expanded rather than
 replaced so it remains accurate for Sticky's actual runtime behavior at each
 stage.
+
+## Build, flash, and check on a Sticky
+
+Use ESP-IDF 5.5.4, the version referenced in the repository's editor
+configuration. Install it for macOS using the
+[ESP-IDF setup guide](https://docs.espressif.com/projects/esp-idf/en/v5.5.4/esp32s3/get-started/).
+Activate it in your terminal using the installation's `export.sh`. The project's
+default target is ESP32-S3. The generated portal assets are already embedded.
+
+`Mac mini — project root` (`/Users/home/Documents/Codex/sticky`)
+
+```sh
+cd /Users/home/Documents/Codex/sticky
+idf.py build
+```
+
+Connect the Sticky over USB and find its serial port.
+
+`Mac mini — anywhere`
+
+```sh
+ls /dev/cu.usb*
+```
+
+Replace `/dev/cu.usbmodemXXXX` below with the Sticky's actual device name. Use the normal
+flash command to preserve the existing NVS settings. Close the serial monitor
+with Ctrl+].
+
+`Mac mini — project root` (`/Users/home/Documents/Codex/sticky`)
+
+```sh
+cd /Users/home/Documents/Codex/sticky
+idf.py -p /dev/cu.usbmodemXXXX flash monitor
+```
+
+1. Open the setup portal and confirm that the saved key is still masked. If
+   needed, enter the API key directly in the portal.
+2. Save a model, restart the Sticky, and reopen the portal to verify persistence.
+3. Connect to Wi-Fi, record a short clip, and verify that a transcript appears.
+4. Generate a summary and check the serial monitor if either operation fails.
